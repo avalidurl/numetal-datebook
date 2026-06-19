@@ -1,0 +1,24 @@
+name = "datebook-staging"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+workers_dev = true
+
+# Match cycle every 2h (compressed season); courtship ticks ride the same cron
+[triggers]
+crons = ["0 */2 * * *"]
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "datebook-staging"
+database_id = "REPLACE_AFTER_d1_create"
+
+[vars]
+SIM_MODE = "day0"            # compressed clock
+BOARD_NAMES = "seeking,courtships,debriefs,notifications"
+GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
+EMBED_MODEL = "@cf/baai/bge-m3"
+
+# Secrets (never in this file): ACCESS_KEY via `wrangler secret put ACCESS_KEY`
