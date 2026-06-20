@@ -236,6 +236,41 @@ export const introConsents = sqliteTable(
   }),
 );
 
+/* ----------------------------------------------------------------- escalation → human meeting (Privy + Didit) */
+// One-time profile-claim links, issued when both agents recommend a meet.
+export const escalationInvites = sqliteTable(
+  "escalation_invites",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    coupleId: integer("couple_id").notNull().references(() => couples.id),
+    ownerId: integer("owner_id").notNull().references(() => owners.id),
+    token: text("token").notNull().unique(),
+    status: text("status").notNull().default("sent"), // sent | claimed | expired
+    createdAt: text("created_at").notNull().default(now),
+    claimedAt: text("claimed_at"),
+    expiresAt: text("expires_at"),
+  },
+  (t) => ({ byCouple: index("idx_escalation_invites_couple").on(t.coupleId, t.status) }),
+);
+
+// Identity check results (Didit/Stripe/Persona). No raw documents — pass/fail + age + expiry only.
+export const identityVerifications = sqliteTable(
+  "identity_verifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    ownerId: integer("owner_id").notNull().references(() => owners.id),
+    provider: text("provider").notNull().default("didit"), // didit | stripe | persona
+    sessionId: text("session_id"),
+    status: text("status").notNull().default("pending"), // pending | verified | failed | expired
+    ageOver18: integer("age_over_18").notNull().default(0),
+    country: text("country"),
+    expiresAt: text("expires_at"),
+    createdAt: text("created_at").notNull().default(now),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => ({ byOwner: index("idx_identity_verifications_owner").on(t.ownerId, t.status) }),
+);
+
 /* ----------------------------------------------------------------- payments */
 export const premiumOrders = sqliteTable(
   "premium_orders",
