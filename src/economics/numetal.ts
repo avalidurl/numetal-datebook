@@ -6,8 +6,8 @@
 import { createPublicClient, http, erc20Abi, getAddress } from "viem";
 import { base } from "viem/chains";
 
-// $NUMETAL on Base (re-verify before relying — see memory numetal-token-mechanism).
-const NUMETAL_CA = "0x57EDb7" as const; // NOTE: placeholder prefix — set full CA at deploy.
+// $NUMETAL on Base (Doppler) — verified on-chain 2026-06-21: name/symbol NUMETAL, 18 decimals.
+const NUMETAL_CA = "0x57EDb7FC54ADa9Ef4E113DC05A168449e63cFbA3" as const;
 const DEFAULT_RPC = "https://mainnet.base.org";
 
 export type PerkLevel = "none" | "badge" | "priority" | "discount" | "founder";

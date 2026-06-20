@@ -11,6 +11,8 @@ import { Hono } from "hono";
 import type { Env } from "./env";
 import { accessGate } from "./middleware/access";
 import { geoGate } from "./middleware/geo";
+import { captureError } from "./observability";
+import { adminRoutes } from "./routes/admin";
 import { boardsRoutes, lurkPage } from "./routes/boards";
 import { intakeRoutes } from "./routes/intake";
 import { premiumRoutes } from "./routes/premium";
@@ -38,20 +40,31 @@ app.get("/health", async (c) => {
 app.use("*", accessGate);
 
 app.get("/", (c) => lurkPage(c.env));
+app.route("/", adminRoutes); // /admin (single-pane dashboard) + /admin.json — access-gated
 app.route("/api", intakeRoutes);
 app.route("/api", boardsRoutes);
 app.route("/api", premiumRoutes);
 app.route("/api", reportRoutes);
 app.notFound((c) => c.json({ error: "no such room" }, 404));
 
+// Unhandled route errors → Sentry (no-op until SENTRY_DSN is set) + generic 500.
+app.onError(async (err, c) => {
+  await captureError(c.env, err, { path: c.req.path, method: c.req.method });
+  return c.json({ error: "internal" }, 500);
+});
+
 export default {
   fetch: app.fetch,
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       (async () => {
-        const id = env.MATCH.idFromName("singleton");
-        await env.MATCH.get(id).fetch("https://do/poke", { method: "POST" });
-        await sweepRetention(env);
+        try {
+          const id = env.MATCH.idFromName("singleton");
+          await env.MATCH.get(id).fetch("https://do/poke", { method: "POST" });
+          await sweepRetention(env);
+        } catch (e) {
+          await captureError(env, e, { where: "scheduled" });
+        }
       })(),
     );
   },
