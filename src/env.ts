@@ -26,6 +26,12 @@ export interface Env {
   X402_MODE?: string;
   CDP_API_KEY_ID?: string;
   CDP_API_KEY_SECRET?: string;
+  // Escalation tier (humans meet). All optional → the tier is disabled (no-op) until set.
+  PRIVY_APP_ID?: string;
+  PRIVY_VERIFICATION_KEY?: string; // PEM SPKI public key from the Privy dashboard (ES256)
+  DIDIT_API_KEY?: string;
+  DIDIT_WORKFLOW_ID?: string;
+  DIDIT_WEBHOOK_SECRET?: string;
 }
 
 export const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
