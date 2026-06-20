@@ -45,6 +45,9 @@ async function snapshot(env: Env): Promise<Row> {
     revenue_usdc: round(revenue),
     buyback_reserve_usdc: round(reserve),
     geo_denials_today: denials,
+    intros_to_broker: await list(
+      "SELECT c.id couple_id, (SELECT contact_ref FROM owners WHERE id=(SELECT owner_id FROM personas WHERE id=c.a_id)) a_contact, (SELECT contact_ref FROM owners WHERE id=(SELECT owner_id FROM personas WHERE id=c.b_id)) b_contact FROM couples c WHERE c.state='committed' ORDER BY c.id DESC LIMIT 25",
+    ),
     recent_events: await list("SELECT kind, payload, created_at FROM events ORDER BY id DESC LIMIT 10"),
   };
 }
@@ -86,7 +89,13 @@ ${card("Turns", kv(s.turns_by_status as Row[], "status", "n"))}
 ${card("Chaperone today", kv(s.chaperone_today as Row[], "verdict", "n"))}
 ${card("Orders", kv(s.orders_by_status as Row[], "status", "n"))}
 ${card("Spend by model", kv(s.spend_by_model_today as Row[], "model", "usd"))}
+${card("Intros to broker", String((s.intros_to_broker as Row[]).length))}
 </div>
+${(s.intros_to_broker as Row[]).length ? `<h3 style="margin-top:1.4rem">Intros to broker <small style="opacity:.5">(both owners consented — connect them)</small></h3>
+<table style="width:100%;border-collapse:collapse;font-size:.85rem">
+<tr style="text-align:left;opacity:.6"><th>couple</th><th>contact A</th><th>contact B</th></tr>
+${(s.intros_to_broker as Row[]).map((r) => `<tr style="border-top:1px solid #eee"><td>${escapeHtml(String(r.couple_id))}</td><td>${escapeHtml(String(r.a_contact ?? "—"))}</td><td>${escapeHtml(String(r.b_contact ?? "—"))}</td></tr>`).join("")}
+</table>` : ""}
 <h3 style="margin-top:1.4rem">Recent events</h3>
 <table style="width:100%;border-collapse:collapse;font-size:.85rem">
 <tr style="text-align:left;opacity:.6"><th>kind</th><th>payload</th><th>at</th></tr>

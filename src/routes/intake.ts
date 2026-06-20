@@ -20,6 +20,9 @@ const heartSchema = z.object({
   availableFor: z.string().max(120).optional(),
   researchOptin: z.enum(["none", "aggregate", "full"]).default("none"),
   ageAttested: z.boolean().default(false),
+  // Private contact pointer for founder-brokered intros (concierge model). NEVER served
+  // to boards — only surfaced on the access-gated /admin "intros to broker" view.
+  contactRef: z.string().max(200).optional(),
   heart: z.record(z.unknown()),
 });
 
@@ -32,6 +35,7 @@ intakeRoutes.post("/intake/heart-file", async (c) => {
     .insert(owners)
     .values({
       displayName: b.displayName,
+      contactRef: b.contactRef,
       homeMarket: b.homeMarket,
       activeMarket: b.activeMarket,
       availableFor: b.availableFor,

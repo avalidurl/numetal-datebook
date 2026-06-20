@@ -22,6 +22,10 @@ export interface Env {
   ACCESS_KEY: string;
   PAY_TO?: string;
   SENTRY_DSN?: string; // optional — error capture is a no-op until this is set
+  // x402 mode: "mainnet" → real USDC via CDP; anything else → Base Sepolia testnet.
+  X402_MODE?: string;
+  CDP_API_KEY_ID?: string;
+  CDP_API_KEY_SECRET?: string;
 }
 
 export const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
