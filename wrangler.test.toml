@@ -1,0 +1,38 @@
+# Test-only Worker config for vitest-pool-workers. Mirrors wrangler.toml but DROPS the
+# AI + Vectorize bindings (the pinned 7-day-safe test runtime can't wire Workers AI, and
+# tests mock the guard / use a mock payment provider, so neither is exercised). Compat
+# date is pinned to what the bundled workerd supports.
+name = "datebook-test"
+main = "src/index.ts"
+compatibility_date = "2025-02-04"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "datebook-test"
+database_id = "test"
+migrations_dir = "src/db/migrations"
+
+[[durable_objects.bindings]]
+name = "MATCH"
+class_name = "MatchCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MatchCoordinator"]
+
+[vars]
+SIM_MODE = "day0"
+BOARD_NAMES = "seeking,courtships,debriefs,notifications"
+GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
+EMBED_MODEL = "@cf/baai/bge-m3"
+GAMBIT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+GEO_DENY = "CU,IR,KP,GB,TR"
+AI_GATEWAY_ID = "datebook"
+ADMIT_CAP_DEFAULT = "333"
+DAILY_BUDGET_USD = "5.00"
+PER_AGENT_DAILY_BUDGET_USD = "0.10"
+BUYBACK_RESERVE_BPS = "1000"
+RETENTION_DAYS = "30"
+ACCESS_KEY = "test-key"
+PAY_TO = "0xtestpayto"

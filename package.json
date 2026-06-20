@@ -1,0 +1,31 @@
+{
+  "name": "datebook-staging",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "dry-run": "wrangler deploy --dry-run",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.38.0",
+    "hono": "4.12.25",
+    "viem": "2.52.2",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.6.0",
+    "@cloudflare/workers-types": "4.20260613.1",
+    "drizzle-kit": "^0.30.0",
+    "typescript": "^5.7.0",
+    "vitest": "~2.1.8",
+    "wrangler": "4.100.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

@@ -1,11 +1,13 @@
 name = "datebook-staging"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
-# Match cycle every 2h (compressed season); courtship ticks ride the same cron
+# Hourly janitor/poke + watermark catch-up. Real match/courtship beats are paced
+# by the MatchCoordinator Durable Object alarm — NOT by this cron (audit blocker fix).
 [triggers]
-crons = ["0 */2 * * *"]
+crons = ["0 * * * *"]
 
 [ai]
 binding = "AI"
@@ -14,11 +16,37 @@ binding = "AI"
 binding = "DB"
 database_name = "datebook-staging"
 database_id = "REPLACE_AFTER_d1_create"
+migrations_dir = "src/db/migrations"
+
+# Semantic shortlist + T1 rationale cache. bge-m3 = 1024 dims (NOT 768 — audit fix).
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "datebook-hearts"
+
+[[durable_objects.bindings]]
+name = "MATCH"
+class_name = "MatchCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MatchCoordinator"]
 
 [vars]
-SIM_MODE = "day0"            # compressed clock
+SIM_MODE = "day0"
 BOARD_NAMES = "seeking,courtships,debriefs,notifications"
+# Models — re-verify against the live Workers AI catalog at deploy (Step-3 TODO).
 GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
 EMBED_MODEL = "@cf/baai/bge-m3"
+GAMBIT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+# Edge geo gate (audit blocker). [redacted] → TR is hard-denied for the public product.
+GEO_DENY = "CU,IR,KP,GB,TR"
+# All env.AI.run routed through this AI Gateway id (dollar spend cap set in dashboard).
+AI_GATEWAY_ID = "datebook"
+# Economics (Model C) — runtime-overridable via the `settings` table; these are seed defaults.
+ADMIT_CAP_DEFAULT = "333"
+DAILY_BUDGET_USD = "5.00"
+PER_AGENT_DAILY_BUDGET_USD = "0.10"
+BUYBACK_RESERVE_BPS = "1000"
+RETENTION_DAYS = "30"
 
-# Secrets (never in this file): ACCESS_KEY via `wrangler secret put ACCESS_KEY`
+# Secrets (never in this file): wrangler secret put ACCESS_KEY ; wrangler secret put PAY_TO
