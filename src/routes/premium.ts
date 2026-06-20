@@ -27,6 +27,13 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
   const { ownerId, coupleId } = parsed.data;
   if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
 
+  // Mainnet (real USDC via CDP) is gated: the official CDP facilitator pkg pulls a
+  // <7-day @x402/core (freshness quarantine) and settlement needs founder CDP keys +
+  // a real $1 acceptance tx. Fail loud until wired (see DEPLOY.md "mainnet x402").
+  if (c.env.X402_MODE === "mainnet") {
+    return c.json({ error: "mainnet x402 not yet wired — see DEPLOY.md (CDP keys + @x402/core freshness)" }, 503);
+  }
+
   const db = makeDb(c.env.DB);
   const sku = SKUS.compatibility_report!;
   const provider = makeX402Provider(c.env);

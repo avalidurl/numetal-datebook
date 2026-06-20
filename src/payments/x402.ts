@@ -24,6 +24,12 @@ export const STAGING_FACILITATOR = "https://x402.org/facilitator";
 // USDC on Base Sepolia.
 export const USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
+// Mainnet (real USDC) — Coinbase CDP facilitator. eip155:8453 = Base mainnet.
+export const MAINNET_NETWORK = "eip155:8453";
+export const CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402";
+// Canonical USDC on Base mainnet.
+export const USDC_BASE_MAINNET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+
 export interface VerifiedPayment {
   verified: boolean;
   payer?: string;

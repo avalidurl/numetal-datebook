@@ -14,6 +14,7 @@ import { geoGate } from "./middleware/geo";
 import { captureError } from "./observability";
 import { adminRoutes } from "./routes/admin";
 import { boardsRoutes, lurkPage } from "./routes/boards";
+import { escalationRoutes } from "./routes/escalation";
 import { intakeRoutes } from "./routes/intake";
 import { premiumRoutes } from "./routes/premium";
 import { reportRoutes } from "./routes/report";
@@ -45,6 +46,7 @@ app.route("/api", intakeRoutes);
 app.route("/api", boardsRoutes);
 app.route("/api", premiumRoutes);
 app.route("/api", reportRoutes);
+app.route("/api", escalationRoutes);
 app.notFound((c) => c.json({ error: "no such room" }, 404));
 
 // Unhandled route errors → Sentry (no-op until SENTRY_DSN is set) + generic 500.
