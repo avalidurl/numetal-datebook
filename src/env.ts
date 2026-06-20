@@ -21,6 +21,7 @@ export interface Env {
   // secrets (wrangler secret put)
   ACCESS_KEY: string;
   PAY_TO?: string;
+  SENTRY_DSN?: string; // optional — error capture is a no-op until this is set
 }
 
 export const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
