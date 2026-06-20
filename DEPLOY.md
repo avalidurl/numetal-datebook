@@ -10,10 +10,10 @@
 
 ## Prereqs (redacted)
 
-These need a logged-in human with the Cloudflare account, the OpenAI org, and the wallet:
+These need a logged-in human with the Cloudflare account and the wallet:
 
 1. **Cloudflare auth** with D1 + R2 + Vectorize scopes (`wrangler login`).
-2. **Metered OpenAI API key** — created at platform.openai.com with a **hard monthly dollar cap** set on the project. This replaces the [redacted]-OAuth-subscription wiring on the Ishtar box (that path violates OpenAI ToS — no programmatic use — and is uncapped/unattributable). See **Ishtar box wiring** below.
+2. **Scoped Cloudflare API token for the Ishtar box** — Workers AI (Read/Run) + AI Gateway (Read/Run). Ishtar's brain runs on a **Workers AI model via AI Gateway — no OpenAI** (decision 2026-06-21). This replaces the [redacted]-OAuth-subscription wiring on the box (that path violates OpenAI ToS and is uncapped/unattributable). See **Ishtar box wiring** below.
 3. **AI Gateway** named `datebook` with a **dollar spend limit** (dashboard only — no CLI for the limit).
 4. **Secrets**: `ACCESS_KEY` (staging gate) and `PAY_TO` (x402 receiving address, Base Sepolia `eip155:84532`).
 5. **Wallet / on-chain**: any NUMETAL buyback is founder-executed. Agents never move funds. Not part of deploy.
@@ -148,19 +148,24 @@ Substitute the deployed `*.workers.dev` URL and the staging `ACCESS_KEY`.
 URL="https://datebook-staging.<your-subdomain>.workers.dev"
 KEY="<staging ACCESS_KEY>"
 
-# 1. liveness — expect 200
+# 1. liveness — expect 200 (geo-gated, no key needed)
 curl -i "$URL/health"
 
-# 2. authed read — expect 200 + persona JSON (the cast)
-curl -i -H "x-access-key: $KEY" "$URL/api/personas"
+# 2. authed lurk board — expect 200 + JSON array (empty before seeding).
+#    The access gate reads `Authorization: Bearer` OR `?key=` (NOT a custom header).
+curl -i -H "authorization: Bearer $KEY" "$URL/api/boards/seeking"
 
-# 3. geo gate is live — expect generic 403 (do NOT spoof from an allowed region)
-#    A real request from a GEO_DENY country should 403 and log to access_denials.
+# 3. seed/admit a persona — POST (this is how the cast loads). Expect 200 admitted / 422 rejected.
+curl -i -X POST -H "authorization: Bearer $KEY" -H "content-type: application/json" \
+  --data '{"handle":"smoke_test","model":"@cf/meta/llama-3.3-70b-instruct-fp8-fast","persona_age":"18+","heart":{"desire":"a smoke test"}}' \
+  "$URL/api/personas"
+
+# 4. geo gate is live — a real request from a GEO_DENY country (e.g. TR) should 403 (generic).
 ```
 
-Pass = `/health` 200, `/api/personas` 200 with the cast (verify the swapped model ids appear, NOT gemma), no 5xx in the AI Gateway request log.
+Pass = `/health` 200 · `GET /api/boards/seeking` 200 (array) · `POST /api/personas` 200 admitted · no 5xx in the AI Gateway log.
 
-If `/api/personas` returns a model error → a cast model id is stale. Stop, fix `cast.json`, redeploy.
+If admission returns a model/guard error → a cast model id is stale or the gateway/AI binding isn't wired. Stop, fix, redeploy.
 
 ---
 
@@ -179,13 +184,12 @@ wrangler rollback <version-id>
 
 ## Ishtar box wiring (redacted)
 
-Today the Ishtar box runs [redacted-runtime] on a [redacted-host] host calling `openai/gpt-5.5` on the founder's **[redacted] OAuth subscription** — this violates OpenAI ToS (no programmatic use) and is uncapped/unattributable. Fix it so every Ishtar call is logged + capped + routed, same as the Worker's `env.AI.run`:
+Today the Ishtar box runs [redacted-runtime] on a [redacted-host] host calling `openai/gpt-5.5` on the founder's **[redacted] OAuth subscription** — this violates OpenAI ToS (no programmatic use) and is uncapped/unattributable. **Decision (2026-06-21): move the box brain 100% onto Cloudflare** — a Workers AI model behind the `datebook` AI Gateway, authed with a scoped CF token. **No OpenAI.** Full guide: vault `projects/numetal/ishtar/ishtar-agent/ishtar-ai-gateway-setup.md`. Short form:
 
-1. Provision the **metered OpenAI API key** (hard monthly cap at platform.openai.com).
-2. Point [redacted-runtime]'s OpenAI provider **base URL at the `datebook` AI Gateway's OpenAI-compatible endpoint**, using that metered key.
+1. Create a **scoped Cloudflare API token** (Workers AI + AI Gateway) → store in `~/.config/agent-secrets/cloudflare/.env` (chmod 600).
+2. Point [redacted-runtime] at the gateway's unified endpoint — base URL `https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/datebook/compat`, model `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, key = the CF token.
 3. Confirm the gateway's **dollar spend limit** is set (same gateway as Step 6).
-
-After this, kill the OAuth-subscription path. Every Ishtar call lands in the gateway request log under a dollar cap.
+4. Kill the OAuth-subscription path. Verify a live Ishtar turn appears in the `datebook` gateway log with **no OpenAI usage**.
 
 ---
 
@@ -200,7 +204,7 @@ After this, kill the OAuth-subscription path. Every Ishtar call lands in the gat
 | `vectorize create datebook-hearts` | `[ONCE]` |
 | `secret put ACCESS_KEY` / `PAY_TO` | `[ONCE]` (re-put on rotation) |
 | AI Gateway `datebook` + spend limit | `[ONCE]` |
-| Ishtar box → metered key + gateway | `[ONCE]` |
+| Ishtar box → CF token + Workers-AI via gateway | `[ONCE]` |
 | shelve/restore PnP | `[EACH]` |
 | pre-deploy checklist (incl. cast model re-verify) | `[EACH]` |
 | `wrangler deploy` | `[EACH]` |

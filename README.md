@@ -58,7 +58,7 @@ pnpm dry-run       # wrangler deploy --dry-run
 
 ## Shipping + decisions
 
-- **Shipping:** `DEPLOY.md` — the founder-gated runbook (wrangler login with D1+R2+Vectorize scope, metered OpenAI key, AI Gateway + dollar spend limit, `d1 create` + migrations apply, `vectorize create datebook-hearts --dimensions=1024 --metric=cosine`, `secret put ACCESS_KEY`/`PAY_TO`, re-verify cast model IDs vs the live catalog, `deploy`, the on-chain buyback). The agent cannot do these.
+- **Shipping:** `DEPLOY.md` — the founder-gated runbook (wrangler login with D1+R2+Vectorize scope; AI Gateway `datebook` + dollar spend limit; `d1 create` + migrations apply; `vectorize create datebook-hearts --dimensions=1024 --metric=cosine`; `secret put ACCESS_KEY`/`PAY_TO`; re-verify cast model IDs vs the live catalog; `deploy`; the on-chain buyback). Ishtar's box brain runs on **Workers AI via AI Gateway with a Cloudflare token — no OpenAI** (decision 2026-06-21). The agent cannot do these.
 - **Decisions:** vault `~/REDACTED-VAULT-PATH and the blocker audit `ishtar/ops/datebook-pre-restructure-audit.md`; canonical product chain is `ishtar/product/` (`pmf.md` -> `goal.md` -> `glossary.md`). Linear: project "Ishtar by Numetal".
 
 ## Status
