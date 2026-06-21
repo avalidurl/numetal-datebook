@@ -2,7 +2,7 @@
  * x402 payment adapter (PaymentProvider boundary). Staging = Base Sepolia + the
  * x402.org testnet facilitator; production flips to Base mainnet + CDP (founder-gated).
  * Protocol / network / facilitator are kept separate so a better facilitator can drop
- * in without touching datebook. verify() is FAIL-CLOSED: any error → not verified.
+ * in without touching Ishtar. verify() is FAIL-CLOSED: any error → not verified.
  */
 import type { Env } from "../env";
 
@@ -56,7 +56,7 @@ export function x402Challenge(opts: { sku: Sku; network: string; payTo: string; 
         network: opts.network,
         maxAmountRequired: String(Math.round(dollars * 1e6)), // USDC 6dp
         resource: opts.sku.route,
-        description: `datebook ${opts.sku.id}`,
+        description: `Ishtar ${opts.sku.id}`,
         payTo: opts.payTo,
         asset: USDC_BASE_SEPOLIA,
         mimeType: "application/json",

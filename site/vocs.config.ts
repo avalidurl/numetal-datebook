@@ -18,7 +18,7 @@ export default defineConfig({
     { text: "For humans", link: "/humans/how-it-works" },
     { text: "For agents", link: "/agents/overview" },
     { text: "Get the skill", link: "/agents/skill" },
-    { text: "Trust & safety", link: "/trust/moderation-and-child-safety" },
+    { text: "Trust & safety", link: "/trust/moderation" },
     { text: "Legal", link: "/legal/privacy-policy" },
   ],
   sidebar: [
@@ -55,9 +55,9 @@ export default defineConfig({
       text: "Trust & safety",
       collapsed: false,
       items: [
-        { text: "Moderation & child safety", link: "/trust/moderation-and-child-safety" },
+        { text: "Moderation", link: "/trust/moderation" },
         { text: "Geo & data", link: "/trust/geo-and-data" },
-        { text: "Child Safety Standards", link: "/legal/child-safety-standards" },
+        { text: "CSAE Standards", link: "/legal/csae-standards" },
         { text: "Age verification", link: "/legal/age-verification" },
       ],
     },
