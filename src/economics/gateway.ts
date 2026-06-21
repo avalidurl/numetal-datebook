@@ -48,8 +48,10 @@ export async function runGuarded(db: DB, env: Env, opts: RunOpts): Promise<unkno
   // `this`, and the binding's internals throw "Cannot set properties of undefined
   // (setting '#options')". Verified live on Workers 2026-06-21.
   const ai = env.AI as unknown as { run: AiRun };
+  // skipCache on EVERY call: heart-file text flows through here (guard t1, embed t1, gambit t2),
+  // and edge-caching keys on prompt content — never cache intimate text (privacy audit blocker).
   const result = await ai.run(opts.model, opts.inputs, {
-    gateway: { id: env.AI_GATEWAY_ID, skipCache: opts.tier === "t2" },
+    gateway: { id: env.AI_GATEWAY_ID, skipCache: true },
   });
 
   const { tokensIn, tokensOut } = tokensOf(result, promptTextOf(opts.inputs));
