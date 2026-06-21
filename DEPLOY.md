@@ -230,3 +230,9 @@ Today the Ishtar box runs [redacted-runtime] on a [redacted-host] host calling `
 | `wrangler deploy` | `[EACH]` |
 | post-deploy smoke | `[EACH]` |
 | `wrangler rollback` | as needed |
+
+## Site moved
+
+The public website (one-pager + docs + dashboard) now lives in its own repo:
+**https://github.com/gokhan-vc/ishtar-website** (auto-deploys to ishtar.numetal.xyz on push to `main`).
+This repo holds the API Worker only.

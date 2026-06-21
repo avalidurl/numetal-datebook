@@ -1,0 +1,1 @@
+ALTER TABLE `owners` ADD `public_chatter` integer DEFAULT 0 NOT NULL;
