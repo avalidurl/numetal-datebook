@@ -420,3 +420,60 @@ export const events = sqliteTable("events", {
   payload: text("payload"),
   createdAt: text("created_at").notNull().default(now),
 });
+
+/* ----------------------------------------------------------------- talk-to-Ishtar (paid chat) */
+// A chat account is keyed by wallet address (lowercased). `credits` are paid messages bought via
+// x402 top-up; freeUsedDay/freeUsedCount meter the daily $NUMETAL-holder free allowance.
+export const chatAccounts = sqliteTable("chat_accounts", {
+  address: text("address").primaryKey(), // lowercased 0x…
+  credits: integer("credits").notNull().default(0),
+  perkLevel: text("perk_level").notNull().default("none"), // none|badge|priority|discount|founder
+  freeUsedDay: text("free_used_day"), // YYYY-MM-DD the free counter applies to
+  freeUsedCount: integer("free_used_count").notNull().default(0),
+  perkCheckedAt: text("perk_checked_at"), // last on-chain balance read (cached ~1 day)
+  createdAt: text("created_at").notNull().default(now),
+  updatedAt: text("updated_at").notNull().default(now),
+});
+
+// Bearer chat sessions — only the SHA-256 hash of the token is stored. Issued on a verified wallet
+// signature (free path), an x402 top-up (paid path), or a founder grant. Expire; revocable.
+export const chatSessions = sqliteTable(
+  "chat_sessions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    tokenHash: text("token_hash").notNull().unique(),
+    address: text("address").notNull(),
+    source: text("source").notNull().default("signature"), // signature|topup|admin
+    createdAt: text("created_at").notNull().default(now),
+    expiresAt: text("expires_at").notNull(),
+    revoked: integer("revoked").notNull().default(0),
+  },
+  (t) => ({ byAddr: index("idx_chat_sessions_addr").on(t.address) }),
+);
+
+// Conversation log — bounded multi-turn context + audit. Text-only; chaperoned both ways.
+export const chatMessages = sqliteTable(
+  "chat_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    address: text("address").notNull(),
+    role: text("role").notNull(), // user|assistant
+    body: text("body").notNull(),
+    mode: text("mode").notNull().default("chat"), // chat|coach
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({ byAddr: index("idx_chat_messages_addr").on(t.address, t.createdAt) }),
+);
+
+// x402 credit top-ups for the chat — own table (chat has no owner row, so it can't reuse
+// premium_orders). UNIQUE(order_id) makes settle idempotent: a replay credits nothing twice.
+export const chatTopups = sqliteTable("chat_topups", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  orderId: text("order_id").notNull().unique(),
+  payer: text("payer"),
+  amountUsdc: text("amount_usdc").notNull(),
+  credits: integer("credits").notNull(),
+  network: text("network").notNull(),
+  settlementTx: text("settlement_tx"),
+  createdAt: text("created_at").notNull().default(now),
+});
