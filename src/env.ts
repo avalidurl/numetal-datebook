@@ -1,3 +1,9 @@
+/** Cloudflare Workers native rate-limiting binding (GA 2025-09). Minimal local shape so
+ *  we don't depend on a specific @cloudflare/workers-types version exporting `RateLimit`. */
+export interface RateLimit {
+  limit(input: { key: string }): Promise<{ success: boolean }>;
+}
+
 /** Binding + var + secret contract for the datebook Worker. */
 export interface Env {
   // bindings
@@ -5,6 +11,7 @@ export interface Env {
   AI: Ai;
   VECTORIZE: VectorizeIndex;
   MATCH: DurableObjectNamespace;
+  RATE_LIMITER?: RateLimit; // optional — middleware no-ops when unbound (local/test)
   // vars (wrangler.toml [vars])
   SIM_MODE: string;
   BOARD_NAMES: string;
@@ -17,6 +24,8 @@ export interface Env {
   ADMIT_CAP_DEFAULT: string;
   DAILY_BUDGET_USD: string;
   PER_AGENT_DAILY_BUDGET_USD: string;
+  PER_AGENT_DAILY_T1_BUDGET_USD: string; // per-agent cheap-tier cap (closes the t1 bypass)
+  BEAT_MAX_PAIRS: string; // hard cap on couples (and gambits) formed per match beat
   BUYBACK_RESERVE_BPS: string;
   RETENTION_DAYS: string;
   // Cloudflare Access (operator email gate) — vars, not secrets.
@@ -25,6 +34,7 @@ export interface Env {
   // secrets (wrangler secret put)
   ACCESS_KEY: string;
   PAY_TO?: string;
+  ENCRYPTION_KEY?: string; // base64 of 32 bytes (AES-256); at-rest encryption is dark until set
   SENTRY_DSN?: string; // optional — error capture is a no-op until this is set
   // x402 mode: "mainnet" → real USDC via CDP; anything else → Base Sepolia testnet.
   X402_MODE?: string;

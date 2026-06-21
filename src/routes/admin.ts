@@ -1,12 +1,16 @@
 /**
  * Single-pane operator console (the "see + click everything" view).
- * Access-gated like the rest of the app (Bearer or ?key=). GET /admin = full HTML
- * console; GET /admin.json = the summary snapshot (stable shape — keep keys).
- * Actions (gated POST): force a match beat, edit live settings, mark an intro brokered.
+ * Access-gated like the rest of the app (Cloudflare Access JWT or Bearer ACCESS_KEY — no
+ * access key ever in a URL). GET /admin = full HTML console; GET /admin.json = the summary
+ * snapshot (stable shape — keep keys). Actions (gated POST): force a match beat, edit live
+ * settings, mark an intro brokered, erase an owner (GDPR Art.17).
  */
 import { Hono } from "hono";
+import { db as makeDb } from "../db/client";
+import { open } from "../crypto/box";
 import type { Env } from "../env";
 import { utcDay } from "../env";
+import { eraseOwner } from "../erasure";
 import { card, cards, esc, kvline, page, sec, tbl } from "../ui/layout";
 
 export const adminRoutes = new Hono<{ Bindings: Env }>();
@@ -35,6 +39,19 @@ async function snapshot(env: Env): Promise<Row> {
   const reserve = Number((await first("SELECT coalesce(sum(cast(reserve_usdc as real)),0) s FROM buyback_reserve")).s ?? 0);
   const denials = Number((await first("SELECT count(*) c FROM access_denials WHERE date(created_at)=date('now')")).c ?? 0);
 
+  // contact_ref is encrypted at rest — decrypt only here, for the operator brokering the intro.
+  const introsRaw = await list(
+    "SELECT c.id couple_id, (SELECT contact_ref FROM owners WHERE id=(SELECT owner_id FROM personas WHERE id=c.a_id)) a_contact, (SELECT contact_ref FROM owners WHERE id=(SELECT owner_id FROM personas WHERE id=c.b_id)) b_contact FROM couples c WHERE c.state='committed' ORDER BY c.id DESC LIMIT 25",
+  );
+  const intros: Row[] = [];
+  for (const r of introsRaw) {
+    intros.push({
+      couple_id: r.couple_id,
+      a_contact: (await open(env, r.a_contact as string | null)) ?? "—",
+      b_contact: (await open(env, r.b_contact as string | null)) ?? "—",
+    });
+  }
+
   return {
     health: "ok",
     sim_mode: env.SIM_MODE,
@@ -52,9 +69,7 @@ async function snapshot(env: Env): Promise<Row> {
     revenue_usdc: round(revenue),
     buyback_reserve_usdc: round(reserve),
     geo_denials_today: denials,
-    intros_to_broker: await list(
-      "SELECT c.id couple_id, (SELECT contact_ref FROM owners WHERE id=(SELECT owner_id FROM personas WHERE id=c.a_id)) a_contact, (SELECT contact_ref FROM owners WHERE id=(SELECT owner_id FROM personas WHERE id=c.b_id)) b_contact FROM couples c WHERE c.state='committed' ORDER BY c.id DESC LIMIT 25",
-    ),
+    intros_to_broker: intros,
     recent_events: await list("SELECT kind, payload, created_at FROM events ORDER BY id DESC LIMIT 10"),
   };
 }
@@ -175,7 +190,8 @@ ${setting("per_agent_daily_budget_usd", c.env.PER_AGENT_DAILY_BUDGET_USD)}
     + tbl(["order", "sku", "status", "price", "network", "at"], d.orders_recent.map((r) => [`<code>${esc(String(r.order_id))}</code>`, esc(String(r.sku)), st(r.status), `$${esc(String(r.price_usd))}`, `<span class="mut">${esc(String(r.network))}</span>`, `<span class="mut">${esc(String(r.created_at))}</span>`])));
 
   const identity = sec("§08", "identity & owners", `<div class="bar" style="margin-bottom:.5rem">${kvline(d.owners_by_tier, "tier", "n")}</div>`
-    + tbl(["id", "owner", "provider", "status", "18+", "at"], d.identity_recent.map((r) => [esc(String(r.id)), esc(String(r.owner_id)), esc(String(r.provider)), st(r.status), Number(r.age_over_18) ? `<span class="ok">yes</span>` : `<span class="mut">no</span>`, `<span class="mut">${esc(String(r.created_at))}</span>`])));
+    + tbl(["id", "owner", "provider", "status", "18+", "at"], d.identity_recent.map((r) => [esc(String(r.id)), esc(String(r.owner_id)), esc(String(r.provider)), st(r.status), Number(r.age_over_18) ? `<span class="ok">yes</span>` : `<span class="mut">no</span>`, `<span class="mut">${esc(String(r.created_at))}</span>`]))
+    + `<div class="bar" style="margin-top:.6rem"><input id="erase_owner" placeholder="owner id" style="width:90px"><button onclick="eraseOwner('erase_owner')">erase owner (GDPR)</button> <span class="mut">cascade delete + drop semantic vectors</span></div>`);
 
   const safety = sec("§09", "chaperone (safety log)", `<div class="bar" style="margin-bottom:.5rem">${kvline(s.chaperone_today as Row[], "verdict", "n")}</div>`
     + tbl(["target", "stage", "verdict", "reason", "at"], d.chaperone_recent.map((r) => [`${esc(String(r.target_type))}#${esc(String(r.target_id))}`, esc(String(r.stage)), st(r.verdict), `<span class="mut">${esc(String(r.reason ?? ""))}</span>`, `<span class="mut">${esc(String(r.created_at))}</span>`])));
@@ -191,6 +207,7 @@ async function post(p,b){const r=await fetch(p+Q,{method:'POST',headers:{'conten
 async function forceBeat(){toast('running beat…');try{const j=await post('/admin/actions/beat');toast('beat '+j.cycleId+': '+j.created+' couples ('+j.pairs+' pairs). reloading…');setTimeout(()=>location.reload(),1600);}catch(e){toast('error: '+e.message);}}
 async function saveSetting(k,id){const v=document.getElementById(id).value;toast('saving '+k+'…');const j=await post('/admin/actions/settings',{key:k,value:v});if(j.ok){toast(k+' = '+v+'. reloading…');setTimeout(()=>location.reload(),900);}else toast('error: '+(j.error||'failed'));}
 async function brokerIntro(id){toast('marking brokered…');const j=await post('/admin/actions/broker',{coupleId:id});if(j.ok){toast('couple '+id+' brokered. reloading…');setTimeout(()=>location.reload(),900);}else toast('error: '+(j.error||'failed'));}
+async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!v)return;if(!confirm('Erase owner '+v+'? This cascade-deletes their personal data and drops their semantic vectors. Irreversible.'))return;toast('erasing owner '+v+'…');const j=await post('/admin/actions/erase',{ownerId:Number(v)});if(j.ok){toast('owner '+v+' erased ('+j.personasErased+' personas, '+j.vectorsDeleted+' vectors). reloading…');setTimeout(()=>location.reload(),1400);}else toast('error: '+(j.error||'failed'));}
 </script>`;
 
   const footer = `<p class="note">raw snapshot: <a href="/admin.json">/admin.json</a> · settings &amp; cap are live (no redeploy) · every write is chaperoned · adult-only · text-only</p>`;
@@ -230,4 +247,18 @@ adminRoutes.post("/admin/actions/broker", async (c) => {
   await c.env.DB.prepare("UPDATE couples SET state='brokered' WHERE id=?1 AND state='committed'").bind(id).run();
   await c.env.DB.prepare("INSERT INTO events (kind, payload) VALUES ('intro_brokered', ?1)").bind(JSON.stringify({ coupleId: id })).run();
   return c.json({ ok: true, coupleId: id });
+});
+
+// GDPR Art.17 erasure: cascade-delete an owner's personal data + drop their semantic vectors.
+adminRoutes.post("/admin/actions/erase", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { ownerId?: number };
+  const id = Number(body.ownerId);
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: "ownerId required" }, 400);
+  try {
+    const r = await eraseOwner(makeDb(c.env.DB), c.env, id);
+    await c.env.DB.prepare("INSERT INTO events (kind, payload) VALUES ('owner_erased', ?1)").bind(JSON.stringify(r)).run();
+    return c.json(r);
+  } catch (e) {
+    return c.json({ ok: false, error: String(e) }, 500);
+  }
 });

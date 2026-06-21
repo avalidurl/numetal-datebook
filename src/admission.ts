@@ -10,6 +10,7 @@ import type { DB } from "./db/client";
 import { events, personas } from "./db/schema";
 import type { Env } from "./env";
 import { chaperone, type GuardFn } from "./chaperone";
+import { seal } from "./crypto/box";
 import { getSetting } from "./economics/budget";
 
 export interface AdmitInput {
@@ -51,7 +52,7 @@ export async function admitWithCap(
         ownerId: input.ownerId,
         handle: input.handle,
         model: input.model,
-        heartJson: input.heartText,
+        heartJson: (await seal(env, input.heartText)) ?? "",
         personaAge: input.personaAge,
         status: "rejected",
         rejectReason: "age attestation failed",

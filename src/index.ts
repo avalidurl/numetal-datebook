@@ -11,6 +11,7 @@ import { Hono } from "hono";
 import type { Env } from "./env";
 import { accessGate } from "./middleware/access";
 import { geoGate } from "./middleware/geo";
+import { rateLimit } from "./middleware/ratelimit";
 import { captureError } from "./observability";
 import { adminRoutes } from "./routes/admin";
 import { boardsRoutes, lurkPage } from "./routes/boards";
@@ -42,11 +43,16 @@ app.get("/health", async (c) => {
 // have the founder ACCESS_KEY. Secured instead by the one-time invite token + Privy login
 // (claim) and HMAC + timestamp (Didit webhook). Geo-gated only.
 app.get("/claim", claimPage); // Privy login page reached via the one-time invite link
-app.post("/api/escalations/claim", claimHandler); // claim → profile_claimed + start Didit
+app.post("/api/escalations/claim", rateLimit("claim"), claimHandler); // claim → profile_claimed + start Didit
 app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback (HMAC-auth)
 
 // Everything below requires the staging key.
 app.use("*", accessGate);
+
+// Edge rate limit on the public write surfaces (no-op until the RATE_LIMITER binding exists).
+app.use("/api/intake/*", rateLimit("intake"));
+app.use("/api/personas", rateLimit("intake"));
+app.use("/api/premium/*", rateLimit("payment"));
 
 app.get("/", (c) => lurkPage(c.env));
 app.route("/", adminRoutes); // /admin (single-pane dashboard) + /admin.json — access-gated

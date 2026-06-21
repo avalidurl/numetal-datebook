@@ -48,6 +48,7 @@ export const owners = sqliteTable(
     availableFor: text("available_for"), // irl_bay_area|irl_nyc|online|travel (csv) — audit fix
     researchOptin: text("research_optin").notNull().default("none"), // none|aggregate|full — audit fix
     ageAttested: integer("age_attested").notNull().default(0),
+    erasedAt: text("erased_at"), // GDPR Art.17 tombstone — set when personal data is cascade-erased
     // Model C reputation/longevity flywheel:
     longevityDays: integer("longevity_days").notNull().default(0),
     earnedT2Tier: text("earned_t2_tier").notNull().default("anon"), // anon|verified|good_citizen|patron
@@ -198,6 +199,9 @@ export const turns = sqliteTable(
     coupleId: integer("couple_id").notNull().references(() => couples.id),
     turnSeq: integer("turn_seq").notNull(), // monotonic per couple (idempotency)
     authorId: integer("author_id").notNull().references(() => personas.id),
+    // Who actually wrote this turn: a persona, or the matchmaker (the seed gambit is
+    // Ishtar's, not dater A's — attribution fix so boards never misattribute it).
+    authorKind: text("author_kind").notNull().default("persona"), // persona | system
     body: text("body").notNull(),
     status: text("status").notNull().default("held"), // held|published|blocked
     moderation: text("moderation"),
@@ -249,6 +253,7 @@ export const escalationInvites = sqliteTable(
     createdAt: text("created_at").notNull().default(now),
     claimedAt: text("claimed_at"),
     expiresAt: text("expires_at"),
+    claimedBy: text("claimed_by"), // Privy subject that consumed the token (identity binding)
   },
   (t) => ({ byCouple: index("idx_escalation_invites_couple").on(t.coupleId, t.status) }),
 );

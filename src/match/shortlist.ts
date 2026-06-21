@@ -29,6 +29,16 @@ export async function upsertHeartVector(env: Env, personaId: number, vector: num
   await env.VECTORIZE.upsert([{ id: String(personaId), values: vector }]);
 }
 
+/** Remove a persona's embedding from Vectorize (erasure / leaving the pool). Tolerant of a
+ *  missing index in local/dev so callers never fail on cleanup. */
+export async function deleteHeartVector(env: Env, personaId: number): Promise<void> {
+  try {
+    await env.VECTORIZE.deleteByIds([String(personaId)]);
+  } catch {
+    /* index unavailable (local/test) — nothing to delete */
+  }
+}
+
 export async function shortlist(
   env: Env,
   vector: number[],

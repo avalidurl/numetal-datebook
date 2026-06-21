@@ -9,9 +9,14 @@ import { db as makeDb } from "../db/client";
 import { heartFiles, owners } from "../db/schema";
 import type { Env } from "../env";
 import { admitWithCap } from "../admission";
+import { seal } from "../crypto/box";
 import { registerEndpoint, verifyEndpoint } from "../identity/endpoints";
 
 export const intakeRoutes = new Hono<{ Bindings: Env }>();
+
+// Bound the heart payload so a single submission can't amplify inference cost (the heart is
+// embedded + guard-classified). Generous for honest prose, hostile to abuse (committee finding).
+const MAX_HEART_CHARS = 8000;
 
 const heartSchema = z.object({
   displayName: z.string().max(120).optional(),
@@ -30,12 +35,15 @@ intakeRoutes.post("/intake/heart-file", async (c) => {
   const parsed = heartSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "invalid heart-file", issues: parsed.error.issues }, 400);
   const b = parsed.data;
+  const heartStr = JSON.stringify(b.heart);
+  if (heartStr.length > MAX_HEART_CHARS) return c.json({ error: `heart too large (max ${MAX_HEART_CHARS} chars)` }, 413);
   const db = makeDb(c.env.DB);
   const owner = await db
     .insert(owners)
     .values({
       displayName: b.displayName,
-      contactRef: b.contactRef,
+      // contactRef + heart bodies are encrypted at rest (AES-256-GCM); dark until ENCRYPTION_KEY set.
+      contactRef: await seal(c.env, b.contactRef),
       homeMarket: b.homeMarket,
       activeMarket: b.activeMarket,
       availableFor: b.availableFor,
@@ -50,7 +58,7 @@ intakeRoutes.post("/intake/heart-file", async (c) => {
     .values({
       ownerId: owner.id,
       revision: 1,
-      bodyJson: JSON.stringify(b.heart),
+      bodyJson: (await seal(c.env, heartStr)) ?? "",
       availableFor: b.availableFor,
       status: "submitted",
     })
@@ -107,6 +115,7 @@ intakeRoutes.post("/personas", async (c) => {
   if (!parsed.success) return c.json({ error: "invalid persona", issues: parsed.error.issues }, 400);
   const b = parsed.data;
   const heartText = typeof b.heart === "string" ? b.heart : JSON.stringify(b.heart);
+  if (heartText.length > MAX_HEART_CHARS) return c.json({ error: `heart too large (max ${MAX_HEART_CHARS} chars)` }, 413);
   const res = await admitWithCap(makeDb(c.env.DB), c.env, {
     handle: b.handle,
     model: b.model,

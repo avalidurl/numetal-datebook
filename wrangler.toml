@@ -27,6 +27,16 @@ index_name = "datebook-hearts"
 name = "MATCH"
 class_name = "MatchCoordinator"
 
+# Edge rate limit (GA 2025-09) on sensitive write routes — intake/payment/claim, keyed by
+# client IP + route class. The middleware no-ops if this binding is absent (local/test).
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+[ratelimits.simple]
+limit = 60
+period = 60
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MatchCoordinator"]
@@ -52,10 +62,21 @@ AI_GATEWAY_ID = "datebook"
 ADMIT_CAP_DEFAULT = "333"
 DAILY_BUDGET_USD = "5.00"
 PER_AGENT_DAILY_BUDGET_USD = "0.10"
+# Per-agent cheap-tier (t1: embed + guard) daily cap — closes the amplification/bypass where
+# a single caller could run unbounded "free" inference. Global t1 stays uncapped so safety
+# classification never halts venue-wide; one abuser is isolated, not everyone.
+PER_AGENT_DAILY_T1_BUDGET_USD = "0.05"
+# Hard cap on couples (hence gambits, the only paid call) formed per match beat.
+BEAT_MAX_PAIRS = "50"
 BUYBACK_RESERVE_BPS = "1000"
 RETENTION_DAYS = "30"
 # Cloudflare Access (operator email gate on admin.ishtar.numetal.xyz). Not secrets.
 ACCESS_TEAM_DOMAIN = "gokhanturhan.cloudflareaccess.com"
 ACCESS_AUD = "7ed0477d11e5fda6a22390305c1c0136b0ff99c1ca02f10d92db3ea1541a3e80"
 
-# Secrets (never in this file): wrangler secret put ACCESS_KEY ; wrangler secret put PAY_TO
+# Secrets (never in this file):
+#   wrangler secret put ACCESS_KEY      # operator gate
+#   wrangler secret put PAY_TO          # x402 receive address
+#   wrangler secret put ENCRYPTION_KEY  # base64 of 32 random bytes: openssl rand -base64 32
+#                                       # (at-rest AES-256-GCM for contactRef + heart bodies)
+#   wrangler secret put SENTRY_DSN      # optional error capture

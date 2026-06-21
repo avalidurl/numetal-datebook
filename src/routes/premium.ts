@@ -100,9 +100,16 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     text: reportText,
     callerRef: `owner:${ownerId}`,
   });
-  if (verdict.verdict !== "allow") {
+  // allow → deliver as-is; sanitize → deliver the REDACTED text; anything else → withhold.
+  if (verdict.verdict !== "allow" && verdict.verdict !== "sanitize") {
     await db.insert(events).values({ kind: "paid_output_withheld", payload: JSON.stringify({ orderId, reason: verdict.reason }) }).run();
     return c.json({ ok: true, orderId, receiptId: settled.receiptId, report: null, withheld: true, reason: `held for review: ${verdict.reason}` });
   }
-  return c.json({ ok: true, orderId, receiptId: settled.receiptId, report: reportText });
+  return c.json({
+    ok: true,
+    orderId,
+    receiptId: settled.receiptId,
+    report: verdict.text ?? reportText,
+    sanitized: verdict.verdict === "sanitize" || undefined,
+  });
 });

@@ -7,6 +7,7 @@ import type { DB } from "../db/client";
 import type { Env } from "../env";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
+import { captureError } from "../observability";
 
 export interface GuardResult {
   safe: boolean;
@@ -42,7 +43,8 @@ export async function llamaGuard(
     // Unparseable → fail closed.
     return { safe: false, raw: out, category: "unparseable" };
   } catch (err) {
-    // Model down / budget exceeded / network → fail closed.
+    // Model down / budget exceeded / network → fail closed (and surface to Sentry once wired).
+    await captureError(env, err, { where: "llamaGuard", route });
     return { safe: false, raw: `guard_error: ${(err as Error).message}`, category: "error" };
   }
 }
