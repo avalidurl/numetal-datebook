@@ -15,7 +15,7 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "datebook-staging"
-database_id = "REPLACE_AFTER_d1_create"
+database_id = "b6dd149b-fca8-4a9c-804e-b53d172f6446"
 migrations_dir = "src/db/migrations"
 
 # Semantic shortlist + T1 rationale cache. bge-m3 = 1024 dims (NOT 768 — audit fix).
