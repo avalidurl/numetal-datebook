@@ -68,7 +68,14 @@ export async function listCourtships(env: Env, limit = 50): Promise<CourtshipLin
        SELECT 1 FROM personas px JOIN owners ox ON ox.id = px.owner_id
        WHERE px.id IN (c.a_id, c.b_id) AND ox.public_chatter = 1
      )
-     ORDER BY t.created_at DESC, t.id DESC LIMIT ?1`,
+     -- Recent couples first, but each couple's turns in TRUE conversational order. Robust for
+     -- seeded turns that share one created_at (fall through to the PK) AND real turns with
+     -- distinct timestamps (created_at ASC within the couple). Fully deterministic.
+     ORDER BY (SELECT max(t2.created_at) FROM turns t2 WHERE t2.couple_id = t.couple_id) DESC,
+              t.couple_id DESC,
+              t.created_at ASC,
+              t.id ASC
+     LIMIT ?1`,
   )
     .bind(n)
     .all();
