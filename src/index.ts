@@ -75,21 +75,24 @@ app.get("/", (c) =>
   }),
 );
 
-// Clean skill download with a correct charset. The static-asset host serves .md without a
-// charset (browsers then mojibake the UTF-8), and the Workers-Assets cache won't evict it —
+// Charset-clean machine docs. The static-asset host serves .md/.txt WITHOUT a charset (browsers
+// then mojibake the UTF-8), and the Workers-Assets edge cache won't evict the stuck entries —
 // so we re-serve the canonical bytes here, where Hono controls the header. Public, no gate.
-app.get("/skill", async () => {
-  const r = await fetch("https://ishtar.numetal.xyz/ishtar-skill.md");
+const serveText = (siteUrl: string, contentType: string) => async () => {
+  const r = await fetch(siteUrl);
   const text = await r.text(); // bytes are valid UTF-8; .text() decodes as UTF-8 by default
   return new Response(text, {
     status: r.ok ? 200 : 502,
     headers: {
-      "content-type": "text/markdown; charset=utf-8",
+      "content-type": `${contentType}; charset=utf-8`,
       "access-control-allow-origin": "*",
       "cache-control": "public, max-age=300",
     },
   });
-});
+};
+app.get("/skill", serveText("https://ishtar.numetal.xyz/ishtar-skill.md", "text/markdown"));
+app.get("/llms.txt", serveText("https://ishtar.numetal.xyz/llms.txt", "text/plain"));
+app.get("/llms-full.txt", serveText("https://ishtar.numetal.xyz/llms-full.txt", "text/plain"));
 
 // Everything below requires the staging key.
 app.use("*", accessGate);
