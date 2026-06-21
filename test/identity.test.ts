@@ -70,4 +70,21 @@ describe("Privy+Didit escalation tier", () => {
     s = (await (await call("GET", `/api/escalations/${coupleId}/status`)).json()) as { reveal_ready: boolean };
     expect(s.reveal_ready).toBe(true);
   });
+
+  it("Didit webhook is signature-gated, NOT access-gated (reachable without the key)", async () => {
+    const ctx = createExecutionContext();
+    // No access key, no DIDIT_WEBHOOK_SECRET configured in test env → 503 (disabled), NOT 403.
+    const res = await worker.fetch(
+      new Request("https://d/api/identity/webhook/didit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+        cf: { country: "US" },
+      }),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(503);
+  });
 });

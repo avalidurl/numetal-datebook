@@ -15,7 +15,20 @@ export default defineWorkersConfig(async () => {
           miniflare: {
             compatibilityDate: "2025-02-04",
             compatibilityFlags: ["nodejs_compat"],
-            bindings: { TEST_MIGRATIONS: migrations },
+            // Explicit, deterministic test env — overrides any .dev.vars the pool auto-loads
+            // (otherwise real ACCESS_KEY / DIDIT values leak in and break the suite).
+            bindings: {
+              TEST_MIGRATIONS: migrations,
+              ACCESS_KEY: "test-key",
+              PAY_TO: "0xtestpayto",
+              X402_MODE: "staging",
+              DIDIT_API_KEY: "",
+              DIDIT_WORKFLOW_ID: "",
+              DIDIT_WEBHOOK_SECRET: "",
+              PRIVY_APP_ID: "",
+              PRIVY_VERIFICATION_KEY: "",
+              SENTRY_DSN: "",
+            },
           },
         },
       },
