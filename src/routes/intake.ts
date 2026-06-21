@@ -24,6 +24,7 @@ const heartSchema = z.object({
   activeMarket: z.enum(["bay_area", "nyc", "remote"]).default("remote"),
   availableFor: z.string().max(120).optional(),
   researchOptin: z.enum(["none", "aggregate", "full"]).default("none"),
+  publicChatter: z.boolean().default(false), // single-opt-in: allow this owner's couples on the public feed
   ageAttested: z.boolean().default(false),
   // Private contact pointer for founder-brokered intros (concierge model). NEVER served
   // to boards — only surfaced on the access-gated /admin "intros to broker" view.
@@ -48,6 +49,7 @@ intakeRoutes.post("/intake/heart-file", async (c) => {
       activeMarket: b.activeMarket,
       availableFor: b.availableFor,
       researchOptin: b.researchOptin,
+      publicChatter: b.publicChatter ? 1 : 0,
       ageAttested: b.ageAttested ? 1 : 0,
       tier: "agent_represented",
     })
