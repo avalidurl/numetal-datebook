@@ -55,13 +55,17 @@ identityRoutes.post("/escalations/:coupleId/invite", async (c) => {
   const db = makeDb(c.env.DB);
   const ids = await coupleOwnerIds(db, coupleId);
   if (ids.length < 2) return c.json({ error: "couple/owners not found" }, 404);
+  // High-entropy (256-bit) one-time token + a 72h expiry. The token is bound to ONE owner,
+  // consumed once, and on claim further bound to the Privy identity that redeemed it — so a
+  // leaked link can't walk toward a contact reveal indefinitely (committee security finding).
+  const expiresAt = new Date(Date.now() + 72 * 3600 * 1000).toISOString();
   const invites: Array<{ ownerId: number; token: string }> = [];
   for (const ownerId of ids) {
-    const token = crypto.randomUUID();
-    await db.insert(escalationInvites).values({ coupleId, ownerId, token, status: "sent" }).run();
+    const token = [...crypto.getRandomValues(new Uint8Array(32))].map((x) => x.toString(16).padStart(2, "0")).join("");
+    await db.insert(escalationInvites).values({ coupleId, ownerId, token, status: "sent", expiresAt }).run();
     invites.push({ ownerId, token });
   }
-  return c.json({ ok: true, invites }); // tokens become claim links: /escalations/claim
+  return c.json({ ok: true, invites, expiresAt }); // tokens become claim links: /escalations/claim
 });
 
 const claimSchema = z.object({ token: z.string().min(8), privyToken: z.string().min(8) });
@@ -78,12 +82,17 @@ export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Respo
   const db = makeDb(c.env.DB);
   const invite = await db.select().from(escalationInvites).where(eq(escalationInvites.token, parsed.data.token)).get();
   if (!invite || invite.status !== "sent") return c.json({ error: "invalid or used invite" }, 404);
+  if (invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now()) {
+    await db.update(escalationInvites).set({ status: "expired" }).where(eq(escalationInvites.id, invite.id)).run();
+    return c.json({ error: "invite expired" }, 410);
+  }
 
   const privy = await verifyPrivyToken(c.env, parsed.data.privyToken);
   if (!privy.ok) return c.json({ error: "privy verification failed", reason: privy.reason }, privy.reason === "privy not configured" ? 503 : 401);
 
   await db.update(owners).set({ tier: "profile_claimed", updatedAt: new Date().toISOString() }).where(eq(owners.id, invite.ownerId)).run();
-  await db.update(escalationInvites).set({ status: "claimed", claimedAt: new Date().toISOString() }).where(eq(escalationInvites.id, invite.id)).run();
+  // Bind the consumed token to the Privy identity that redeemed it (one-time + identity-bound).
+  await db.update(escalationInvites).set({ status: "claimed", claimedAt: new Date().toISOString(), claimedBy: privy.userId ?? null }).where(eq(escalationInvites.id, invite.id)).run();
 
   // Kick off the identity check immediately; degrade gracefully if Didit isn't configured.
   const s = await createDiditSession(c.env, { ownerId: invite.ownerId, callbackUrl: `${new URL(c.req.url).origin}/api/identity/webhook/didit` });

@@ -25,34 +25,55 @@ export async function getSetting(db: DB, key: string, fallback: string): Promise
   return row?.value ?? fallback;
 }
 
-async function spend(db: DB, day: string, callerRef?: string): Promise<number> {
-  const where = callerRef
-    ? and(eq(inferenceCosts.day, day), eq(inferenceCosts.callerRef, callerRef))
-    : eq(inferenceCosts.day, day);
+async function spend(db: DB, day: string, callerRef?: string, tier?: string): Promise<number> {
+  const conds = [eq(inferenceCosts.day, day)];
+  if (callerRef) conds.push(eq(inferenceCosts.callerRef, callerRef));
+  if (tier) conds.push(eq(inferenceCosts.tier, tier));
   const r = await db
     .select({ s: sql<number>`coalesce(sum(${inferenceCosts.usd}), 0)` })
     .from(inferenceCosts)
-    .where(where)
+    .where(and(...conds))
     .get();
   return r?.s ?? 0;
 }
 
+// The matchmaker's own calls (seed gambits, system embeds) are NOT agent-attributable, so
+// they answer only to the GLOBAL cap, never the per-agent cap — otherwise one busy beat
+// would trip the "agent" ceiling on "system" and stall venue-wide matchmaking.
+const isSystem = (callerRef?: string): boolean => !callerRef || callerRef === "system";
+
 /**
- * Throws BudgetExceeded if this call would run past a cap. Only the paid/strong tier
- * (t2) is gated; t0/t1 (cache + cheap moderation) stay free so safety always scales.
+ * Throws BudgetExceeded if this call would run past a cap (fail-closed on spend).
+ *  - t0 (cache): always free.
+ *  - t1 (embed + guard): GLOBAL stays uncapped so safety classification never halts the whole
+ *    venue, but each AGENT has a small daily t1 cap — closes the amplification/bypass where a
+ *    single caller drives unbounded "free" inference (admission guard, embeds).
+ *  - t2 (strong/paid): global + per-agent caps.
  */
 export async function assertWithinBudget(
   db: DB,
   env: Env,
   opts: { tier: "t0" | "t1" | "t2"; callerRef?: string },
 ): Promise<void> {
-  if (opts.tier !== "t2") return;
+  if (opts.tier === "t0") return;
   const day = utcDay();
+
+  if (opts.tier === "t1") {
+    if (isSystem(opts.callerRef)) return; // system t1 (beat embeds) — global-only, uncapped here
+    const cap = Number(
+      await getSetting(db, "per_agent_daily_t1_budget_usd", env.PER_AGENT_DAILY_T1_BUDGET_USD),
+    );
+    const spent = await spend(db, day, opts.callerRef, "t1");
+    if (spent >= cap) throw new BudgetExceeded("agent", spent, cap);
+    return;
+  }
+
+  // t2: global cap first, then per-agent (system is exempt from the per-agent cap).
   const globalCap = Number(await getSetting(db, "daily_budget_usd", env.DAILY_BUDGET_USD));
   const globalSpent = await spend(db, day);
   if (globalSpent >= globalCap) throw new BudgetExceeded("global", globalSpent, globalCap);
 
-  if (opts.callerRef) {
+  if (!isSystem(opts.callerRef)) {
     const agentCap = Number(
       await getSetting(db, "per_agent_daily_budget_usd", env.PER_AGENT_DAILY_BUDGET_USD),
     );

@@ -19,6 +19,7 @@ boardsRoutes.get("/boards/:board", async (c) => {
       .select({
         couple: couples.id,
         author: personas.handle,
+        authorKind: turns.authorKind,
         body: turns.body,
         createdAt: turns.createdAt,
       })
@@ -29,7 +30,8 @@ boardsRoutes.get("/boards/:board", async (c) => {
       .orderBy(desc(turns.createdAt))
       .limit(50)
       .all();
-    return c.json(rows);
+    // The seed gambit is Ishtar's, not dater A's — never misattribute it on the public board.
+    return c.json(rows.map(({ authorKind, ...r }) => ({ ...r, author: authorKind === "system" ? "ishtar" : r.author })));
   }
 
   const rows = await db

@@ -96,14 +96,35 @@ wr deploy
 # Secrets apply to the live Worker immediately — no redeploy required.
 echo "▸ Secrets: pushing from .dev.vars …"
 [ -f .dev.vars ] || { echo "✘ .dev.vars missing"; exit 1; }
-set -a; . ./.dev.vars; set +a
+# Parse .dev.vars robustly WITHOUT sourcing it as shell — a multi-line PEM value (e.g. the
+# Privy verification key) would otherwise be executed line-by-line ("PUBLIC: command not found")
+# and abort the deploy. This reads `KEY=value`, `KEY="..."`, and quoted multi-line values.
+load_var(){
+  python3 - "$1" <<'PY'
+import sys, re
+key = sys.argv[1]
+txt = open(".dev.vars").read()
+m = re.search(r'(?m)^' + re.escape(key) + r'=(.*)$', txt)
+if not m:
+    sys.exit(0)
+val = m.group(1)
+if val[:1] in ('"', "'"):
+    q = val[0]
+    rest = txt[m.start(1):]
+    m2 = re.search(r'(?s)' + q + r'(.*?)(?<!\\)' + q, rest)
+    val = m2.group(1) if m2 else val.strip(q)
+    val = val.replace('\\n', '\n')
+sys.stdout.write(val)
+PY
+}
 push_secret(){
-  local name="$1" val="${!1:-}"
+  local name="$1" val
+  val="$(load_var "$name")"
   if [ -z "$val" ]; then echo "  – $name: empty, skipped"; return; fi
   printf '%s' "$val" | wr secret put "$name" >/dev/null
   echo "  ✓ $name"
 }
-for s in ACCESS_KEY PAY_TO X402_MODE DIDIT_API_KEY DIDIT_WORKFLOW_ID DIDIT_WEBHOOK_SECRET PRIVY_APP_ID PRIVY_VERIFICATION_KEY SENTRY_DSN; do
+for s in ACCESS_KEY PAY_TO X402_MODE DIDIT_API_KEY DIDIT_WORKFLOW_ID DIDIT_WEBHOOK_SECRET PRIVY_APP_ID PRIVY_VERIFICATION_KEY SENTRY_DSN ENCRYPTION_KEY; do
   push_secret "$s"
 done
 
