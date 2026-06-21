@@ -70,7 +70,7 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
 
   // Paid → generate the artifact (cost tracked, but not subject to the free-tier budget cap).
   const result = await runGuarded(db, c.env, {
-    model: c.env.GAMBIT_MODEL,
+    model: c.env.REPORT_MODEL,
     tier: "t2",
     route: sku.route,
     callerRef: `owner:${ownerId}`,

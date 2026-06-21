@@ -17,6 +17,7 @@ export const MODEL_PRICING: Record<string, ModelPrice> = {
   "@cf/qwen/qwen2.5-coder-32b-instruct": { inPerM: 0.66, outPerM: 1.0 },
   "@cf/openai/gpt-oss-120b": { inPerM: 0.35, outPerM: 0.75 },
   "@cf/openai/gpt-oss-20b": { inPerM: 0.2, outPerM: 0.3 },
+  "@cf/moonshotai/kimi-k2.7-code": { inPerM: 0.95, outPerM: 4.0 },
   "@cf/meta/llama-3.1-8b-instruct-fast": { inPerM: 0.045, outPerM: 0.384 },
   "@cf/meta/llama-4-scout-17b-16e-instruct": { inPerM: 0.27, outPerM: 0.85 },
   "@cf/mistralai/mistral-small-3.1-24b-instruct": { inPerM: 0.35, outPerM: 0.55 },

@@ -11,6 +11,7 @@ export interface Env {
   GUARD_MODEL: string;
   EMBED_MODEL: string;
   GAMBIT_MODEL: string;
+  REPORT_MODEL: string;
   GEO_DENY: string;
   AI_GATEWAY_ID: string;
   ADMIT_CAP_DEFAULT: string;
