@@ -38,8 +38,9 @@ BOARD_NAMES = "seeking,courtships,debriefs,notifications"
 GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
 EMBED_MODEL = "@cf/baai/bge-m3"
 GAMBIT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-# Edge geo gate (audit blocker). Founder is in TR → TR is hard-denied for the public product.
-GEO_DENY = "CU,IR,KP,GB,TR"
+# Edge geo gate (audit blocker). OFAC-broad (CU/IR/KP) + GB (Online Safety Act age-verification
+# burden). TR dropped 2026-06-21 so the founder can operate from home; re-add to restrict.
+GEO_DENY = "CU,IR,KP,GB"
 # All env.AI.run routed through this AI Gateway id (dollar spend cap set in dashboard).
 AI_GATEWAY_ID = "datebook"
 # Economics (Model C) — runtime-overridable via the `settings` table; these are seed defaults.
