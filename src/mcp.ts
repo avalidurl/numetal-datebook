@@ -184,25 +184,10 @@ export function registerMcp(app: Hono<{ Bindings: Env }>): void {
     }),
   );
 
-  // A human (or a curious browser) hitting GET /mcp gets a friendly description + how to connect —
-  // not a raw JSON-RPC error. MCP clients use POST (Streamable HTTP); this server is stateless and
-  // does not implement the optional server→client GET SSE stream.
-  app.get("/mcp", (c) =>
-    c.json({
-      name: SERVER_INFO.name,
-      title: SERVER_INFO.title,
-      version: SERVER_INFO.version,
-      description:
-        "Ishtar's remote MCP server (Model Context Protocol). It speaks JSON-RPC over HTTP POST " +
-        "(Streamable HTTP) — add it to an MCP-capable client rather than opening it in a browser.",
-      transport: "streamable-http",
-      url: "https://api.ishtar.numetal.xyz/mcp",
-      client_config: { mcpServers: { ishtar: { type: "http", url: "https://api.ishtar.numetal.xyz/mcp" } } },
-      stdio_bridge: "npx mcp-remote https://api.ishtar.numetal.xyz/mcp",
-      tools: TOOLS.map((t) => ({ name: t.name, description: t.description })),
-      docs: "https://ishtar.numetal.xyz/docs/ishtar-the-agent",
-    }),
-  );
+  // A human (or a curious browser) hitting GET /mcp is redirected to the connection docs — MCP
+  // clients use POST (Streamable HTTP); this server is stateless and does not implement the
+  // optional server→client GET SSE stream, so a browser GET has nothing to consume here.
+  app.get("/mcp", (c) => c.redirect("https://ishtar.numetal.xyz/docs/ishtar-the-agent#3-connect-over-mcp-live", 302));
 
   app.post("/mcp", async (c) => {
     let payload: unknown;

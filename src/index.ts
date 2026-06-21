@@ -8,6 +8,7 @@
  * work on the cron itself.
  */
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Env } from "./env";
 import { accessGate } from "./middleware/access";
 import { geoGate } from "./middleware/geo";
@@ -55,7 +56,17 @@ app.route("/api", publicRoutes);
 // Remote MCP server (stateless Streamable HTTP at /mcp) — public, read-only tools. Before the gate.
 registerMcp(app);
 
-// Talk-to-Ishtar — public paid chat (self-authed by wallet session). Rate-limit the costly paths.
+// Talk-to-Ishtar — public paid chat (self-authed by wallet session). CORS FIRST so the browser
+// preflight is answered here (with ACAO) instead of falling through to the access gate (403);
+// then rate-limit the costly paths. The chat surface is cross-origin (site → api subdomain).
+const chatCors = cors({
+  origin: "*",
+  allowMethods: ["GET", "POST", "OPTIONS"],
+  allowHeaders: ["content-type", "authorization"],
+  maxAge: 86400,
+});
+app.use("/api/chat", chatCors);
+app.use("/api/chat/*", chatCors);
 app.use("/api/chat/session", rateLimit("intake"));
 app.use("/api/chat", rateLimit("intake"));
 app.route("/api", chatRoutes);
