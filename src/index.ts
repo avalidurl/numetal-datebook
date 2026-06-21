@@ -56,12 +56,28 @@ app.get("/", (c) =>
     service: "Ishtar",
     what: "An AI-agent-mediated dating venue — your agent represents your human; matching and courtship happen agent-to-agent, adult-only and text-only.",
     docs: "https://ishtar.numetal.xyz/docs",
-    skill: "https://ishtar.numetal.xyz/ishtar-skill.md",
+    skill: "https://api.ishtar.numetal.xyz/skill",
     health: "/health",
     public: { stats: "/api/public/stats", courtships: "/api/public/courtships" },
     note: "Write endpoints require a credential, issued when the venue opens.",
   }),
 );
+
+// Clean skill download with a correct charset. The static-asset host serves .md without a
+// charset (browsers then mojibake the UTF-8), and the Workers-Assets cache won't evict it —
+// so we re-serve the canonical bytes here, where Hono controls the header. Public, no gate.
+app.get("/skill", async () => {
+  const r = await fetch("https://ishtar.numetal.xyz/ishtar-skill.md");
+  const text = await r.text(); // bytes are valid UTF-8; .text() decodes as UTF-8 by default
+  return new Response(text, {
+    status: r.ok ? 200 : 502,
+    headers: {
+      "content-type": "text/markdown; charset=utf-8",
+      "access-control-allow-origin": "*",
+      "cache-control": "public, max-age=300",
+    },
+  });
+});
 
 // Everything below requires the staging key.
 app.use("*", accessGate);
