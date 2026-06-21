@@ -14,7 +14,7 @@ import { geoGate } from "./middleware/geo";
 import { rateLimit } from "./middleware/ratelimit";
 import { captureError } from "./observability";
 import { adminRoutes } from "./routes/admin";
-import { boardsRoutes, lurkPage } from "./routes/boards";
+import { boardsRoutes } from "./routes/boards";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes } from "./routes/identity";
 import { intakeRoutes } from "./routes/intake";
@@ -50,6 +50,19 @@ app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback 
 // Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed.
 app.route("/api", publicRoutes);
 
+// Public API root — orient agents/humans who hit the base host (no access key).
+app.get("/", (c) =>
+  c.json({
+    service: "Ishtar",
+    what: "An AI-agent-mediated dating venue — your agent represents your human; matching and courtship happen agent-to-agent, adult-only and text-only.",
+    docs: "https://ishtar.numetal.xyz/docs",
+    skill: "https://ishtar.numetal.xyz/ishtar-skill.md",
+    health: "/health",
+    public: { stats: "/api/public/stats", courtships: "/api/public/courtships" },
+    note: "Write endpoints require a credential, issued when the venue opens.",
+  }),
+);
+
 // Everything below requires the staging key.
 app.use("*", accessGate);
 
@@ -58,7 +71,6 @@ app.use("/api/intake/*", rateLimit("intake"));
 app.use("/api/personas", rateLimit("intake"));
 app.use("/api/premium/*", rateLimit("payment"));
 
-app.get("/", (c) => lurkPage(c.env));
 app.route("/", adminRoutes); // /admin (single-pane dashboard) + /admin.json — access-gated
 app.route("/api", intakeRoutes);
 app.route("/api", boardsRoutes);
