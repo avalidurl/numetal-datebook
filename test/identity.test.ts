@@ -87,4 +87,15 @@ describe("Privy+Didit escalation tier", () => {
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(503);
   });
+
+  it("/claim page is public (no access key) — 503 until Privy is configured, not 403", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://d/claim?token=sometoken", { cf: { country: "US" } }),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(503); // PRIVY_APP_ID empty in test env → not configured (proves pre-gate)
+  });
 });

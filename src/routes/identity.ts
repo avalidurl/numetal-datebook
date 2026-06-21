@@ -66,7 +66,13 @@ identityRoutes.post("/escalations/:coupleId/invite", async (c) => {
 
 const claimSchema = z.object({ token: z.string().min(8), privyToken: z.string().min(8) });
 
-identityRoutes.post("/escalations/claim", async (c) => {
+/**
+ * PUBLIC claim handler (registered pre-access-gate in index.ts). Authenticated by the
+ * one-time invite token + a verified Privy login — NOT the founder ACCESS_KEY (the human
+ * dater's owner can't have it). On success: owner → profile_claimed, invite consumed, and
+ * a Didit identity session is started; returns the Didit URL to redirect the human to.
+ */
+export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
   const parsed = claimSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "token + privyToken required" }, 400);
   const db = makeDb(c.env.DB);
@@ -78,8 +84,61 @@ identityRoutes.post("/escalations/claim", async (c) => {
 
   await db.update(owners).set({ tier: "profile_claimed", updatedAt: new Date().toISOString() }).where(eq(owners.id, invite.ownerId)).run();
   await db.update(escalationInvites).set({ status: "claimed", claimedAt: new Date().toISOString() }).where(eq(escalationInvites.id, invite.id)).run();
-  return c.json({ ok: true, ownerId: invite.ownerId, tier: "profile_claimed" });
-});
+
+  // Kick off the identity check immediately; degrade gracefully if Didit isn't configured.
+  const s = await createDiditSession(c.env, { ownerId: invite.ownerId, callbackUrl: `${new URL(c.req.url).origin}/api/identity/webhook/didit` });
+  if (s.ok && s.sessionId) {
+    await db.insert(identityVerifications).values({ ownerId: invite.ownerId, provider: "didit", sessionId: s.sessionId, status: "pending" }).run();
+  }
+  return c.json({ ok: true, ownerId: invite.ownerId, tier: "profile_claimed", diditUrl: s.ok ? s.url ?? null : null, identityNote: s.ok ? undefined : s.reason });
+}
+
+/** PUBLIC claim page (GET /claim?token=…) — minimal Privy login, then POST to /api/escalations/claim
+ *  and redirect to the Didit identity flow. Served by the Worker so there's no separate frontend.
+ *  NOTE: the Privy client calls need a browser smoke test against the live app before go-live. */
+export function claimPage(c: Context<{ Bindings: Env }>): Response {
+  if (!c.env.PRIVY_APP_ID) {
+    return c.html("<!doctype html><meta charset=utf-8><title>datebook</title><body style='font-family:ui-monospace,monospace;max-width:520px;margin:3rem auto'><h1>datebook</h1><p>Sign-in isn't configured yet — check back soon.</p></body>", 503);
+  }
+  const appId = c.env.PRIVY_APP_ID.replace(/[^A-Za-z0-9_-]/g, ""); // sanitize before HTML injection
+  const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>datebook · confirm your intro</title>
+<body style="font-family:ui-monospace,monospace;max-width:520px;margin:3rem auto;padding:0 1rem">
+<h1 style="font-weight:600">datebook</h1>
+<p>Your agent found someone. Sign in to confirm you'd like the introduction.</p>
+<div id="app"><p>Loading…</p></div>
+<p id="msg" style="opacity:.7;margin-top:1rem"></p>
+<script type="module">
+import React from "https://esm.sh/react@18.3.1";
+import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
+import { PrivyProvider, usePrivy } from "https://esm.sh/@privy-io/react-auth@2?deps=react@18.3.1,react-dom@18.3.1";
+import htm from "https://esm.sh/htm@3.1.1";
+const html = htm.bind(React.createElement);
+const APP_ID = "${appId}";
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const setMsg = (t) => { document.getElementById("msg").textContent = t; };
+function Claim() {
+  const { ready, authenticated, login, getAccessToken } = usePrivy();
+  React.useEffect(() => { (async () => {
+    if (!ready || !authenticated) return;
+    setMsg("Confirming…");
+    try {
+      const privyToken = await getAccessToken();
+      const r = await fetch("/api/escalations/claim", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, privyToken }) });
+      const j = await r.json();
+      if (j.ok) { setMsg("Confirmed. Next: a quick identity check…"); if (j.diditUrl) location.href = j.diditUrl; else setMsg("Confirmed — identity step will follow shortly."); }
+      else setMsg("Could not confirm: " + (j.reason || j.error || r.status));
+    } catch (e) { setMsg("Error: " + e.message); }
+  })(); }, [ready, authenticated]);
+  if (!ready) return html\`<p>Loading…</p>\`;
+  if (!authenticated) return html\`<button onClick=\${login} style="padding:.7rem 1.2rem;font:inherit;cursor:pointer">Sign in to confirm</button>\`;
+  return html\`<p>Signed in ✓</p>\`;
+}
+createRoot(document.getElementById("app")).render(html\`<\${PrivyProvider} appId=\${APP_ID}><\${Claim} /></\${PrivyProvider}>\`);
+</script>
+</body>`;
+  return c.html(html);
+}
 
 const sessionSchema = z.object({ ownerId: z.number().int().positive(), coupleId: z.number().int().positive().optional() });
 
