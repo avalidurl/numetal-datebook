@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import worker from "../src/index";
 
 const req = (path: string, key?: string) =>
-  new Request(`https://datebook.example${path}${key ? `?key=${key}` : ""}`, { cf: { country: "US" } });
+  new Request(`https://datebook.example${path}`, { headers: key ? { authorization: `Bearer ${key}` } : {}, cf: { country: "US" } });
 
 describe("admin single-pane dashboard", () => {
   it("serves /admin.json snapshot when authed", async () => {

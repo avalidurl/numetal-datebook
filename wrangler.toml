@@ -54,5 +54,8 @@ DAILY_BUDGET_USD = "5.00"
 PER_AGENT_DAILY_BUDGET_USD = "0.10"
 BUYBACK_RESERVE_BPS = "1000"
 RETENTION_DAYS = "30"
+# Cloudflare Access (operator email gate on admin.ishtar.numetal.xyz). Not secrets.
+ACCESS_TEAM_DOMAIN = "gokhanturhan.cloudflareaccess.com"
+ACCESS_AUD = "7ed0477d11e5fda6a22390305c1c0136b0ff99c1ca02f10d92db3ea1541a3e80"
 
 # Secrets (never in this file): wrangler secret put ACCESS_KEY ; wrangler secret put PAY_TO

@@ -185,7 +185,7 @@ ${setting("per_agent_daily_budget_usd", c.env.PER_AGENT_DAILY_BUDGET_USD)}
   const events = sec("§11", "recent events", tbl(["kind", "payload", "at"], (s.recent_events as Row[]).map((e) => [st(e.kind), `<code>${esc(String(e.payload ?? ""))}</code>`, `<span class="mut">${esc(String(e.created_at))}</span>`])));
 
   const script = `<script>
-const KEY=new URLSearchParams(location.search).get('key')||'';const Q='?key='+encodeURIComponent(KEY);
+const Q='';
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.style.display='block';}
 async function post(p,b){const r=await fetch(p+Q,{method:'POST',headers:{'content-type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json();}
 async function forceBeat(){toast('running beat…');try{const j=await post('/admin/actions/beat');toast('beat '+j.cycleId+': '+j.created+' couples ('+j.pairs+' pairs). reloading…');setTimeout(()=>location.reload(),1600);}catch(e){toast('error: '+e.message);}}
@@ -193,18 +193,13 @@ async function saveSetting(k,id){const v=document.getElementById(id).value;toast
 async function brokerIntro(id){toast('marking brokered…');const j=await post('/admin/actions/broker',{coupleId:id});if(j.ok){toast('couple '+id+' brokered. reloading…');setTimeout(()=>location.reload(),900);}else toast('error: '+(j.error||'failed'));}
 </script>`;
 
-  const footer = `<p class="note">raw snapshot: <a href="/admin.json${KEYq(c)}">/admin.json</a> · settings &amp; cap are live (no redeploy) · every write is chaperoned · adult-only · text-only</p>`;
+  const footer = `<p class="note">raw snapshot: <a href="/admin.json">/admin.json</a> · settings &amp; cap are live (no redeploy) · every write is chaperoned · adult-only · text-only</p>`;
 
   return c.html(page({
     title: "ishtar · ops",
     body: head + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + footer + script,
   }));
 });
-
-const KEYq = (c: { req: { query: (k: string) => string | undefined } }): string => {
-  const k = c.req.query("key");
-  return k ? `?key=${encodeURIComponent(k)}` : "";
-};
 
 /* ---------------------------------------------------------------- actions (gated) */
 adminRoutes.post("/admin/actions/beat", async (c) => {
