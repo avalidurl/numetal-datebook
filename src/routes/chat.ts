@@ -8,7 +8,7 @@ import { Hono } from "hono";
 import { verifyMessage } from "viem";
 import { z } from "zod";
 import { chaperone } from "../chaperone";
-import { ishtarReply, type ChatMode } from "../chat/ishtar";
+import { ishtarReply, looksLikeSystemLeak, type ChatMode } from "../chat/ishtar";
 import { db as makeDb } from "../db/client";
 import { chatMessages, chatTopups } from "../db/schema";
 import type { Env } from "../env";
@@ -134,14 +134,17 @@ chatRoutes.post("/chat", async (c) => {
     return c.json({ error: "Ishtar is resting — try again shortly." }, 503);
   }
 
-  // (d) chaperone the OUTPUT (fail-closed): withhold anything not allow/sanitize.
+  // (d) chaperone the OUTPUT (fail-closed): withhold anything not allow/sanitize, AND withhold a
+  // reply that leaks the system prompt (a confidentiality leak the safety classifier won't flag).
+  const leak = looksLikeSystemLeak(reply);
   const outV = await chaperone(db, c.env, { stage: "chat_output", targetType: "chat_output", targetId: 0, text: reply, callerRef: `chat:${address}` });
-  const safeReply = outV.verdict === "allow" || outV.verdict === "sanitize" ? outV.text ?? reply : null;
+  const safeReply = !leak && (outV.verdict === "allow" || outV.verdict === "sanitize") ? outV.text ?? reply : null;
+  const withholdReason = leak ? "withheld: instruction disclosure" : outV.reason;
 
   await db.insert(chatMessages).values({ address, role: "user", body: message, mode }).run();
   if (safeReply) await db.insert(chatMessages).values({ address, role: "assistant", body: safeReply, mode }).run();
 
-  if (!safeReply) return c.json({ ok: true, reply: null, withheld: true, reason: outV.reason, via: charge.via, balance: charge.balance });
+  if (!safeReply) return c.json({ ok: true, reply: null, withheld: true, reason: withholdReason, via: charge.via, balance: charge.balance });
   return c.json({ ok: true, reply: safeReply, mode, via: charge.via, balance: charge.balance });
 });
 

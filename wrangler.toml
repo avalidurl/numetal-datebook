@@ -31,11 +31,8 @@ class_name = "MatchCoordinator"
 # client IP + route class. The middleware no-ops if this binding is absent (local/test).
 [[ratelimits]]
 name = "RATE_LIMITER"
-namespace_id = "1001"
-
-[ratelimits.simple]
-limit = 60
-period = 60
+namespace_id = "2026"
+simple = { limit = 60, period = 60 }
 
 [[migrations]]
 tag = "v1"

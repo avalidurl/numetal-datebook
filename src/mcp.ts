@@ -124,6 +124,11 @@ const err = (id: RpcReq["id"], code: number, message: string, data?: unknown) =>
 });
 
 async function dispatch(req: RpcReq, env: Env): Promise<object | null> {
+  // Validate the JSON-RPC envelope: a request/notification MUST carry a string `method`.
+  // Anything else (e.g. {"message":"hi"}, []) is -32600 Invalid Request, not a silent 202.
+  if (typeof req !== "object" || req === null || typeof (req as RpcReq).method !== "string") {
+    return err((req as RpcReq)?.id ?? null, -32600, "Invalid Request");
+  }
   const { method, id } = req;
   // Notifications (no id) get no response body — acknowledge with 202 at the transport layer.
   const isNotification = id === undefined;
