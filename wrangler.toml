@@ -1,11 +1,13 @@
 name = "datebook-staging"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
-# Match cycle every 2h (compressed season); courtship ticks ride the same cron
+# Hourly janitor/poke + watermark catch-up. Real match/courtship beats are paced
+# by the MatchCoordinator Durable Object alarm — NOT by this cron (audit blocker fix).
 [triggers]
-crons = ["0 */2 * * *"]
+crons = ["0 * * * *"]
 
 [ai]
 binding = "AI"
@@ -13,12 +15,68 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "datebook-staging"
-database_id = "REPLACE_AFTER_d1_create"
+database_id = "b6dd149b-fca8-4a9c-804e-b53d172f6446"
+migrations_dir = "src/db/migrations"
+
+# Semantic shortlist + T1 rationale cache. bge-m3 = 1024 dims (NOT 768 — audit fix).
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "datebook-hearts"
+
+[[durable_objects.bindings]]
+name = "MATCH"
+class_name = "MatchCoordinator"
+
+# Edge rate limit (GA 2025-09) on sensitive write routes — intake/payment/claim, keyed by
+# client IP + route class. The middleware no-ops if this binding is absent (local/test).
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+[ratelimits.simple]
+limit = 60
+period = 60
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MatchCoordinator"]
 
 [vars]
-SIM_MODE = "day0"            # compressed clock
+SIM_MODE = "day0"
 BOARD_NAMES = "seeking,courtships,debriefs,notifications"
+# Models — verified against the live Workers AI catalog 2026-06-21.
+# Guard = purpose-built safety classifier (best on CF; no Llama-Guard-4 yet).
+# Embed = bge-m3 (multilingual, 1024-dim → matches the Vectorize index).
+# Gambit = gpt-oss-120b (bigger than llama-3.3-70b AND ~3x cheaper output).
+# Report = kimi-k2.7 (premium T2; the agent pays, quality over cost).
 GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
 EMBED_MODEL = "@cf/baai/bge-m3"
+GAMBIT_MODEL = "@cf/openai/gpt-oss-120b"
+REPORT_MODEL = "@cf/moonshotai/kimi-k2.7-code"
+# Edge geo gate (audit blocker). OFAC-broad (CU/IR/KP) + GB (Online Safety Act age-verification
+# burden). TR dropped 2026-06-21 so the founder can operate from home; re-add to restrict.
+GEO_DENY = "CU,IR,KP,GB"
+# All env.AI.run routed through this AI Gateway id (dollar spend cap set in dashboard).
+AI_GATEWAY_ID = "datebook"
+# Economics (Model C) — runtime-overridable via the `settings` table; these are seed defaults.
+ADMIT_CAP_DEFAULT = "333"
+DAILY_BUDGET_USD = "5.00"
+PER_AGENT_DAILY_BUDGET_USD = "0.10"
+# Per-agent cheap-tier (t1: embed + guard) daily cap — closes the amplification/bypass where
+# a single caller could run unbounded "free" inference. Global t1 stays uncapped so safety
+# classification never halts venue-wide; one abuser is isolated, not everyone.
+PER_AGENT_DAILY_T1_BUDGET_USD = "0.05"
+# Hard cap on couples (hence gambits, the only paid call) formed per match beat.
+BEAT_MAX_PAIRS = "50"
+BUYBACK_RESERVE_BPS = "1000"
+RETENTION_DAYS = "30"
+# Cloudflare Access (operator email gate on admin.ishtar.numetal.xyz). Not secrets.
+ACCESS_TEAM_DOMAIN = "gokhanturhan.cloudflareaccess.com"
+ACCESS_AUD = "7ed0477d11e5fda6a22390305c1c0136b0ff99c1ca02f10d92db3ea1541a3e80"
 
-# Secrets (never in this file): ACCESS_KEY via `wrangler secret put ACCESS_KEY`
+# Secrets (never in this file):
+#   wrangler secret put ACCESS_KEY      # operator gate
+#   wrangler secret put PAY_TO          # x402 receive address
+#   wrangler secret put ENCRYPTION_KEY  # base64 of 32 random bytes: openssl rand -base64 32
+#                                       # (at-rest AES-256-GCM for contactRef + heart bodies)
+#   wrangler secret put SENTRY_DSN      # optional error capture
