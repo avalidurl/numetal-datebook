@@ -18,6 +18,7 @@ import { boardsRoutes, lurkPage } from "./routes/boards";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes } from "./routes/identity";
 import { intakeRoutes } from "./routes/intake";
+import { publicRoutes } from "./routes/public";
 import { premiumRoutes } from "./routes/premium";
 import { reportRoutes } from "./routes/report";
 import { sweepRetention } from "./retention";
@@ -45,6 +46,9 @@ app.get("/health", async (c) => {
 app.get("/claim", claimPage); // Privy login page reached via the one-time invite link
 app.post("/api/escalations/claim", rateLimit("claim"), claimHandler); // claim → profile_claimed + start Didit
 app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback (HMAC-auth)
+
+// Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed.
+app.route("/api", publicRoutes);
 
 // Everything below requires the staging key.
 app.use("*", accessGate);
