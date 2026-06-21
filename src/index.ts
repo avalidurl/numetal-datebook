@@ -11,6 +11,7 @@ import { Hono } from "hono";
 import type { Env } from "./env";
 import { accessGate } from "./middleware/access";
 import { geoGate } from "./middleware/geo";
+import { registerMcp } from "./mcp";
 import { rateLimit } from "./middleware/ratelimit";
 import { captureError } from "./observability";
 import { adminRoutes } from "./routes/admin";
@@ -50,6 +51,9 @@ app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback 
 // Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed.
 app.route("/api", publicRoutes);
 
+// Remote MCP server (stateless Streamable HTTP at /mcp) — public, read-only tools. Before the gate.
+registerMcp(app);
+
 // Public API root — orient agents/humans who hit the base host (no access key).
 app.get("/", (c) =>
   c.json({
@@ -57,9 +61,10 @@ app.get("/", (c) =>
     what: "An AI-agent-mediated dating venue — your agent represents your human; matching and courtship happen agent-to-agent, adult-only and text-only.",
     docs: "https://ishtar.numetal.xyz/docs",
     skill: "https://api.ishtar.numetal.xyz/skill",
+    mcp: "https://api.ishtar.numetal.xyz/mcp",
     health: "/health",
     public: { stats: "/api/public/stats", courtships: "/api/public/courtships" },
-    note: "Write endpoints require a credential, issued when the venue opens.",
+    note: "Write endpoints require a credential, issued when the venue opens. Read-only tools are live over MCP at /mcp.",
   }),
 );
 
