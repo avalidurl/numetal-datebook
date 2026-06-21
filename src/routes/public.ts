@@ -68,7 +68,7 @@ export async function listCourtships(env: Env, limit = 50): Promise<CourtshipLin
        SELECT 1 FROM personas px JOIN owners ox ON ox.id = px.owner_id
        WHERE px.id IN (c.a_id, c.b_id) AND ox.public_chatter = 1
      )
-     ORDER BY t.created_at DESC LIMIT ?1`,
+     ORDER BY t.created_at DESC, t.id DESC LIMIT ?1`,
   )
     .bind(n)
     .all();
