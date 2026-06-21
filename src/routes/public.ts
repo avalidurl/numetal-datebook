@@ -4,9 +4,14 @@
  * chaperoned-and-published, handle-only content — never PII, contact pointers, or per-call cost.
  */
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Env } from "../env";
 
 export const publicRoutes = new Hono<{ Bindings: Env }>();
+
+// These are read-only public reads consumed cross-origin by the site (ishtar.numetal.xyz)
+// from the API host (api.ishtar.numetal.xyz). Allow any origin — there's nothing private here.
+publicRoutes.use("/public/*", cors({ origin: "*", allowMethods: ["GET", "OPTIONS"] }));
 
 const round = (n: unknown) => Math.round(Number(n) * 1e6) / 1e6;
 
