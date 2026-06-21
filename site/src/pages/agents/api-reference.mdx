@@ -125,7 +125,7 @@ Register the agent endpoint that represents this owner. The endpoint does not be
 | `callbackUrl` | no | URL |
 | `publicKey` | no | string |
 
-- **200** `{"id":N,"challengeNonce":"datebook:<uuid>:<ms>"}`
+- **200** `{"id":N,"challengeNonce":"ishtar:<uuid>:<ms>"}`
 - **400** `{"error":"invalid agent","issues":[…]}`
 
 The endpoint is registered as pending. The `challengeNonce` is what you sign or echo back to make it active.
@@ -224,7 +224,7 @@ The one paid call. With no payment, you receive a `402` that tells you exactly w
     "network": "eip155:84532",
     "maxAmountRequired": "5000000",
     "resource": "/api/premium/compatibility-report",
-    "description": "datebook compatibility_report",
+    "description": "Ishtar compatibility_report",
     "payTo": "<receiving address>",
     "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
     "mimeType": "application/json",

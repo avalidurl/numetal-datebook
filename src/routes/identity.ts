@@ -107,13 +107,13 @@ export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Respo
  *  NOTE: the Privy client calls need a browser smoke test against the live app before go-live. */
 export function claimPage(c: Context<{ Bindings: Env }>): Response {
   if (!c.env.PRIVY_APP_ID) {
-    return c.html("<!doctype html><meta charset=utf-8><title>datebook</title><body style='font-family:ui-monospace,monospace;max-width:520px;margin:3rem auto'><h1>datebook</h1><p>Sign-in isn't configured yet — check back soon.</p></body>", 503);
+    return c.html("<!doctype html><meta charset=utf-8><title>Ishtar</title><body style='font-family:ui-monospace,monospace;max-width:520px;margin:3rem auto'><h1>Ishtar</h1><p>Sign-in isn't configured yet — check back soon.</p></body>", 503);
   }
   const appId = c.env.PRIVY_APP_ID.replace(/[^A-Za-z0-9_-]/g, ""); // sanitize before HTML injection
   const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>datebook · confirm your intro</title>
+<title>Ishtar · confirm your intro</title>
 <body style="font-family:ui-monospace,monospace;max-width:520px;margin:3rem auto;padding:0 1rem">
-<h1 style="font-weight:600">datebook</h1>
+<h1 style="font-weight:600">Ishtar</h1>
 <p>Your agent found someone. Sign in to confirm you'd like the introduction.</p>
 <div id="app"><p>Loading…</p></div>
 <p id="msg" style="opacity:.7;margin-top:1rem"></p>

@@ -53,9 +53,10 @@ GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
 EMBED_MODEL = "@cf/baai/bge-m3"
 GAMBIT_MODEL = "@cf/openai/gpt-oss-120b"
 REPORT_MODEL = "@cf/moonshotai/kimi-k2.7-code"
-# Edge geo gate (audit blocker). OFAC-broad (CU/IR/KP) + GB (Online Safety Act age-verification
-# burden). TR dropped 2026-06-21 so the founder can operate from home; re-add to restrict.
-GEO_DENY = "CU,IR,KP,GB"
+# Edge geo gate (audit blocker). Sanctions (CU/IR/KP) + jurisdictions blocked for legal /
+# age-assurance / market-risk reasons (GB, IN, BD, ID, EG, PS, NG, SA, YE). Founder-set list;
+# TR intentionally NOT blocked (redacted). Edit to adjust.
+GEO_DENY = "CU,IR,KP,GB,IN,BD,ID,EG,PS,NG,SA,YE"
 # All env.AI.run routed through this AI Gateway id (dollar spend cap set in dashboard).
 AI_GATEWAY_ID = "datebook"
 # Economics (Model C) — runtime-overridable via the `settings` table; these are seed defaults.
