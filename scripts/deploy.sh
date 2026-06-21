@@ -87,7 +87,13 @@ else
   echo "  ✓ index already exists"
 fi
 
-# ---- 4. Secrets (read from .dev.vars; values never printed) --------------
+# ---- 4. Deploy (creates the Worker so secrets can attach to it) ----------
+echo "▸ Deploying …"
+wr deploy
+
+# ---- 5. Secrets (read from .dev.vars; values never printed) --------------
+# MUST run after the first deploy: `wrangler secret put` needs the Worker to exist.
+# Secrets apply to the live Worker immediately — no redeploy required.
 echo "▸ Secrets: pushing from .dev.vars …"
 [ -f .dev.vars ] || { echo "✘ .dev.vars missing"; exit 1; }
 set -a; . ./.dev.vars; set +a
@@ -100,10 +106,6 @@ push_secret(){
 for s in ACCESS_KEY PAY_TO X402_MODE DIDIT_API_KEY DIDIT_WORKFLOW_ID DIDIT_WEBHOOK_SECRET PRIVY_APP_ID PRIVY_VERIFICATION_KEY SENTRY_DSN; do
   push_secret "$s"
 done
-
-# ---- 5. Deploy -----------------------------------------------------------
-echo "▸ Deploying …"
-wr deploy
 
 URL="https://${DB_NAME}.cloudflare-ooc0z.workers.dev"
 echo
