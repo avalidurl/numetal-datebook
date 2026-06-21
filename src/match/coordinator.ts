@@ -54,7 +54,25 @@ export class MatchCoordinator implements DurableObject {
       return { cycleId, pairs: 0, created: 0 };
     }
 
-    const pairs = greedyPair(await this.buildEdges(db, admitted));
+    // Don't re-pair personas already in an active couple — otherwise the beat forms a
+    // fresh couple for the same pair every cycle (sim noise + wasted gambit spend).
+    const coupledRows = (
+      await this.env.DB.prepare(
+        "SELECT a_id, b_id FROM couples WHERE state IN ('met','courting','committed','brokered')",
+      ).all()
+    ).results as Array<{ a_id: number; b_id: number }>;
+    const coupled = new Set<number>();
+    for (const r of coupledRows) {
+      coupled.add(r.a_id);
+      coupled.add(r.b_id);
+    }
+    const free = admitted.filter((p) => !coupled.has(p.id));
+    if (free.length < 2) {
+      await this.state.storage.put("last_cycle", cycleId);
+      return { cycleId, pairs: 0, created: 0 };
+    }
+
+    const pairs = greedyPair(await this.buildEdges(db, free));
     let created = 0;
     for (const p of pairs) {
       const ins = await db
@@ -65,7 +83,7 @@ export class MatchCoordinator implements DurableObject {
         .get();
       if (!ins) continue; // already formed this cycle → idempotent skip
       created++;
-      await this.seedGambit(db, ins.id, p, admitted);
+      await this.seedGambit(db, ins.id, p, free);
     }
 
     await db

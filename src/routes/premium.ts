@@ -12,6 +12,7 @@ import type { Env } from "../env";
 import { utcDay } from "../env";
 import { chaperone } from "../chaperone";
 import { runGuarded } from "../economics/gateway";
+import { textOf } from "../economics/pricing";
 import { settleAndPersist } from "../payments/receipts";
 import { makeX402Provider, SKUS, x402Challenge } from "../payments/x402";
 
@@ -88,10 +89,7 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
       max_tokens: 600,
     },
   });
-  const reportText =
-    typeof (result as { response?: unknown }).response === "string"
-      ? (result as { response: string }).response
-      : "Report unavailable.";
+  const reportText = textOf(result) || "Report unavailable.";
 
   // Chaperone the paid OUTPUT too — every artifact the venue emits is safety-checked,
   // even one the agent paid for. Fail-closed: withhold (not deliver) unsafe text.

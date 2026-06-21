@@ -41,6 +41,18 @@ export function tokensOf(result: unknown, promptText: string): { tokensIn: numbe
   return { tokensIn: estTokens(promptText), tokensOut: estTokens(out) };
 }
 
+/** Extract the assistant text from a Workers AI result across shapes:
+ *  classic CF (`.response`), OpenAI chat.completion (`.choices[0].message.content` —
+ *  what gpt-oss / kimi return), else "". Reasoning models keep their trace in a
+ *  separate field, so we never want the raw object. */
+export function textOf(result: unknown): string {
+  const r = result as { response?: unknown; choices?: Array<{ message?: { content?: unknown } }> };
+  if (typeof r?.response === "string") return r.response;
+  const c = r?.choices?.[0]?.message?.content;
+  if (typeof c === "string") return c;
+  return "";
+}
+
 /** USD cost for a call. */
 export function costUsd(model: string, tokensIn: number, tokensOut: number): number {
   const p = MODEL_PRICING[model] ?? DEFAULT_PRICE;
