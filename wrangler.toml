@@ -71,6 +71,10 @@ PER_AGENT_DAILY_T1_BUDGET_USD = "0.05"
 BEAT_MAX_PAIRS = "50"
 BUYBACK_RESERVE_BPS = "1000"
 RETENTION_DAYS = "30"
+# Talk-to-Ishtar (paid chat). CHAT_MODEL = a general instruct model (NOT the gpt-oss reasoning
+# model used for gambits, which is poor for open chat). 25 messages per $1 USDC top-up.
+CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+CHAT_CREDITS_PER_USD = "25"
 # Cloudflare Access (operator email gate on admin.ishtar.numetal.xyz). Not secrets.
 ACCESS_TEAM_DOMAIN = "gokhanturhan.cloudflareaccess.com"
 ACCESS_AUD = "7ed0477d11e5fda6a22390305c1c0136b0ff99c1ca02f10d92db3ea1541a3e80"

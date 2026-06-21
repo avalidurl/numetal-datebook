@@ -16,6 +16,7 @@ export const SKUS: Record<string, Sku> = {
   compatibility_report: { id: "compatibility_report", priceUsd: "$5.00", route: "/api/premium/compatibility-report" },
   date_brief: { id: "date_brief", priceUsd: "$10.00", route: "/api/premium/date-brief" },
   priority_cycle: { id: "priority_cycle", priceUsd: "$1.00", route: "/api/premium/priority-cycle" },
+  chat_topup: { id: "chat_topup", priceUsd: "$1.00", route: "/api/chat/topup" },
 };
 
 // Staging defaults (testnet only, no key). eip155:84532 = Base Sepolia.

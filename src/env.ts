@@ -28,6 +28,11 @@ export interface Env {
   BEAT_MAX_PAIRS: string; // hard cap on couples (and gambits) formed per match beat
   BUYBACK_RESERVE_BPS: string;
   RETENTION_DAYS: string;
+  // Talk-to-Ishtar (paid chat). All optional → sensible defaults in code.
+  CHAT_MODEL?: string; // overrides GAMBIT_MODEL for the conversational brain
+  CHAT_CREDITS_PER_USD?: string; // messages bought per $1 USDC top-up (default 25)
+  BASE_RPC_URL?: string; // override the public Base RPC used for the $NUMETAL perk read
+  NUMETAL_CA?: string; // override the $NUMETAL contract address
   // Cloudflare Access (operator email gate) — vars, not secrets.
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;

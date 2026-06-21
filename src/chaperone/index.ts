@@ -11,7 +11,14 @@ import { llamaGuard, type GuardResult } from "./guard";
 import { childSafetyHit, denylistHit, leakHold, redactPII } from "./patterns";
 
 export type Verdict = "allow" | "sanitize" | "hold" | "deny" | "escalate_identity" | "reveal_ready";
-export type Stage = "admission" | "pre_publish" | "pre_turn" | "pre_payment_output" | "report_review";
+export type Stage =
+  | "admission"
+  | "pre_publish"
+  | "pre_turn"
+  | "pre_payment_output"
+  | "report_review"
+  | "chat_input"
+  | "chat_output";
 
 /** The classifier function (default: Llama-Guard). Injectable so tests can stub the
  *  remote model without weakening the production fail-closed default. */

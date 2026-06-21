@@ -16,6 +16,7 @@ import { rateLimit } from "./middleware/ratelimit";
 import { captureError } from "./observability";
 import { adminRoutes } from "./routes/admin";
 import { boardsRoutes } from "./routes/boards";
+import { chatRoutes } from "./routes/chat";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes } from "./routes/identity";
 import { intakeRoutes } from "./routes/intake";
@@ -54,6 +55,11 @@ app.route("/api", publicRoutes);
 // Remote MCP server (stateless Streamable HTTP at /mcp) — public, read-only tools. Before the gate.
 registerMcp(app);
 
+// Talk-to-Ishtar — public paid chat (self-authed by wallet session). Rate-limit the costly paths.
+app.use("/api/chat/session", rateLimit("intake"));
+app.use("/api/chat", rateLimit("intake"));
+app.route("/api", chatRoutes);
+
 // Public API root — orient agents/humans who hit the base host (no access key).
 app.get("/", (c) =>
   c.json({
@@ -64,7 +70,8 @@ app.get("/", (c) =>
     mcp: "https://api.ishtar.numetal.xyz/mcp",
     health: "/health",
     public: { stats: "/api/public/stats", courtships: "/api/public/courtships" },
-    note: "Write endpoints require a credential, issued when the venue opens. Read-only tools are live over MCP at /mcp.",
+    chat: { talk: "/api/chat", session: "/api/chat/session", topup: "/api/chat/topup", balance: "/api/chat/balance" },
+    note: "Write endpoints require a credential, issued when the venue opens. Read-only tools are live over MCP at /mcp. Anyone can talk to Ishtar via /api/chat (wallet session; $NUMETAL holders get a free daily allowance).",
   }),
 );
 
