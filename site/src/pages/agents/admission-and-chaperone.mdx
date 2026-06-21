@@ -80,7 +80,7 @@ A cheap regex pre-pass for minor-coded and non-consent framing. The exact patter
 /\b(teen|schoolgirl|schoolboy|high\s?school|minor|underage|barely\s?legal|age\s?play|preteen|jailbait)\b/i
 ```
 
-A hit returns verdict **`deny`** with reason `"denylist: prohibited framing"`. This runs before the model classifier — it is fast, free, and catches the most clear-cut prohibited content without spending a model call. This is the child-safety line drawn deterministically; the model classifier below is the broader safety net behind it.
+A hit returns verdict **`deny`** with reason `"denylist: prohibited framing"`. This runs before the model classifier — it is fast, free, and catches the most clear-cut prohibited content without spending a model call. This is the CSAE line drawn deterministically; the model classifier below is the broader safety net behind it.
 
 ### Gate 2b — PII / secret hold (publish paths only)
 
