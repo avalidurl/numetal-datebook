@@ -86,14 +86,14 @@ We practice data minimization: we collect only what the venue needs to do its jo
 
 - **What it is:** When you claim an introduction, our identity provider performs an age-and-identity check. We receive and store **only the results**: a pass/fail status, an over-18 flag, your country, and an expiry date.
 - **What we never store:** Your government identity document, identity photographs or scans, your full date of birth as a document, or your address. The document handling happens entirely on the provider's side.
-- **Why:** To enforce the binding 18+ requirement and to prevent minors from ever reaching a human-to-human introduction. This is a child-safety control.
+- **Why:** To enforce the binding 18+ requirement and to prevent minors from ever reaching a human-to-human introduction. This is a CSAE control.
 - **Legal basis (GDPR):** Compliance with legal obligations and the protection of minors / substantial public interest (Art. 6(1)(c) and Art. 9(2)(g)), and performance of a contract (Art. 6(1)(b)). Age data is processed because it is necessary to lawfully provide an adults-only service.
 
 ### 4.6 Content-moderation decisions
 
 - **What it is:** The outcome of the safety checks ("chaperone" decisions) that run on submitted and published text — for example, whether a piece of text was allowed, held, sanitized, denied, or escalated, and the category that triggered the decision.
 - **Why:** To keep the venue safe, to enforce a zero-tolerance policy on child sexual exploitation and other abuse, and to maintain a durable safety audit trail. See [Moderation & child safety](/trust/moderation).
-- **Legal basis (GDPR):** Legitimate interests in safety and abuse prevention (Art. 6(1)(f)) and compliance with legal obligations including mandatory child-safety reporting (Art. 6(1)(c)).
+- **Legal basis (GDPR):** Legitimate interests in safety and abuse prevention (Art. 6(1)(f)) and compliance with legal obligations including mandatory CSAE reporting (Art. 6(1)(c)).
 
 ### 4.7 IP address and country (access control and abuse prevention)
 
@@ -121,9 +121,9 @@ We use the data described above only for these purposes:
 1. **To provide the matching service** — computing semantic matches between heart-files and generating courtship introductions on your behalf.
 2. **To broker a mutually agreed introduction** — including verifying you are an adult and revealing contact only after both sides agree.
 3. **To take and verify payment** for the paid compatibility report.
-4. **To keep the venue safe** — running moderation, enforcing the adults-only rule, preventing abuse, and meeting child-safety obligations.
+4. **To keep the venue safe** — running moderation, enforcing the adults-only rule, preventing abuse, and meeting CSAE obligations.
 5. **To secure and operate the service** — access control, authentication, debugging, and budgeting.
-6. **To comply with law** — including sanctions, accounting, and mandatory child-safety reporting.
+6. **To comply with law** — including sanctions, accounting, and mandatory CSAE reporting.
 7. **To communicate with you** about a request you make or a legal or safety matter. (Ishtar does not contact you directly for marketing; your agent is your channel, and Ishtar holds no contact information for you unless you provided a private contact reference.)
 
 We do **not** use your personal data for advertising, profiling for advertising, or sale.
@@ -179,7 +179,7 @@ We keep personal data only as long as we need it for the purposes above.
 - **Identity-verification results** are retained only for as long as legally required and to demonstrate that the adults-only rule was enforced, then deleted.
 - **On-chain payment data** on the Base blockchain is public and immutable and is **not within our control to delete.**
 
-**Right to erasure — how it actually works.** When you exercise your right to erasure (Section 10), we perform a **cascade delete**: we remove your records across our systems **and also delete the semantic match vector** derived from your heart-file, so it can no longer be used for matching. Some records may be retained for a limited period where the law requires it (for example, accounting records of a paid transaction or a record needed for a child-safety report), and on-chain data cannot be removed for the reasons above.
+**Right to erasure — how it actually works.** When you exercise your right to erasure (Section 10), we perform a **cascade delete**: we remove your records across our systems **and also delete the semantic match vector** derived from your heart-file, so it can no longer be used for matching. Some records may be retained for a limited period where the law requires it (for example, accounting records of a paid transaction or a record needed for a CSAE report), and on-chain data cannot be removed for the reasons above.
 
 ---
 
