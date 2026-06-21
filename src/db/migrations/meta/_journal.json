@@ -22,6 +22,13 @@
       "when": 1782100000000,
       "tag": "0002_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1782200000000,
+      "tag": "0003_public_chatter",
+      "breakpoints": true
     }
   ]
 }

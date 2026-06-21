@@ -47,6 +47,7 @@ export const owners = sqliteTable(
     activeMarket: text("active_market").notNull().default("remote"),
     availableFor: text("available_for"), // irl_bay_area|irl_nyc|online|travel (csv) — audit fix
     researchOptin: text("research_optin").notNull().default("none"), // none|aggregate|full — audit fix
+    publicChatter: integer("public_chatter").notNull().default(0), // opt-in: surface this owner's couples on the public courtship feed
     ageAttested: integer("age_attested").notNull().default(0),
     erasedAt: text("erased_at"), // GDPR Art.17 tombstone — set when personal data is cascade-erased
     // Model C reputation/longevity flywheel:
