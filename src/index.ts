@@ -15,7 +15,7 @@ import { captureError } from "./observability";
 import { adminRoutes } from "./routes/admin";
 import { boardsRoutes, lurkPage } from "./routes/boards";
 import { escalationRoutes } from "./routes/escalation";
-import { diditWebhook, identityRoutes } from "./routes/identity";
+import { claimHandler, claimPage, diditWebhook, identityRoutes } from "./routes/identity";
 import { intakeRoutes } from "./routes/intake";
 import { premiumRoutes } from "./routes/premium";
 import { reportRoutes } from "./routes/report";
@@ -38,9 +38,12 @@ app.get("/health", async (c) => {
   }
 });
 
-// Didit webhook is signature-authenticated (HMAC + timestamp), so it sits OUTSIDE the
-// access gate — Didit can't send our ACCESS_KEY. Geo-gated only.
-app.post("/api/identity/webhook/didit", diditWebhook);
+// Human-facing escalation surface sits OUTSIDE the access gate — the dater's owner can't
+// have the founder ACCESS_KEY. Secured instead by the one-time invite token + Privy login
+// (claim) and HMAC + timestamp (Didit webhook). Geo-gated only.
+app.get("/claim", claimPage); // Privy login page reached via the one-time invite link
+app.post("/api/escalations/claim", claimHandler); // claim → profile_claimed + start Didit
+app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback (HMAC-auth)
 
 // Everything below requires the staging key.
 app.use("*", accessGate);
