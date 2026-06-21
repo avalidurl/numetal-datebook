@@ -7,9 +7,10 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db as makeDb } from "../db/client";
-import { premiumOrders } from "../db/schema";
+import { events, premiumOrders } from "../db/schema";
 import type { Env } from "../env";
 import { utcDay } from "../env";
+import { chaperone } from "../chaperone";
 import { runGuarded } from "../economics/gateway";
 import { settleAndPersist } from "../payments/receipts";
 import { makeX402Provider, SKUS, x402Challenge } from "../payments/x402";
@@ -87,9 +88,23 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
       max_tokens: 600,
     },
   });
-  const report =
+  const reportText =
     typeof (result as { response?: unknown }).response === "string"
       ? (result as { response: string }).response
       : "Report unavailable.";
-  return c.json({ ok: true, orderId, receiptId: settled.receiptId, report });
+
+  // Chaperone the paid OUTPUT too — every artifact the venue emits is safety-checked,
+  // even one the agent paid for. Fail-closed: withhold (not deliver) unsafe text.
+  const verdict = await chaperone(db, c.env, {
+    stage: "pre_payment_output",
+    targetType: "premium_output",
+    targetId: ownerId,
+    text: reportText,
+    callerRef: `owner:${ownerId}`,
+  });
+  if (verdict.verdict !== "allow") {
+    await db.insert(events).values({ kind: "paid_output_withheld", payload: JSON.stringify({ orderId, reason: verdict.reason }) }).run();
+    return c.json({ ok: true, orderId, receiptId: settled.receiptId, report: null, withheld: true, reason: `held for review: ${verdict.reason}` });
+  }
+  return c.json({ ok: true, orderId, receiptId: settled.receiptId, report: reportText });
 });
