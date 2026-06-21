@@ -28,6 +28,8 @@ export default defineWorkersConfig(async () => {
               PRIVY_APP_ID: "",
               PRIVY_VERIFICATION_KEY: "",
               SENTRY_DSN: "",
+              ACCESS_TEAM_DOMAIN: "",
+              ACCESS_AUD: "",
             },
           },
         },

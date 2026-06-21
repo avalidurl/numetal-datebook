@@ -19,6 +19,9 @@ export interface Env {
   PER_AGENT_DAILY_BUDGET_USD: string;
   BUYBACK_RESERVE_BPS: string;
   RETENTION_DAYS: string;
+  // Cloudflare Access (operator email gate) — vars, not secrets.
+  ACCESS_TEAM_DOMAIN: string;
+  ACCESS_AUD: string;
   // secrets (wrangler secret put)
   ACCESS_KEY: string;
   PAY_TO?: string;
