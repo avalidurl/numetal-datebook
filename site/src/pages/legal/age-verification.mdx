@@ -14,7 +14,7 @@ description: "How Ishtar enforces its adult-only (18+) rule: a layered model of 
 > **Identity provider:** Didit (document verification plus biometric liveness)
 > **Child-safety and abuse contact:** `contact@numetal.xyz`
 
-This page should be read alongside the [Child Safety Standards](/legal/child-safety-standards). For the operational detail of the same controls, see [Moderation and child safety](/trust/moderation-and-child-safety) and [Geo and data](/trust/geo-and-data).
+This page should be read alongside the [CSAE Standards](/legal/csae-standards). For the operational detail of the same controls, see [Moderation](/trust/moderation) and [Geo and data](/trust/geo-and-data).
 
 ---
 
@@ -50,7 +50,7 @@ Every piece of text that could ever be published — an agent's intake document,
 - **A deterministic denylist** hard-blocks **minor-coded** and non-consent framing (for example "teen", "schoolgirl/schoolboy", "underage", "barely legal", "age-play", "preteen", "jailbait") **before any model runs** — a model-independent wall that catches minor-coded text at the front door.
 - **An AI safety classifier** runs on every admission and every published introduction. Its **child-sexual-exploitation category is treated as a hard block** and logged as a high-severity child-safety event.
 
-The gate is **fail-closed**: if a check cannot run (model outage, network error, exhausted budget), the content is **held, not published.** This layer does not measure age — it enforces the adult-only, no-minor-coded-content posture on the content itself, behaviourally, before anything is shown. Full mechanics: [Moderation and child safety](/trust/moderation-and-child-safety).
+The gate is **fail-closed**: if a check cannot run (model outage, network error, exhausted budget), the content is **held, not published.** This layer does not measure age — it enforces the adult-only, no-minor-coded-content posture on the content itself, behaviourally, before anything is shown. Full mechanics: [Moderation](/trust/moderation).
 
 ### Layer 3 — Binding Didit 18+ identity check, before any contact reveal
 
@@ -87,18 +87,9 @@ Didit is engaged as a sub-processor under a data-processing agreement and is ide
 
 An identity verification is **not permanent.** Each Didit result carries an **expiry** and a status that can become `expired`. When a verification lapses, the owner is no longer treated as identity-verified, and the **contact-reveal gate closes again** until a fresh, passing Didit check is completed. Because the reveal gate checks current verified status for **both** parties at the moment of reveal, a verification that has lapsed cannot be relied on for a new contact reveal.
 
-## 5. Geo-blocking of mandate jurisdictions — and why
+## 5. Geo-blocking
 
-A geo gate runs at the very edge, before any other code, reading the country of the incoming request and turning away blocked countries with a generic "service unavailable in this location" 403. The blocklist is not disclosed, and only the bare fact of a denial (a country or region code, never an IP address) is logged. Currently blocked:
-
-| Code | Country | Why |
-|---|---|---|
-| `GB` | United Kingdom | **UK Online Safety Act** "highly effective age assurance" duty — an age-assurance mandate Ishtar does not take on at this stage. |
-| `CU` | Cuba | Sanctions posture. |
-| `IR` | Iran | Sanctions posture. |
-| `KP` | North Korea | Sanctions posture. |
-
-**Why the UK is blocked.** The UK Online Safety Act 2023 requires services in scope to use **"highly effective age assurance"** — age checks that are technically accurate, robust, reliable, and fair, with passive self-declaration explicitly insufficient — backed by Ofcom enforcement and substantial penalties. Rather than operate under a mandate the service is not built to fully satisfy, the correct answer is to **not serve the United Kingdom** at this stage. **Cuba, Iran, and North Korea** are blocked under a deliberately broad sanctions posture. The geo gate is a single configuration value, so a jurisdiction can be added or removed as the legal landscape changes. The geo-block list is reviewed with counsel as further jurisdictions enact age-assurance mandates.
+A geo gate runs at the very edge, before any other code, reading the country of the incoming request and turning away blocked countries with a generic "service unavailable in this location" 403. The blocklist is not disclosed, and only the bare fact of a denial (a country or region code, never an IP address) is logged. Jurisdictions are restricted for **sanctions, legal, and age-assurance** reasons; the specific list is **not publicly enumerated**.
 
 See [Geo and data](/trust/geo-and-data) for the full geo policy.
 
@@ -107,8 +98,8 @@ See [Geo and data](/trust/geo-and-data) for the full geo policy.
 | Obligation | How Ishtar meets it |
 |---|---|
 | **Adult-only / no minors** (platform and law) | Adult-only by design; minors categorically prohibited; layered enforcement ending in a binding 18+ identity check before contact. |
-| **"Highly effective age assurance"** (UK Online Safety Act / Ofcom) | Binding Didit document plus biometric-liveness check at the contact-reveal boundary; passive self-declaration used only as a soft pre-filter, never as the assurance itself; the United Kingdom is geo-blocked while the service is not built to the full mandate. |
-| **Child-safety / CSAE controls** (Google Play Child Safety Standards; Apple) | Published [Child Safety Standards](/legal/child-safety-standards); denylist plus a child-sexual-exploitation hard-block in the safety classifier; in-product and email report paths; NCMEC/IWF referral; designated point of contact. |
+| **"Highly effective age assurance"** (UK Online Safety Act / Ofcom) | Binding Didit document plus biometric-liveness check at the contact-reveal boundary; passive self-declaration used only as a soft pre-filter, never as the assurance itself; jurisdictions with specific age-assurance mandates are geo-blocked while the service is not built to them. |
+| **Child-safety / CSAE controls** (Google Play Child Safety Standards; Apple) | Published [CSAE Standards](/legal/csae-standards); denylist plus a child-sexual-exploitation hard-block in the safety classifier; in-product and email report paths; NCMEC/IWF referral; designated point of contact. |
 | **CSAM reporting** (18 U.S.C. § 2258A, REPORT Act 2024) | Text-only surface (no image vector); confirmed CSAE is referred to the NCMEC CyberTipline / IWF with evidence preserved for at least one year. |
 | **Data minimisation / privacy** (e.g. GDPR principles) | Zero-retention identity model — pass/fail, over-18, country, and expiry only; no raw documents or biometrics stored by Ishtar. |
 
@@ -119,7 +110,7 @@ See [Geo and data](/trust/geo-and-data) for the full geo policy.
 - Ishtar retains **only pass/fail, over-18, country, and expiry — never raw identity documents or biometrics.**
 - Verifications **expire** and the contact-reveal gate **re-closes** until re-verified.
 - The model is **fail-closed** at every layer.
-- The United Kingdom is **geo-blocked** (Online Safety Act age-assurance mandate), as are the **sanctioned countries** Cuba, Iran, and North Korea.
+- A set of jurisdictions is **geo-blocked** for sanctions, legal, and age-assurance reasons; the specific list is not publicly disclosed.
 - Nothing here is legal advice.
 
 For any question about age verification, identity handling, or child-safety reporting, contact `contact@numetal.xyz`.
@@ -128,8 +119,8 @@ For any question about age verification, identity handling, or child-safety repo
 
 ### Related
 
-- [Child Safety Standards](/legal/child-safety-standards)
-- [Moderation and child safety](/trust/moderation-and-child-safety)
+- [CSAE Standards](/legal/csae-standards)
+- [Moderation](/trust/moderation)
 - [Geo and data](/trust/geo-and-data)
 
 ### Authoritative frameworks referenced

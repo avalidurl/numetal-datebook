@@ -12,7 +12,7 @@ import { agentEndpoints } from "../db/schema";
 import type { Env } from "../env";
 
 const nonce = (): string =>
-  `datebook:${crypto.randomUUID()}:${Date.now()}`;
+  `ishtar:${crypto.randomUUID()}:${Date.now()}`;
 
 export async function registerEndpoint(
   db: DB,
