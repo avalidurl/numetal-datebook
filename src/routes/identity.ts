@@ -6,12 +6,12 @@
  * no-op until configured (routes return 503), so this ships safely before the accounts exist.
  */
 import { and, eq, inArray } from "drizzle-orm";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { db as makeDb, type DB } from "../db/client";
 import { couples, escalationInvites, events, identityVerifications, introConsents, owners, personas } from "../db/schema";
 import type { Env } from "../env";
-import { createDiditSession } from "../identity/didit";
+import { createDiditSession, verifyDiditWebhook } from "../identity/didit";
 import { verifyPrivyToken } from "../identity/privy";
 
 export const identityRoutes = new Hono<{ Bindings: Env }>();
@@ -98,26 +98,48 @@ identityRoutes.post("/identity/session", async (c) => {
   return c.json({ ok: true, url: s.url, sessionId: s.sessionId });
 });
 
-identityRoutes.post("/identity/webhook/didit", async (c) => {
+/**
+ * Didit webhook handler — registered in index.ts BEFORE the access gate (Didit can't send
+ * our ACCESS_KEY; it authenticates by HMAC + timestamp instead). Returns 2xx fast; work is
+ * idempotent so retried/duplicate deliveries are harmless.
+ */
+export async function diditWebhook(c: Context<{ Bindings: Env }>): Promise<Response> {
   const raw = await c.req.text();
-  const { verifyDiditWebhook } = await import("../identity/didit");
-  const w = await verifyDiditWebhook(c.env, raw, c.req.header("x-signature"));
-  if (!w.ok) return c.json({ error: "webhook rejected", reason: w.reason }, w.reason === "didit webhook not configured" ? 503 : 400);
+  const w = await verifyDiditWebhook(c.env, raw, c.req.header("x-signature"), c.req.header("x-timestamp"));
+  if (!w.ok) {
+    // Log the raw body for signature debugging (never re-stringify after parse).
+    console.warn("didit webhook rejected:", w.reason, raw.slice(0, 500));
+    return c.json({ error: "webhook rejected", reason: w.reason }, w.reason === "didit webhook not configured" ? 503 : 400);
+  }
+  // Only act on session status changes; ack everything else (data/user/business/activity/txn).
+  if (w.webhookType && w.webhookType !== "status.updated") return c.json({ ok: true, ignored: w.webhookType });
+
   const db = makeDb(c.env.DB);
-  const iv = w.sessionId
-    ? await db.select().from(identityVerifications).where(eq(identityVerifications.sessionId, w.sessionId)).get()
+  const ownerId = w.vendorData ? Number(w.vendorData) : undefined;
+  // Map result → IV row by session id, else by vendor_data (ownerId). Same shape both ways.
+  const cols = { id: identityVerifications.id, ownerId: identityVerifications.ownerId };
+  let target = w.sessionId
+    ? await db.select(cols).from(identityVerifications).where(eq(identityVerifications.sessionId, w.sessionId)).get()
     : undefined;
-  if (!iv) return c.json({ error: "unknown session" }, 404);
+  if (!target && ownerId) {
+    target = await db
+      .insert(identityVerifications)
+      .values({ ownerId, provider: "didit", sessionId: w.sessionId, status: "pending" })
+      .returning(cols)
+      .get();
+  }
+  if (!target) return c.json({ ok: true, note: "no matching session/vendor_data" });
+
   await db
     .update(identityVerifications)
-    .set({ status: w.status, ageOver18: w.ageOver18 ? 1 : 0, updatedAt: new Date().toISOString() })
-    .where(eq(identityVerifications.id, iv.id))
+    .set({ status: w.verified ? "verified" : "failed", ageOver18: w.ageOver18 ? 1 : 0, updatedAt: new Date().toISOString() })
+    .where(eq(identityVerifications.id, target.id))
     .run();
-  if (w.status === "verified" && w.ageOver18) {
-    await db.update(owners).set({ tier: "identity_verified", updatedAt: new Date().toISOString() }).where(eq(owners.id, iv.ownerId)).run();
+  if (w.verified) {
+    await db.update(owners).set({ tier: "identity_verified", updatedAt: new Date().toISOString() }).where(eq(owners.id, target.ownerId)).run();
   }
   return c.json({ ok: true });
-});
+}
 
 identityRoutes.get("/escalations/:coupleId/status", async (c) => {
   const coupleId = Number(c.req.param("coupleId"));

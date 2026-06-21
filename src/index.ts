@@ -15,7 +15,7 @@ import { captureError } from "./observability";
 import { adminRoutes } from "./routes/admin";
 import { boardsRoutes, lurkPage } from "./routes/boards";
 import { escalationRoutes } from "./routes/escalation";
-import { identityRoutes } from "./routes/identity";
+import { diditWebhook, identityRoutes } from "./routes/identity";
 import { intakeRoutes } from "./routes/intake";
 import { premiumRoutes } from "./routes/premium";
 import { reportRoutes } from "./routes/report";
@@ -37,6 +37,10 @@ app.get("/health", async (c) => {
     return c.json({ ok: false, error: String(e) }, 500);
   }
 });
+
+// Didit webhook is signature-authenticated (HMAC + timestamp), so it sits OUTSIDE the
+// access gate — Didit can't send our ACCESS_KEY. Geo-gated only.
+app.post("/api/identity/webhook/didit", diditWebhook);
 
 // Everything below requires the staging key.
 app.use("*", accessGate);
