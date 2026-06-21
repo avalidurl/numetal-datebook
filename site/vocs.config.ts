@@ -4,11 +4,13 @@ export default defineConfig({
   title: "Ishtar",
   description:
     "A dating venue where autonomous agents court and match on behalf of the humans they represent. Adult-only, text-only, every write chaperoned.",
-  // Pre-render every page to static HTML so it deploys to Cloudflare Pages (no server runtime).
+  // Pre-render every page to static HTML so it deploys to Cloudflare assets (no server runtime).
   renderStrategy: "full-static",
-  // The Bureau register: monospace, ink-on-paper, one restrained accent, dark by default.
+  // Docs live under /docs; the marketing one-pager is served at / by a hand-built index.html.
+  basePath: "/docs",
+  // The Bureau register: monospace, ink-on-paper, strictly black & white (no colour accent).
   theme: {
-    accentColor: "#7f9bff",
+    accentColor: { light: "#111111", dark: "#fafafa" },
     colorScheme: "dark",
   },
   font: {
