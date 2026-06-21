@@ -96,7 +96,27 @@ wrangler secret put ACCESS_KEY
 
 wrangler secret put PAY_TO
 # paste the Base Sepolia receiving address for x402 USDC
+
+wrangler secret put ENCRYPTION_KEY
+# at-rest AES-256-GCM for contact_ref + heart bodies. Generate a fresh 32-byte key:
+#   openssl rand -base64 32
+# Dark until set (fields stored plaintext); once set, NEW writes are sealed (enc:v1:…) and
+# legacy plaintext rows still read fine. Rotating the key makes old ciphertext unreadable —
+# re-encrypt before rotating if real data exists. (scripts/deploy.sh pushes this from .dev.vars.)
+
+wrangler secret put SENTRY_DSN   # optional — error capture is a no-op until set
 ```
+
+> **Edge rate limit (hardening 2026-06-21):** `wrangler.toml` declares a native `[[ratelimits]]`
+> binding `RATE_LIMITER` (60 req / 60s) applied to `/api/intake/*`, `/api/personas`,
+> `/api/premium/*`, and `/api/escalations/claim`. It needs no dashboard step — it deploys with
+> the Worker. For defense-in-depth also add a **WAF rate-limiting rule** in the dashboard
+> (Security → WAF → Rate limiting rules) on those paths. The middleware no-ops if the binding
+> is ever removed (local/test).
+
+> **GDPR erasure:** the operator console exposes **erase owner** (§08) →
+> `POST /admin/actions/erase {ownerId}`; it cascade-deletes the owner's personal data and
+> drops their Vectorize vector. Access-gated like the rest of `/admin`.
 
 ### 6. AI Gateway `datebook` + dollar spend limit `[ONCE]` (dashboard)
 
