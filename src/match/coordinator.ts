@@ -83,7 +83,17 @@ export class MatchCoordinator implements DurableObject {
         .get();
       if (!ins) continue; // already formed this cycle → idempotent skip
       created++;
-      await this.seedGambit(db, ins.id, p, free);
+      // A single couple's gambit failure must not abort the beat or leave it stuck in 'met'.
+      try {
+        await this.seedGambit(db, ins.id, p, free);
+      } catch {
+        await db
+          .update(couples)
+          .set({ state: "courting", lastAppend: new Date().toISOString() })
+          .where(eq(couples.id, ins.id))
+          .run()
+          .catch(() => {});
+      }
     }
 
     await db
@@ -94,14 +104,20 @@ export class MatchCoordinator implements DurableObject {
     return { cycleId, pairs: pairs.length, created };
   }
 
-  private async buildEdges(db: DB, admitted: Persona[]): Promise<Candidate[]> {
+  private async buildEdges(db: DB, eligible: Persona[]): Promise<Candidate[]> {
     // Preferred: embeddings + Vectorize kNN. Fallback: naive adjacency (local dev / outage).
+    // The Vectorize index is global + append-only, so kNN can return personas NOT in this
+    // beat's eligible set (already-coupled, rejected, or frozen). Filter every neighbor
+    // against the eligible ids so a removed/coupled persona can never be re-paired
+    // (committee blocker fix). topK is raised since many neighbors are filtered out.
+    const eligibleIds = new Set(eligible.map((p) => p.id));
     try {
       const edges: Candidate[] = [];
-      for (const p of admitted) {
+      for (const p of eligible) {
         const vec = await embedHeart(db, this.env, p.heart, `persona:${p.id}`);
         await upsertHeartVector(this.env, p.id, vec);
-        for (const n of await shortlist(this.env, vec, 3, p.id)) {
+        for (const n of await shortlist(this.env, vec, 12, p.id)) {
+          if (!eligibleIds.has(n.personaId)) continue; // skip ineligible (coupled/removed) neighbors
           edges.push({ aId: p.id, bId: n.personaId, score: n.score });
         }
       }
@@ -110,8 +126,8 @@ export class MatchCoordinator implements DurableObject {
       /* fall through */
     }
     const edges: Candidate[] = [];
-    for (let i = 0; i + 1 < admitted.length; i += 2) {
-      edges.push({ aId: admitted[i]!.id, bId: admitted[i + 1]!.id, score: 0.5 });
+    for (let i = 0; i + 1 < eligible.length; i += 2) {
+      edges.push({ aId: eligible[i]!.id, bId: eligible[i + 1]!.id, score: 0.5 });
     }
     return edges;
   }
@@ -126,20 +142,29 @@ export class MatchCoordinator implements DurableObject {
     } catch {
       /* BudgetExceeded / model error → keep placeholder; the couple still forms */
     }
-    const verdict = await chaperone(db, this.env, {
-      stage: "pre_turn",
-      targetType: "turn",
-      targetId: coupleId,
-      text: rationale,
-      callerRef: "system",
-    });
-    const status =
-      verdict.verdict === "allow" ? "published" : verdict.verdict === "hold" ? "held" : "blocked";
+    // Fail-CLOSED: a chaperone error holds the turn (never publishes unreviewed output).
+    let status: "published" | "held" | "blocked" = "held";
+    let reason = "held: chaperone unavailable";
+    try {
+      const verdict = await chaperone(db, this.env, {
+        stage: "pre_turn",
+        targetType: "turn",
+        targetId: coupleId,
+        text: rationale,
+        callerRef: "system",
+      });
+      status = verdict.verdict === "allow" ? "published" : verdict.verdict === "hold" ? "held" : "blocked";
+      reason = verdict.reason;
+    } catch {
+      /* keep held */
+    }
     await db
       .insert(turns)
-      .values({ coupleId, turnSeq: 1, authorId: p.aId, body: rationale, status, moderation: verdict.reason })
+      .values({ coupleId, turnSeq: 1, authorId: p.aId, body: rationale, status, moderation: reason })
       .onConflictDoNothing()
-      .run();
+      .run()
+      .catch(() => {});
+    // ALWAYS advance out of 'met' so a couple can never freeze (committee liveness blocker fix).
     await db
       .update(couples)
       .set({ rationale, turnCount: 1, lastAppend: new Date().toISOString(), state: "courting" })
