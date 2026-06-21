@@ -56,7 +56,7 @@ REPORT_MODEL = "@cf/moonshotai/kimi-k2.7-code"
 # Edge geo gate (audit blocker). Sanctions (CU/IR/KP) + jurisdictions blocked for legal /
 # age-assurance / market-risk reasons (GB, IN, BD, ID, EG, PS, NG, SA, YE). Founder-set list;
 # TR intentionally NOT blocked (founder operates from home). Edit to adjust.
-GEO_DENY = "CU,IR,KP,GB,IN,BD,ID,EG,PS,NG,SA,YE"
+GEO_DENY = "CU,IR,KP,GB,IN,BD,ID,EG,PS,NG,SA,YE,PK,AF,SG"
 # All env.AI.run routed through this AI Gateway id (dollar spend cap set in dashboard).
 AI_GATEWAY_ID = "datebook"
 # Economics (Model C) — runtime-overridable via the `settings` table; these are seed defaults.
