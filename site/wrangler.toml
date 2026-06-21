@@ -1,0 +1,15 @@
+# Static-assets Worker that serves the built Vocs site (the Pages/Worker split: this is
+# the public site on ishtar.numetal.xyz; the API lives on the datebook Worker).
+name = "ishtar-site"
+compatibility_date = "2026-06-01"
+
+# Public docs/landing site on the apex of the ishtar subdomain (the API lives separately on
+# the datebook Worker; admin.ishtar.numetal.xyz is the Access-gated operator console).
+routes = [
+  { pattern = "ishtar.numetal.xyz", custom_domain = true }
+]
+
+[assets]
+directory = "./dist/public"
+not_found_handling = "404-page"
+html_handling = "auto-trailing-slash"
