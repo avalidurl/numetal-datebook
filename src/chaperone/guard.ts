@@ -6,6 +6,7 @@
 import type { DB } from "../db/client";
 import type { Env } from "../env";
 import { runGuarded } from "../economics/gateway";
+import { textOf } from "../economics/pricing";
 
 export interface GuardResult {
   safe: boolean;
@@ -30,10 +31,7 @@ export async function llamaGuard(
         messages: [{ role: "user", content: text }],
       },
     });
-    const out =
-      typeof (result as { response?: unknown }).response === "string"
-        ? (result as { response: string }).response
-        : JSON.stringify(result ?? "");
+    const out = textOf(result) || JSON.stringify(result ?? "");
     const lower = out.toLowerCase();
     // Llama-Guard convention: first line "safe" or "unsafe\nS<category>".
     if (lower.includes("unsafe")) {

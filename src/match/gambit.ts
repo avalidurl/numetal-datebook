@@ -5,6 +5,7 @@
 import type { DB } from "../db/client";
 import type { Env } from "../env";
 import { runGuarded } from "../economics/gateway";
+import { textOf } from "../economics/pricing";
 
 export interface Dater {
   id: number;
@@ -35,9 +36,6 @@ export async function makeGambit(
     callerRef,
     inputs: { messages: [{ role: "user", content: prompt }], max_tokens: 320 },
   });
-  const rationale =
-    typeof (result as { response?: unknown }).response === "string"
-      ? (result as { response: string }).response.trim()
-      : "A spark worth watching.";
+  const rationale = textOf(result).trim() || "A spark worth watching.";
   return { rationale };
 }
