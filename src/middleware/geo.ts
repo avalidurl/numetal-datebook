@@ -1,7 +1,8 @@
 /**
- * Edge geo gate (audit blocker) — MUST run before auth/D1/x402. Hard-denies OFAC-broad
- * + GB + TR ([redacted] → TR blocked for the public product). Logs to access_denials
- * and returns a generic 403 (never reveals denylist internals).
+ * Edge geo gate (audit blocker) — MUST run before auth/D1/x402. Hard-denies a founder-set list
+ * of 15 jurisdictions (CU,IR,KP,GB,IN,BD,ID,EG,PS,NG,SA,YE,PK,AF,SG — see GEO_DENY). TR is
+ * intentionally NOT blocked (redacted). Logs to access_denials and returns a
+ * generic 403 (never reveals denylist internals).
  */
 import { createMiddleware } from "hono/factory";
 import { db as makeDb } from "../db/client";

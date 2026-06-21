@@ -30,6 +30,17 @@ export { MatchCoordinator } from "./match/coordinator";
 
 const app = new Hono<{ Bindings: Env }>();
 
+// Defense-in-depth response headers on every response (HSTS + nosniff). Runs first, stamps last.
+app.use("*", async (c, next) => {
+  await next();
+  try {
+    c.res.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
+    c.res.headers.set("x-content-type-options", "nosniff");
+  } catch {
+    /* some responses have immutable headers — never fail the request over a header */
+  }
+});
+
 // Edge geo gate runs before everything (incl. /health).
 app.use("*", geoGate);
 
