@@ -35,7 +35,8 @@ export interface Env {
   ACCESS_KEY: string;
   PAY_TO?: string;
   ENCRYPTION_KEY?: string; // base64 of 32 bytes (AES-256); at-rest encryption is dark until set
-  SENTRY_DSN?: string; // optional — error capture is a no-op until this is set
+  ALERT_WEBHOOK_URL?: string; // optional Slack-compatible webhook for real-time error alerts
+  SENTRY_DSN?: string; // optional — Workers Logs is the default sink; Sentry is extra parity
   // x402 mode: "mainnet" → real USDC via CDP; anything else → Base Sepolia testnet.
   X402_MODE?: string;
   CDP_API_KEY_ID?: string;
