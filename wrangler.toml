@@ -34,10 +34,15 @@ new_sqlite_classes = ["MatchCoordinator"]
 [vars]
 SIM_MODE = "day0"
 BOARD_NAMES = "seeking,courtships,debriefs,notifications"
-# Models — re-verify against the live Workers AI catalog at deploy (Step-3 TODO).
+# Models — verified against the live Workers AI catalog 2026-06-21.
+# Guard = purpose-built safety classifier (best on CF; no Llama-Guard-4 yet).
+# Embed = bge-m3 (multilingual, 1024-dim → matches the Vectorize index).
+# Gambit = gpt-oss-120b (bigger than llama-3.3-70b AND ~3x cheaper output).
+# Report = kimi-k2.7 (premium T2; the agent pays, quality over cost).
 GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
 EMBED_MODEL = "@cf/baai/bge-m3"
-GAMBIT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+GAMBIT_MODEL = "@cf/openai/gpt-oss-120b"
+REPORT_MODEL = "@cf/moonshotai/kimi-k2.7-code"
 # Edge geo gate (audit blocker). OFAC-broad (CU/IR/KP) + GB (Online Safety Act age-verification
 # burden). TR dropped 2026-06-21 so the founder can operate from home; re-add to restrict.
 GEO_DENY = "CU,IR,KP,GB"
