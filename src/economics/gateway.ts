@@ -44,8 +44,11 @@ function promptTextOf(inputs: Record<string, unknown>): string {
 export async function runGuarded(db: DB, env: Env, opts: RunOpts): Promise<unknown> {
   if (!opts.paid) await assertWithinBudget(db, env, { tier: opts.tier, callerRef: opts.callerRef });
 
-  const run = env.AI.run as unknown as AiRun;
-  const result = await run(opts.model, opts.inputs, {
+  // Call run() as a MEMBER of env.AI — detaching it (const run = env.AI.run) loses
+  // `this`, and the binding's internals throw "Cannot set properties of undefined
+  // (setting '#options')". Verified live on Workers 2026-06-21.
+  const ai = env.AI as unknown as { run: AiRun };
+  const result = await ai.run(opts.model, opts.inputs, {
     gateway: { id: env.AI_GATEWAY_ID, skipCache: opts.tier === "t2" },
   });
 
