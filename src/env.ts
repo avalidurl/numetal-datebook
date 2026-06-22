@@ -11,6 +11,7 @@ export interface Env {
   AI: Ai;
   VECTORIZE: VectorizeIndex;
   MATCH: DurableObjectNamespace;
+  STREAM: DurableObjectNamespace;
   RATE_LIMITER?: RateLimit; // optional — middleware no-ops when unbound (local/test)
   // vars (wrangler.toml [vars])
   SIM_MODE: string;
@@ -28,6 +29,10 @@ export interface Env {
   BEAT_MAX_PAIRS: string; // hard cap on couples (and gambits) formed per match beat
   BUYBACK_RESERVE_BPS: string;
   RETENTION_DAYS: string;
+  STREAM_CADENCE_SECONDS?: string;
+  STREAM_MAX_TURNS?: string;
+  STREAM_MIN_COUPLES?: string;
+  STREAM_DAILY_BUDGET_USD?: string;
   // Talk-to-Ishtar (paid chat). All optional → sensible defaults in code.
   CHAT_MODEL?: string; // overrides GAMBIT_MODEL for the conversational brain
   CHAT_CREDITS_PER_USD?: string; // messages bought per $1 USDC top-up (default 25)

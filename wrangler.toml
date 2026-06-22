@@ -32,6 +32,10 @@ index_name = "datebook-hearts"
 name = "MATCH"
 class_name = "MatchCoordinator"
 
+[[durable_objects.bindings]]
+name = "STREAM"
+class_name = "StreamCoordinator"
+
 # Edge rate limit (GA 2025-09) on sensitive write routes — intake/payment/claim, keyed by
 # client IP + route class. The middleware no-ops if this binding is absent (local/test).
 [[ratelimits]]
@@ -42,6 +46,10 @@ simple = { limit = 60, period = 60 }
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MatchCoordinator"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["StreamCoordinator"]
 
 [vars]
 SIM_MODE = "day0"
@@ -73,6 +81,11 @@ PER_AGENT_DAILY_T1_BUDGET_USD = "0.05"
 BEAT_MAX_PAIRS = "50"
 BUYBACK_RESERVE_BPS = "1000"
 RETENTION_DAYS = "30"
+# Live courtship stream (founder-toggled DO). Cadence + per-day spend ceiling so it can't run away.
+STREAM_CADENCE_SECONDS = "12"
+STREAM_MAX_TURNS = "16"
+STREAM_MIN_COUPLES = "3"
+STREAM_DAILY_BUDGET_USD = "5"
 # Talk-to-Ishtar (paid chat). CHAT_MODEL = a general instruct model (NOT the gpt-oss reasoning
 # model used for gambits, which is poor for open chat). 25 messages per $1 USDC top-up.
 CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
