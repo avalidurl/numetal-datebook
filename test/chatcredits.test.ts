@@ -6,6 +6,8 @@ import { chatAccounts, chatTopups } from "../src/db/schema";
 import {
   addCredits,
   chargeOne,
+  consumeNonce,
+  mintNonce,
   mintSession,
   resolveSession,
 } from "../src/economics/chatcredits";
@@ -29,9 +31,18 @@ async function seed(db: DB, opts: { perk?: string; credits?: number } = {}) {
 
 describe("talk-to-Ishtar credits", () => {
   beforeEach(async () => {
-    for (const t of ["chat_accounts", "chat_sessions", "chat_topups", "chat_messages"]) {
+    for (const t of ["chat_accounts", "chat_sessions", "chat_topups", "chat_messages", "chat_nonces"]) {
       await env.DB.prepare(`DELETE FROM ${t}`).run();
     }
+  });
+
+  it("sign-in nonce is single-use and rejects replay + unknown nonces", async () => {
+    const db = makeDb(env.DB);
+    const n = await mintNonce(db);
+    expect(await consumeNonce(db, n)).toBe(true); // first use succeeds
+    expect(await consumeNonce(db, n)).toBe(false); // replay rejected
+    expect(await consumeNonce(db, "deadbeefdeadbeef")).toBe(false); // unknown rejected
+    expect(await consumeNonce(db, "nothex!")).toBe(false); // malformed rejected
   });
 
   it("fails to charge with no free quota and no credits (→ 402)", async () => {

@@ -89,6 +89,7 @@ const chatCors = cors({
 app.use("/api/chat", chatCors);
 app.use("/api/chat/*", chatCors);
 app.use("/api/chat/topup", rateLimit("payment"));
+app.use("/api/chat/nonce", rateLimit("intake"));
 app.use("/api/chat/session", rateLimit("intake"));
 app.use("/api/chat/balance", rateLimit("intake"));
 app.use("/api/chat", rateLimit("intake"));

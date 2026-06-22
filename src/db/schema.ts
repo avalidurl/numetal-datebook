@@ -465,6 +465,14 @@ export const chatMessages = sqliteTable(
   (t) => ({ byAddr: index("idx_chat_messages_addr").on(t.address, t.createdAt) }),
 );
 
+// Single-use server nonces for wallet sign-in (anti-replay). Minted by GET /api/chat/nonce,
+// embedded in the signed message, consumed once at /api/chat/session.
+export const chatNonces = sqliteTable("chat_nonces", {
+  nonce: text("nonce").primaryKey(),
+  createdAt: text("created_at").notNull().default(now),
+  used: integer("used").notNull().default(0),
+});
+
 // x402 credit top-ups for the chat — own table (chat has no owner row, so it can't reuse
 // premium_orders). UNIQUE(order_id) makes settle idempotent: a replay credits nothing twice.
 export const chatTopups = sqliteTable("chat_topups", {

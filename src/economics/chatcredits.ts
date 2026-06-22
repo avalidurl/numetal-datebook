@@ -7,7 +7,7 @@
  */
 import { eq, sql } from "drizzle-orm";
 import type { DB } from "../db/client";
-import { chatAccounts, chatSessions } from "../db/schema";
+import { chatAccounts, chatNonces, chatSessions } from "../db/schema";
 import type { Env } from "../env";
 import { utcDay } from "../env";
 import { readNumetalPerk, type PerkLevel } from "./numetal";
@@ -117,6 +117,26 @@ export async function addCredits(db: DB, address: string, n: number): Promise<vo
     .set({ credits: sql`${chatAccounts.credits} + ${Math.max(0, Math.trunc(n))}`, updatedAt: new Date().toISOString() })
     .where(eq(chatAccounts.address, addr))
     .run();
+}
+
+/** Mint a single-use sign-in nonce; opportunistically prune nonces older than an hour. */
+export async function mintNonce(db: DB): Promise<string> {
+  const raw = crypto.getRandomValues(new Uint8Array(16));
+  const nonce = [...raw].map((b) => b.toString(16).padStart(2, "0")).join("");
+  await db.delete(chatNonces).where(sql`${chatNonces.createdAt} < datetime('now','-1 hour')`).run();
+  await db.insert(chatNonces).values({ nonce }).run();
+  return nonce;
+}
+
+/** Atomically consume a nonce: true only if it existed, was unused, and is < 10 min old. */
+export async function consumeNonce(db: DB, nonce: string): Promise<boolean> {
+  if (!/^[a-f0-9]{16,}$/i.test(nonce)) return false;
+  const res = await db
+    .update(chatNonces)
+    .set({ used: 1 })
+    .where(sql`${chatNonces.nonce} = ${nonce} AND ${chatNonces.used} = 0 AND ${chatNonces.createdAt} > datetime('now','-10 minutes')`)
+    .run();
+  return (res.meta?.changes ?? 0) > 0;
 }
 
 /** Mint a bearer session for a (proven) address. Returns the plaintext token (shown once). */
