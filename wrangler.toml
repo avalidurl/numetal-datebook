@@ -104,3 +104,8 @@ ACCESS_AUD = "7ed0477d11e5fda6a22390305c1c0136b0ff99c1ca02f10d92db3ea1541a3e80"
 #   wrangler secret put ENCRYPTION_KEY  # base64 of 32 random bytes: openssl rand -base64 32
 #                                       # (at-rest AES-256-GCM for contactRef + heart bodies)
 #   wrangler secret put SENTRY_DSN      # optional error capture
+
+# Static assets served before the worker for matching paths. Hosts the bundled Privy claim SDK
+# at /claim.js so it is not embedded in the worker script (1.1MB gzip). Only /claim.js exists here.
+[assets]
+directory = "./public"

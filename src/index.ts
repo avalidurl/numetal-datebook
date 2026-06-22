@@ -41,7 +41,7 @@ app.use("*", async (c, next) => {
     c.res.headers.set("referrer-policy", "no-referrer");
     // Never let a paid/session-authenticated response be cached by any proxy/CDN.
     const p = c.req.path;
-    if (p.startsWith("/api/chat") || p.startsWith("/api/premium")) {
+    if (p.startsWith("/api/chat") || p.startsWith("/api/premium") || p === "/claim") {
       c.res.headers.set("cache-control", "no-store, private");
     }
   } catch {

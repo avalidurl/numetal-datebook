@@ -131,47 +131,8 @@ export function claimPage(c: Context<{ Bindings: Env }>): Response {
     </div>
     <p id="msg" class="sub" style="min-height:1.3em;margin-top:.9rem">Initialising sign-in&hellip;</p>
     <div id="app" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden"></div>`;
-  const headHtml = `<script type="module">
-const APP_ID = "${appId}";
-const TOKEN = new URLSearchParams(location.search).get("token") || "";
-const btn = document.getElementById("signin");
-const setMsg = (t, bad) => { const m = document.getElementById("msg"); if (m) { m.textContent = t; m.style.color = bad ? "var(--red,#e11d48)" : "var(--mut,#888)"; } };
-const reloadBtn = () => { btn.disabled = false; btn.textContent = "\\u21bb Reload"; btn.onclick = () => location.reload(); };
-(async () => {
-  try {
-    const [{ default: React }, { createRoot }, { PrivyProvider, usePrivy }, { default: htm }] = await Promise.all([
-      import("https://esm.sh/react@18.3.1"),
-      import("https://esm.sh/react-dom@18.3.1/client"),
-      import("https://esm.sh/@privy-io/react-auth@2?deps=react@18.3.1,react-dom@18.3.1"),
-      import("https://esm.sh/htm@3.1.1"),
-    ]);
-    const html = htm.bind(React.createElement);
-    let settled = false;
-    function Bridge() {
-      const { ready, authenticated, login, getAccessToken } = usePrivy();
-      React.useEffect(() => {
-        if (ready && !authenticated) { settled = true; btn.disabled = false; setMsg("Sign in to confirm the introduction."); btn.onclick = () => login(); }
-        if (authenticated) { settled = true; btn.disabled = true; (async () => {
-          setMsg("Confirming\\u2026");
-          try {
-            const privyToken = await getAccessToken();
-            const r = await fetch("/api/escalations/claim", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, privyToken }) });
-            const j = await r.json();
-            if (j.ok) { setMsg("Confirmed. A quick binding 18+ identity check is next\\u2026"); if (j.diditUrl) location.href = j.diditUrl; }
-            else setMsg("Could not confirm: " + (j.reason || j.error || r.status), true);
-          } catch (e) { setMsg("Error: " + e.message, true); }
-        })(); }
-      }, [ready, authenticated]);
-      return null;
-    }
-    createRoot(document.getElementById("app")).render(html\`<\${PrivyProvider} appId=\${APP_ID}><\${Bridge} /></\${PrivyProvider}>\`);
-    setTimeout(() => { if (!settled) { setMsg("Sign-in is taking too long \\u2014 reload to retry (and check shields aren't blocking it).", true); reloadBtn(); } }, 12000);
-  } catch (e) {
-    setMsg("Couldn't load the sign-in widget \\u2014 reload, or disable browser shields and try again.", true);
-    reloadBtn();
-  }
-})();
-</script>`;
+  const headHtml = `<script>window.__PRIVY_APP_ID__=${JSON.stringify(appId)};</script>
+<script src="/claim.js" defer></script>`;
   return c.html(
     claimShell({
       title: "Ishtar · confirm your intro",
