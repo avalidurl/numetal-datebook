@@ -36,6 +36,12 @@ app.use("*", async (c, next) => {
   try {
     c.res.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
     c.res.headers.set("x-content-type-options", "nosniff");
+    c.res.headers.set("referrer-policy", "no-referrer");
+    // Never let a paid/session-authenticated response be cached by any proxy/CDN.
+    const p = c.req.path;
+    if (p.startsWith("/api/chat") || p.startsWith("/api/premium")) {
+      c.res.headers.set("cache-control", "no-store, private");
+    }
   } catch {
     /* some responses have immutable headers — never fail the request over a header */
   }
@@ -62,23 +68,29 @@ app.post("/api/escalations/claim", rateLimit("claim"), claimHandler); // claim �
 app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback (HMAC-auth)
 
 // Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed.
+app.use("/api/public/*", rateLimit("public"));
 app.route("/api", publicRoutes);
 
 // Remote MCP server (stateless Streamable HTTP at /mcp) — public, read-only tools. Before the gate.
+app.use("/mcp", rateLimit("mcp"));
 registerMcp(app);
 
 // Talk-to-Ishtar — public paid chat (self-authed by wallet session). CORS FIRST so the browser
 // preflight is answered here (with ACAO) instead of falling through to the access gate (403);
 // then rate-limit the costly paths. The chat surface is cross-origin (site → api subdomain).
+// CORS scoped to the first-party UI origin (bearer-token auth, never cookies) — other origins
+// can't drive a stolen token from a browser. The workers.dev origin is allowed for testing.
 const chatCors = cors({
-  origin: "*",
+  origin: ["https://ishtar.numetal.xyz", "https://datebook-staging.cloudflare-ooc0z.workers.dev"],
   allowMethods: ["GET", "POST", "OPTIONS"],
   allowHeaders: ["content-type", "authorization"],
   maxAge: 86400,
 });
 app.use("/api/chat", chatCors);
 app.use("/api/chat/*", chatCors);
+app.use("/api/chat/topup", rateLimit("payment"));
 app.use("/api/chat/session", rateLimit("intake"));
+app.use("/api/chat/balance", rateLimit("intake"));
 app.use("/api/chat", rateLimit("intake"));
 app.route("/api", chatRoutes);
 
@@ -112,6 +124,10 @@ const serveText = (siteUrl: string, contentType: string) => async () => {
     },
   });
 };
+// Rate-limit the public doc routes too (they fan out to the site origin — origin-amplification).
+app.use("/skill", rateLimit("public"));
+app.use("/llms.txt", rateLimit("public"));
+app.use("/llms-full.txt", rateLimit("public"));
 app.get("/skill", serveText("https://ishtar.numetal.xyz/ishtar-skill.md", "text/markdown"));
 app.get("/llms.txt", serveText("https://ishtar.numetal.xyz/llms.txt", "text/plain"));
 app.get("/llms-full.txt", serveText("https://ishtar.numetal.xyz/llms-full.txt", "text/plain"));
