@@ -135,6 +135,72 @@ adminRoutes.get("/admin", async (c) => {
     return c.html(page({ title: "ishtar · ops — DEGRADED", body: `<h1>ishtar · ops — DEGRADED</h1><p class="bad"><code>${esc(String(e))}</code></p>` }), 500);
   }
   const budgetPct = Math.round((Number(s.spend_today_usd) / Number(s.daily_budget_usd || 1)) * 100);
+
+  // Live courtship stream status (best-effort; never break the console if the DO is unreachable).
+  let streamEnabled = false;
+  let streamSpent = 0;
+  try {
+    const sr = await c.env.STREAM.get(c.env.STREAM.idFromName("singleton")).fetch("https://do/status", { method: "POST" });
+    const sj = (await sr.json()) as { enabled?: boolean; spentTodayUsd?: number };
+    streamEnabled = !!sj.enabled;
+    streamSpent = Number(sj.spentTodayUsd ?? 0);
+  } catch {
+    /* ignore */
+  }
+  const linkGroup = (title: string, links: Array<[string, string]>): string =>
+    `<div class="card"><div class="k">${esc(title)}</div><div style="margin-top:.45rem;line-height:2">${links
+      .map(([t, u]) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a>`)
+      .join(" &nbsp;·&nbsp; ")}</div></div>`;
+  const launchpad = sec(
+    "§00",
+    "launchpad",
+    `<div class="bar" style="margin-bottom:.7rem;align-items:center;gap:.6rem">
+       <b>live courtship stream</b> ${streamEnabled ? '<span class="ok">running</span>' : '<span class="mut">stopped</span>'}
+       <small class="mut">(spent today $${round(streamSpent)} / $${esc(String(c.env.STREAM_DAILY_BUDGET_USD ?? "5"))})</small>
+       <button onclick="stream('start')">▶ start</button>
+       <button onclick="stream('stop')">⏸ stop</button>
+       <button onclick="stream('tick')">⏭ tick once</button>
+       <span id="streamres" class="mut"></span>
+     </div>` +
+      cards([
+        linkGroup("ops / observability", [
+          ["CF dashboard", "https://dash.cloudflare.com"],
+          ["Workers logs (Sentry replacement)", "https://dash.cloudflare.com"],
+          ["AI Gateway", "https://dash.cloudflare.com"],
+          ["D1 console", "https://dash.cloudflare.com"],
+          ["deploy CI", "https://github.com/gokhan-vc/ishtar-website/actions"],
+          ["site repo", "https://github.com/gokhan-vc/ishtar-website"],
+          ["api repo", "https://github.com/gokhan-vc/numetal-datebook"],
+        ]),
+        linkGroup("live surfaces", [
+          ["Privy claim (human login)", "/claim"],
+          ["dashboard", "https://ishtar.numetal.xyz/dashboard/"],
+          ["talk to Ishtar", "https://ishtar.numetal.xyz/talk/"],
+          ["API root", "https://api.ishtar.numetal.xyz/"],
+          ["skill", "https://api.ishtar.numetal.xyz/skill"],
+          ["MCP", "https://api.ishtar.numetal.xyz/mcp"],
+          ["public stats", "https://api.ishtar.numetal.xyz/api/public/stats"],
+          ["docs", "https://ishtar.numetal.xyz/docs"],
+        ]),
+        linkGroup("chats / comms", [
+          ["Slack", "https://app.slack.com/client"],
+          ["Telegram · me", "https://t.me/goekhanturhan"],
+          ["Telegram · numetal", "https://t.me/numetalxyz"],
+          ["Discord · MRU", "https://discord.gg/ZcxcwRPT7R"],
+          ["Discord · numetal", "https://discord.gg/MC4DYumPMz"],
+          ["email · numetal", "mailto:contact@numetal.xyz"],
+        ]),
+        linkGroup("socials / sites / token", [
+          ["X · @goekhan", "https://x.com/goekhan"],
+          ["X · @numetalxyz", "https://x.com/numetalxyz"],
+          ["gokhan.vc", "https://gokhan.vc"],
+          ["gokhanturhan.com", "https://gokhanturhan.com"],
+          ["numetal.xyz", "https://numetal.xyz"],
+          ["DexScreener", "https://dexscreener.com/base/0xf0ba727d596861455b31d6e444ed3ee41c77709a27f7d787ccf609f6c34dbbd8"],
+          ["$NUMETAL contract", "https://basescan.org/token/0x57EDb7FC54ADa9Ef4E113DC05A168449e63cFbA3"],
+        ]),
+      ]),
+  );
   const setting = (key: string, fallback: string, width = "90px") =>
     `<div class="card"><div class="k">${key}</div><div class="bar" style="margin-top:.35rem"><input id="set_${key}" value="${esc(setVal(d.settings, key, fallback))}" style="width:${width}"><button onclick="saveSetting('${key}','set_${key}')">save</button></div></div>`;
 
@@ -207,6 +273,7 @@ async function post(p,b){const r=await fetch(p+Q,{method:'POST',headers:{'conten
 async function forceBeat(){toast('running beat…');try{const j=await post('/admin/actions/beat');toast('beat '+j.cycleId+': '+j.created+' couples ('+j.pairs+' pairs). reloading…');setTimeout(()=>location.reload(),1600);}catch(e){toast('error: '+e.message);}}
 async function saveSetting(k,id){const v=document.getElementById(id).value;toast('saving '+k+'…');const j=await post('/admin/actions/settings',{key:k,value:v});if(j.ok){toast(k+' = '+v+'. reloading…');setTimeout(()=>location.reload(),900);}else toast('error: '+(j.error||'failed'));}
 async function brokerIntro(id){toast('marking brokered…');const j=await post('/admin/actions/broker',{coupleId:id});if(j.ok){toast('couple '+id+' brokered. reloading…');setTimeout(()=>location.reload(),900);}else toast('error: '+(j.error||'failed'));}
+async function stream(action){document.getElementById('streamres').textContent='…';try{const j=await post('/admin/stream/'+action);document.getElementById('streamres').textContent=JSON.stringify(j);if(action!=='status'&&action!=='tick')setTimeout(()=>location.reload(),900);}catch(e){document.getElementById('streamres').textContent='error: '+e.message;}}
 async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!v)return;if(!confirm('Erase owner '+v+'? This cascade-deletes their personal data and drops their semantic vectors. Irreversible.'))return;toast('erasing owner '+v+'…');const j=await post('/admin/actions/erase',{ownerId:Number(v)});if(j.ok){toast('owner '+v+' erased ('+j.personasErased+' personas, '+j.vectorsDeleted+' vectors). reloading…');setTimeout(()=>location.reload(),1400);}else toast('error: '+(j.error||'failed'));}
 </script>`;
 
@@ -214,7 +281,7 @@ async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!
 
   return c.html(page({
     title: "ishtar · ops",
-    body: head + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + footer + script,
+    body: head + launchpad + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + footer + script,
   }));
 });
 
