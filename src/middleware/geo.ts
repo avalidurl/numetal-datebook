@@ -8,6 +8,7 @@ import { createMiddleware } from "hono/factory";
 import { db as makeDb } from "../db/client";
 import { accessDenials } from "../db/schema";
 import type { Env } from "../env";
+import { geoBlockPage, wantsHtml } from "../ui/system-pages";
 
 export const geoGate = createMiddleware<{ Bindings: Env }>(async (c, next) => {
   const cf = (c.req.raw as { cf?: IncomingRequestCfProperties }).cf;
@@ -32,6 +33,8 @@ export const geoGate = createMiddleware<{ Bindings: Env }>(async (c, next) => {
     } catch {
       /* swallow */
     }
+    // Browsers get a calm, on-brand datasheet page; API clients keep the generic JSON.
+    if (wantsHtml(c.req.header("accept"))) return c.html(geoBlockPage(), 403);
     return c.json({ error: "service unavailable in this location" }, 403);
   }
   await next();

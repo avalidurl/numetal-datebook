@@ -25,6 +25,7 @@ import { publicRoutes } from "./routes/public";
 import { premiumRoutes } from "./routes/premium";
 import { reportRoutes } from "./routes/report";
 import { sweepRetention } from "./retention";
+import { notFoundPage, serverErrorPage, wantsHtml } from "./ui/system-pages";
 
 export { MatchCoordinator } from "./match/coordinator";
 export { StreamCoordinator } from "./match/stream";
@@ -171,11 +172,17 @@ app.route("/api", premiumRoutes);
 app.route("/api", reportRoutes);
 app.route("/api", escalationRoutes);
 app.route("/api", identityRoutes);
-app.notFound((c) => c.json({ error: "no such room" }, 404));
+app.notFound((c) => {
+  // Browsers get an on-brand datasheet page; API clients keep the generic JSON.
+  if (wantsHtml(c.req.header("accept"))) return c.html(notFoundPage(), 404);
+  return c.json({ error: "no such room" }, 404);
+});
 
 // Unhandled route errors → Sentry (no-op until SENTRY_DSN is set) + generic 500.
 app.onError(async (err, c) => {
   await captureError(c.env, err, { path: c.req.path, method: c.req.method });
+  // Browsers get an on-brand datasheet page; API clients keep the generic JSON. No stack ever.
+  if (wantsHtml(c.req.header("accept"))) return c.html(serverErrorPage(), 500);
   return c.json({ error: "internal" }, 500);
 });
 

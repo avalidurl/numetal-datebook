@@ -2,8 +2,13 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
 
+// The console is served only on the admin.* host (CF-Access-gated in prod); target it so the
+// host-lock redirect doesn't intercept the gate-behaviour these tests assert.
 const req = (path: string, key?: string) =>
-  new Request(`https://datebook.example${path}`, { headers: key ? { authorization: `Bearer ${key}` } : {}, cf: { country: "US" } });
+  new Request(`https://admin.ishtar.numetal.xyz${path}`, {
+    headers: { host: "admin.ishtar.numetal.xyz", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+    cf: { country: "US" },
+  });
 
 describe("admin single-pane dashboard", () => {
   it("serves /admin.json snapshot when authed", async () => {
