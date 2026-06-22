@@ -15,8 +15,10 @@ import type { Env } from "../env";
 import {
   addCredits,
   chargeOne,
+  consumeNonce,
   creditsPerUsd,
   getBalance,
+  mintNonce,
   mintSession,
   resolveSession,
 } from "../economics/chatcredits";
@@ -37,6 +39,12 @@ const sessionSchema = z.object({
   signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
 });
 
+// Mint a single-use sign-in nonce (anti-replay). The client embeds it in the signed message.
+chatRoutes.get("/chat/nonce", async (c) => {
+  const nonce = await mintNonce(makeDb(c.env.DB));
+  return c.json({ nonce, expiresInSeconds: 600 });
+});
+
 chatRoutes.post("/chat/session", async (c) => {
   const parsed = sessionSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "address, message, signature required" }, 400);
@@ -45,6 +53,8 @@ chatRoutes.post("/chat/session", async (c) => {
   const issued = message.match(/(\d{4}-\d{2}-\d{2}T[0-9:.]+Z)/)?.[1];
   if (!issued || Math.abs(Date.now() - new Date(issued).getTime()) > 10 * 60_000)
     return c.json({ error: "message must include an ISO-8601 timestamp issued within 10 minutes" }, 400);
+  const nonce = message.match(/nonce:\s*([a-f0-9]{16,})/i)?.[1];
+  if (!nonce) return c.json({ error: "message must include a server nonce — GET /api/chat/nonce first" }, 400);
   let valid = false;
   try {
     valid = await verifyMessage({ address: address as `0x${string}`, message, signature: signature as `0x${string}` });
@@ -54,6 +64,8 @@ chatRoutes.post("/chat/session", async (c) => {
   if (!valid) return c.json({ error: "signature does not match address" }, 401);
 
   const db = makeDb(c.env.DB);
+  // Consume the nonce only after the signature checks out → single-use, replay-proof.
+  if (!(await consumeNonce(db, nonce))) return c.json({ error: "nonce invalid, expired, or already used — request a new one" }, 401);
   const { token, expiresAt } = await mintSession(db, address, "signature");
   return c.json({ ok: true, sessionToken: token, expiresAt, address: address.toLowerCase(), ...(await getBalance(db, c.env, address)) });
 });
