@@ -27,6 +27,7 @@ import { reportRoutes } from "./routes/report";
 import { sweepRetention } from "./retention";
 
 export { MatchCoordinator } from "./match/coordinator";
+export { StreamCoordinator } from "./match/stream";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -142,6 +143,15 @@ app.use("/api/personas", rateLimit("intake"));
 app.use("/api/premium/*", rateLimit("payment"));
 
 app.route("/", adminRoutes); // /admin (single-pane dashboard) + /admin.json — access-gated
+
+// Founder control of the live courtship stream (access-gated). start|stop|status|tick.
+app.all("/admin/stream/:action", async (c) => {
+  const action = c.req.param("action");
+  if (!["start", "stop", "status", "tick"].includes(action)) return c.json({ error: "bad action" }, 400);
+  const stub = c.env.STREAM.get(c.env.STREAM.idFromName("singleton"));
+  const res = await stub.fetch(`https://do/${action}`, { method: "POST" });
+  return new Response(res.body, { status: res.status, headers: { "content-type": "application/json" } });
+});
 app.route("/api", intakeRoutes);
 app.route("/api", boardsRoutes);
 app.route("/api", premiumRoutes);
