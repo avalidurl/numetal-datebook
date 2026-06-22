@@ -51,9 +51,16 @@ app.use("*", async (c, next) => {
 // Edge geo gate runs before everything (incl. /health).
 app.use("*", geoGate);
 
-// Bare admin.* subdomain (CF-Access protected) → the operator console.
-app.use("/", async (c, next) => {
-  if ((c.req.header("host") ?? "").startsWith("admin.")) return c.redirect("/admin", 302);
+// The operator console lives ONLY on the Cloudflare-Access-gated admin.* subdomain. Any /admin*
+// request to another host (e.g. the public api.*) is redirected there, so the console and its
+// actions can NEVER be reached off the Cloudflare Access gate (not even with the agent key).
+// Bare admin.*/ → the console.
+app.use("*", async (c, next) => {
+  const host = c.req.header("host") ?? "";
+  const path = new URL(c.req.url).pathname;
+  const isAdminPath = path === "/admin" || path === "/admin.json" || path.startsWith("/admin/");
+  if (isAdminPath && !host.startsWith("admin.")) return c.redirect(`https://admin.ishtar.numetal.xyz${path}`, 302);
+  if (path === "/" && host.startsWith("admin.")) return c.redirect("/admin", 302);
   await next();
 });
 
