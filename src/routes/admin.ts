@@ -38,6 +38,8 @@ async function snapshot(env: Env): Promise<Row> {
   const revenue = Number((await first("SELECT coalesce(sum(cast(amount_usdc as real)),0) s FROM payment_receipts")).s ?? 0);
   const reserve = Number((await first("SELECT coalesce(sum(cast(reserve_usdc as real)),0) s FROM buyback_reserve")).s ?? 0);
   const denials = Number((await first("SELECT count(*) c FROM access_denials WHERE date(created_at)=date('now')")).c ?? 0);
+  const errToday = Number((await first("SELECT count(*) c FROM error_events WHERE date(created_at)=date('now')")).c ?? 0);
+  const err5xxToday = Number((await first("SELECT count(*) c FROM error_events WHERE date(created_at)=date('now') AND status>=500")).c ?? 0);
 
   // contact_ref is encrypted at rest — decrypt only here, for the operator brokering the intro.
   const introsRaw = await list(
@@ -69,6 +71,9 @@ async function snapshot(env: Env): Promise<Row> {
     revenue_usdc: round(revenue),
     buyback_reserve_usdc: round(reserve),
     geo_denials_today: denials,
+    errors_today: errToday,
+    errors_5xx_today: err5xxToday,
+    errors_by_type_today: await list("SELECT type, count(*) n FROM error_events WHERE date(created_at)=date('now') GROUP BY type ORDER BY n DESC LIMIT 6"),
     intros_to_broker: intros,
     recent_events: await list("SELECT kind, payload, created_at FROM events ORDER BY id DESC LIMIT 10"),
   };
@@ -88,6 +93,7 @@ interface DetailData {
   identity_recent: Row[];
   chaperone_recent: Row[];
   geo_recent: Row[];
+  errors_recent: Row[];
 }
 
 async function detail(env: Env): Promise<DetailData> {
@@ -105,6 +111,7 @@ async function detail(env: Env): Promise<DetailData> {
     identity_recent: await list("SELECT id, owner_id, provider, status, age_over_18, created_at FROM identity_verifications ORDER BY id DESC LIMIT 15"),
     chaperone_recent: await list("SELECT target_type, target_id, stage, verdict, reason, created_at FROM chaperone_decisions ORDER BY id DESC LIMIT 20"),
     geo_recent: await list("SELECT country, region, route_class, reason, created_at FROM access_denials ORDER BY id DESC LIMIT 15"),
+    errors_recent: await list("SELECT status, type, message, route, method, created_at FROM error_events ORDER BY id DESC LIMIT 20"),
   };
 }
 
@@ -147,6 +154,9 @@ adminRoutes.get("/admin", async (c) => {
   } catch {
     /* ignore */
   }
+  // Account-agnostic CF deep links: the ?to=/:account/… redirect resolves to the logged-in account,
+  // so no account id is embedded. OBS opens the Query Builder where the saved "status >= 500" query lives.
+  const OBS = "https://dash.cloudflare.com/?to=/:account/workers-and-pages/observability";
   const linkGroup = (title: string, links: Array<[string, string]>): string =>
     `<div class="card"><div class="k">${esc(title)}</div><div style="margin-top:.45rem;line-height:2">${links
       .map(([t, u]) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a>`)
@@ -166,13 +176,20 @@ adminRoutes.get("/admin", async (c) => {
        <b>Privy claim (human login)</b>
        <button onclick="claimLink()">▣ generate claim link</button>
        <span id="claimres" class="mut">mints a one-time invite → opens the Privy claim/identity flow</span>
+     </div>
+     <div class="bar" style="margin-bottom:.7rem;align-items:center;gap:.6rem">
+       <b>errors today</b>
+       <span class="${Number(s.errors_5xx_today) > 0 ? "bad" : "ok"}">${esc(String(s.errors_5xx_today))} × 5xx</span>
+       <small class="mut">${esc(String(s.errors_today))} total${(s.errors_by_type_today as Row[]).length ? " · " + kvline(s.errors_by_type_today as Row[], "type", "n") : ""}</small>
+       <a href="${OBS}" target="_blank" rel="noopener">open Workers Logs ↗</a>
      </div>` +
       cards([
         linkGroup("ops / observability", [
-          ["CF dashboard", "https://dash.cloudflare.com"],
-          ["Workers logs (Sentry replacement)", "https://dash.cloudflare.com"],
-          ["AI Gateway", "https://dash.cloudflare.com"],
-          ["D1 console", "https://dash.cloudflare.com"],
+          ["Workers Logs · 5xx query ★", OBS],
+          ["Workers & Pages", "https://dash.cloudflare.com/?to=/:account/workers-and-pages"],
+          ["AI Gateway", "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway"],
+          ["D1 console", "https://dash.cloudflare.com/?to=/:account/workers/d1"],
+          ["Logpush → R2", "https://dash.cloudflare.com/?to=/:account/logs/logpush"],
           ["deploy CI", "https://github.com/gokhan-vc/ishtar-website/actions"],
           ["site repo", "https://github.com/gokhan-vc/ishtar-website"],
           ["api repo", "https://github.com/gokhan-vc/numetal-datebook"],
@@ -271,6 +288,17 @@ ${setting("per_agent_daily_budget_usd", c.env.PER_AGENT_DAILY_BUDGET_USD)}
 
   const events = sec("§11", "recent events", tbl(["kind", "payload", "at"], (s.recent_events as Row[]).map((e) => [st(e.kind), `<code>${esc(String(e.payload ?? ""))}</code>`, `<span class="mut">${esc(String(e.created_at))}</span>`])));
 
+  const errors = sec("§12", "errors (5xx / exceptions)",
+    `<div class="bar" style="margin-bottom:.5rem">today: <span class="${Number(s.errors_5xx_today) > 0 ? "bad" : "ok"}">${esc(String(s.errors_5xx_today))} × 5xx</span> · ${esc(String(s.errors_today))} total &nbsp;·&nbsp; ${kvline(s.errors_by_type_today as Row[], "type", "n") || "—"} &nbsp;·&nbsp; <a href="${OBS}" target="_blank" rel="noopener">Workers Logs ↗</a></div>`
+    + tbl(["status", "type", "route", "message", "at"], d.errors_recent.map((r) => [
+        Number(r.status) >= 500 ? `<span class="bad">${esc(String(r.status))}</span>` : `<span class="mut">${esc(String(r.status))}</span>`,
+        esc(String(r.type)),
+        `<code>${esc(String(r.route ?? "—"))}</code>`,
+        `<span class="mut">${esc(String(r.message ?? ""))}</span>`,
+        `<span class="mut">${esc(String(r.created_at))}</span>`,
+      ]))
+    + `<p class="note">This table is the in-console counter. The full searchable log with stack traces lives in <b>Workers Logs → Query Builder</b>: visualise <code>Count</code>, filter <code>$workers.event.response.status &gt;= 500</code>, group by <code>$workers.event.request.path</code> — then <b>Save Query</b> (it gets a shareable URL). Set the <code>ALERT_WEBHOOK_URL</code> secret to also page Slack on every error in real time.</p>`);
+
   const script = `<script>
 const Q='';
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.style.display='block';}
@@ -287,7 +315,7 @@ async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!
 
   return c.html(page({
     title: "ishtar · ops",
-    body: head + launchpad + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + footer + script,
+    body: head + launchpad + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + errors + footer + script,
   }));
 });
 

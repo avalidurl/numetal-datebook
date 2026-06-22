@@ -11,5 +11,6 @@ export async function sweepRetention(env: Env): Promise<{ deleted: number }> {
   const e = await env.DB.prepare("DELETE FROM events WHERE created_at < ?1").bind(cutoff).run();
   const i = await env.DB.prepare("DELETE FROM inference_costs WHERE created_at < ?1").bind(cutoff).run();
   const a = await env.DB.prepare("DELETE FROM access_denials WHERE created_at < ?1").bind(cutoff).run();
-  return { deleted: (e.meta.changes ?? 0) + (i.meta.changes ?? 0) + (a.meta.changes ?? 0) };
+  const x = await env.DB.prepare("DELETE FROM error_events WHERE created_at < ?1").bind(cutoff).run();
+  return { deleted: (e.meta.changes ?? 0) + (i.meta.changes ?? 0) + (a.meta.changes ?? 0) + (x.meta.changes ?? 0) };
 }

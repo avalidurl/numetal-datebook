@@ -9,6 +9,33 @@
  */
 import type { Env } from "./env";
 
+/**
+ * Always-on error ledger write (the in-console "errors today / 5xx" tile reads this).
+ * Best-effort: never throws, never blocks the request path on a telemetry failure. Workers Logs +
+ * the Query Builder remain the rich searchable sink; this is just the counter the operator sees
+ * without leaving /admin. Stores routing metadata only — never heart-file content.
+ */
+export async function recordError(
+  env: Env,
+  fields: { status?: number; type?: string; message?: string; route?: string; method?: string },
+): Promise<void> {
+  try {
+    await env.DB.prepare(
+      "INSERT INTO error_events (status, type, message, route, method) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+      .bind(
+        Number(fields.status ?? 0),
+        String(fields.type ?? "Error").slice(0, 120),
+        fields.message ? String(fields.message).slice(0, 500) : null,
+        fields.route ? String(fields.route).slice(0, 200) : null,
+        fields.method ? String(fields.method).slice(0, 12) : null,
+      )
+      .run();
+  } catch {
+    /* telemetry must never break the request path */
+  }
+}
+
 export async function captureError(
   env: Env,
   err: unknown,

@@ -14,7 +14,7 @@ import { accessGate } from "./middleware/access";
 import { geoGate } from "./middleware/geo";
 import { registerMcp } from "./mcp";
 import { rateLimit } from "./middleware/ratelimit";
-import { captureError } from "./observability";
+import { captureError, recordError } from "./observability";
 import { adminRoutes } from "./routes/admin";
 import { boardsRoutes } from "./routes/boards";
 import { chatRoutes } from "./routes/chat";
@@ -46,6 +46,17 @@ app.use("*", async (c, next) => {
     }
   } catch {
     /* some responses have immutable headers — never fail the request over a header */
+  }
+  // Ledger any 5xx *response* (deliberate c.json(…,500) etc.). Thrown exceptions skip this post-next
+  // code and are caught by app.onError below, which records them there — so each 5xx is counted once.
+  try {
+    if (c.res && c.res.status >= 500) {
+      c.executionCtx.waitUntil(
+        recordError(c.env, { status: c.res.status, type: `http_${c.res.status}`, route: c.req.path, method: c.req.method }),
+      );
+    }
+  } catch {
+    /* no execution ctx (e.g. tests) — counter is best-effort */
   }
 });
 
@@ -180,7 +191,9 @@ app.notFound((c) => {
 
 // Unhandled route errors → Sentry (no-op until SENTRY_DSN is set) + generic 500.
 app.onError(async (err, c) => {
+  const e = err as Error;
   await captureError(c.env, err, { path: c.req.path, method: c.req.method });
+  await recordError(c.env, { status: 500, type: e?.name ?? "Error", message: e?.message, route: c.req.path, method: c.req.method });
   // Browsers get an on-brand datasheet page; API clients keep the generic JSON. No stack ever.
   if (wantsHtml(c.req.header("accept"))) return c.html(serverErrorPage(), 500);
   return c.json({ error: "internal" }, 500);
@@ -196,7 +209,9 @@ export default {
           await env.MATCH.get(id).fetch("https://do/poke", { method: "POST" });
           await sweepRetention(env);
         } catch (e) {
+          const err = e as Error;
           await captureError(env, e, { where: "scheduled" });
+          await recordError(env, { status: 0, type: err?.name ?? "Error", message: err?.message, route: "scheduled" });
         }
       })(),
     );

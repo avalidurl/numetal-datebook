@@ -10,9 +10,13 @@ workers_dev = true
 crons = ["0 * * * *"]
 
 # Workers Logs — invocation/exception telemetry (our Sentry replacement; founder reviews in CF).
+# invocation_logs = true is what populates $workers.event.response.status, so the Query Builder
+# can filter/group by 5xx (the saved "500s" dashboard). head_sampling_rate=1 = keep every log.
 [observability]
 enabled = true
-head_sampling_rate = 1
+  [observability.logs]
+  invocation_logs = true
+  head_sampling_rate = 1
 
 [ai]
 binding = "AI"
