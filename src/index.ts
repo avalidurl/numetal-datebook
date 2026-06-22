@@ -51,6 +51,12 @@ app.use("*", async (c, next) => {
 // Edge geo gate runs before everything (incl. /health).
 app.use("*", geoGate);
 
+// Bare admin.* subdomain (CF-Access protected) → the operator console.
+app.use("/", async (c, next) => {
+  if ((c.req.header("host") ?? "").startsWith("admin.")) return c.redirect("/admin", 302);
+  await next();
+});
+
 // Liveness — geo-gated but NOT access-gated (registered before the access gate).
 app.get("/health", async (c) => {
   try {

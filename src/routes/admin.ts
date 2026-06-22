@@ -161,6 +161,11 @@ adminRoutes.get("/admin", async (c) => {
        <button onclick="stream('stop')">⏸ stop</button>
        <button onclick="stream('tick')">⏭ tick once</button>
        <span id="streamres" class="mut"></span>
+     </div>
+     <div class="bar" style="margin-bottom:.7rem;align-items:center;gap:.6rem">
+       <b>Privy claim (human login)</b>
+       <button onclick="claimLink()">▣ generate claim link</button>
+       <span id="claimres" class="mut">mints a one-time invite → opens the Privy claim/identity flow</span>
      </div>` +
       cards([
         linkGroup("ops / observability", [
@@ -274,6 +279,7 @@ async function forceBeat(){toast('running beat…');try{const j=await post('/adm
 async function saveSetting(k,id){const v=document.getElementById(id).value;toast('saving '+k+'…');const j=await post('/admin/actions/settings',{key:k,value:v});if(j.ok){toast(k+' = '+v+'. reloading…');setTimeout(()=>location.reload(),900);}else toast('error: '+(j.error||'failed'));}
 async function brokerIntro(id){toast('marking brokered…');const j=await post('/admin/actions/broker',{coupleId:id});if(j.ok){toast('couple '+id+' brokered. reloading…');setTimeout(()=>location.reload(),900);}else toast('error: '+(j.error||'failed'));}
 async function stream(action){document.getElementById('streamres').textContent='…';try{const j=await post('/admin/stream/'+action);document.getElementById('streamres').textContent=JSON.stringify(j);if(action!=='status'&&action!=='tick')setTimeout(()=>location.reload(),900);}catch(e){document.getElementById('streamres').textContent='error: '+e.message;}}
+async function claimLink(){const e=document.getElementById('claimres');e.textContent='minting…';try{const j=await post('/admin/actions/claim-link');if(j.ok){e.innerHTML='<a href="'+j.claimUrl+'" target="_blank" rel="noopener">open Privy claim (couple '+j.coupleId+') ↗</a> <span class="mut">'+j.claimUrl+'</span>';}else e.textContent='error: '+(j.error||'failed');}catch(x){e.textContent='error: '+x.message;}}
 async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!v)return;if(!confirm('Erase owner '+v+'? This cascade-deletes their personal data and drops their semantic vectors. Irreversible.'))return;toast('erasing owner '+v+'…');const j=await post('/admin/actions/erase',{ownerId:Number(v)});if(j.ok){toast('owner '+v+' erased ('+j.personasErased+' personas, '+j.vectorsDeleted+' vectors). reloading…');setTimeout(()=>location.reload(),1400);}else toast('error: '+(j.error||'failed'));}
 </script>`;
 
@@ -305,6 +311,27 @@ adminRoutes.post("/admin/actions/settings", async (c) => {
     .bind(body.key, String(body.value).trim())
     .run();
   return c.json({ ok: true, key: body.key, value: String(body.value).trim() });
+});
+
+// Mint a one-time Privy claim link for the founder to reach/test the human login + identity flow.
+adminRoutes.post("/admin/actions/claim-link", async (c) => {
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT c.id couple_id, (SELECT owner_id FROM personas WHERE id=c.a_id) owner_id
+       FROM couples c WHERE (SELECT owner_id FROM personas WHERE id=c.a_id) IS NOT NULL
+       ORDER BY c.id DESC LIMIT 1`,
+    ).first<{ couple_id: number; owner_id: number }>();
+    if (!row) return c.json({ ok: false, error: "no couple available to invite" }, 404);
+    const token = [...crypto.getRandomValues(new Uint8Array(32))].map((x) => x.toString(16).padStart(2, "0")).join("");
+    const expiresAt = new Date(Date.now() + 72 * 3600 * 1000).toISOString();
+    await c.env.DB.prepare("INSERT INTO escalation_invites (couple_id, owner_id, token, status, expires_at) VALUES (?1,?2,?3,'sent',?4)")
+      .bind(row.couple_id, row.owner_id, token, expiresAt)
+      .run();
+    // Claim is served on the PUBLIC api host (no CF Access — the human dater can't log in to admin.*).
+    return c.json({ ok: true, coupleId: row.couple_id, claimUrl: `https://api.ishtar.numetal.xyz/claim?token=${token}` });
+  } catch (e) {
+    return c.json({ ok: false, error: String(e) }, 500);
+  }
 });
 
 adminRoutes.post("/admin/actions/broker", async (c) => {
