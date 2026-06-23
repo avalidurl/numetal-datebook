@@ -8,6 +8,7 @@ import { desc, eq } from "drizzle-orm";
 import type { DB } from "../db/client";
 import { chatMessages } from "../db/schema";
 import type { Env } from "../env";
+import { normalizeForGuard } from "../chaperone/normalize";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
 
@@ -35,7 +36,9 @@ const LEAK_ANCHORS = [
   "speak to the human in front of you",
 ];
 export function looksLikeSystemLeak(reply: string): boolean {
-  const r = reply.toLowerCase();
+  // Normalize first (red-team H5): strip invisibles / fold homoglyphs so a reply like
+  // "you are іshtar, the matchmakеr" with Cyrillic lookalikes can't slip the anchor match.
+  const r = normalizeForGuard(reply).clean.toLowerCase();
   return LEAK_ANCHORS.some((a) => r.includes(a));
 }
 

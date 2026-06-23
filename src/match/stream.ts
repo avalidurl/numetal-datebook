@@ -12,6 +12,7 @@ import { couples, inferenceCosts, owners, personas, turns } from "../db/schema";
 import type { Env } from "../env";
 import { utcDay } from "../env";
 import { chaperone } from "../chaperone";
+import { looksLikeSystemLeak } from "../chat/ishtar";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
 
@@ -171,7 +172,9 @@ export class StreamCoordinator implements DurableObject {
     }
     if (!text) return null;
     const v = await chaperone(db, this.env, { stage: "pre_turn", targetType: "turn", targetId: coupleId, text, callerRef: "stream" });
-    return v.verdict === "allow" || v.verdict === "sanitize" ? v.text ?? text : null;
+    const safe = v.verdict === "allow" || v.verdict === "sanitize" ? (v.text ?? text) : null;
+    // H5 parity: the live public stream must also never publish a system-prompt leak.
+    return safe && !looksLikeSystemLeak(safe) ? safe : null;
   }
 
   /** Spawn a fresh public couple from the archetype pool with an Ishtar gambit. */

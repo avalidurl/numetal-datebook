@@ -10,6 +10,7 @@ import { db as makeDb, type DB } from "../db/client";
 import { couples, events, personas, turns } from "../db/schema";
 import type { Env } from "../env";
 import { chaperone } from "../chaperone";
+import { looksLikeSystemLeak } from "../chat/ishtar";
 import { open } from "../crypto/box";
 import { getSetting } from "../economics/budget";
 import { captureError } from "../observability";
@@ -247,17 +248,28 @@ export class MatchCoordinator implements DurableObject {
       await captureError(this.env, e, { where: "seedGambit:chaperone", coupleId });
       /* keep held */
     }
+    // H5 parity: a published gambit must not leak the system prompt either.
+    if (status === "published" && looksLikeSystemLeak(body)) {
+      status = "blocked";
+      reason = "blocked: instruction disclosure";
+    }
     await db
       .insert(turns)
       .values({ coupleId, turnSeq: 1, authorId: p.aId, authorKind: "system", body, status, moderation: reason })
       .onConflictDoNothing()
       .run()
       .catch(() => {});
-    // ALWAYS advance out of 'met' so a couple can never freeze (committee liveness blocker fix).
-    await db
-      .update(couples)
-      .set({ rationale: body, turnCount: 1, lastAppend: new Date().toISOString(), state: "courting" })
-      .where(eq(couples.id, coupleId))
-      .run();
+    // Only advance to 'courting' when the gambit is actually PUBLISHED (allow/sanitize). A blocked
+    // (deny) or held (chaperone unavailable/error) gambit must NOT carry the couple forward with
+    // unreviewed content — it stays in 'met' for review/retry on a later beat (red-team H4: the old
+    // unconditional advance let a fail-closed verdict still progress, and an operator approving the
+    // held turn would publish unguarded content).
+    if (status === "published") {
+      await db
+        .update(couples)
+        .set({ rationale: body, turnCount: 1, lastAppend: new Date().toISOString(), state: "courting" })
+        .where(eq(couples.id, coupleId))
+        .run();
+    }
   }
 }
