@@ -35,12 +35,18 @@ export async function readNumetalPerk(
   }
 }
 
-// Thresholds in whole tokens (18 decimals). Tune in the ADR.
+// Thresholds in WHOLE tokens (18 decimals). Re-pegged 2026-06-23 to be DDoS/sybil-safe.
+// Context: $NUMETAL ≈ $2.45e-7 (mcap ~$24K, ~$25K on-chain liquidity, 100B supply). The OLD
+// thresholds handed "founder" (200 free msgs/day) to anyone holding 1M tokens ≈ $0.24, and ANY
+// dust got 3 free/day — a pure bankruptcy/DDoS vector. Now the cheapest path to ANY free message
+// is the entry tier (100M ≈ 0.1% of supply), so a dust-sybil must lock real capital per wallet,
+// which the thin float makes impossible to acquire at scale. Re-peg if price moves ~10x (and
+// consider moving these to the `settings` table so it's a runtime knob, no redeploy).
 function perkFor(raw: bigint): PerkLevel {
   const tokens = raw / 10n ** 18n;
-  if (tokens >= 1_000_000n) return "founder";
-  if (tokens >= 100_000n) return "discount";
-  if (tokens >= 10_000n) return "priority";
-  if (tokens > 0n) return "badge";
-  return "none";
+  if (tokens >= 10_000_000_000n) return "founder"; // 10B  · 10%   of supply
+  if (tokens >= 2_000_000_000n) return "discount"; // 2B   · 2%
+  if (tokens >= 500_000_000n) return "priority";   // 500M · 0.5%
+  if (tokens >= 100_000_000n) return "badge";      // 100M · 0.1%  (entry: first free messages)
+  return "none";                                   // < 100M → no free allowance; pay via x402
 }

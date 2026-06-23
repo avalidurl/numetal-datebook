@@ -12,8 +12,12 @@ import type { Env } from "../env";
 import { utcDay } from "../env";
 import { readNumetalPerk, type PerkLevel } from "./numetal";
 
-// Daily free messages by $NUMETAL perk tier. Holders' perk; non-holders pay per message.
-const FREE_QUOTA: Record<PerkLevel, number> = { none: 0, badge: 3, priority: 10, discount: 25, founder: 200 };
+// Daily free messages by $NUMETAL holding tier (thresholds in economics/numetal.ts). Holders'
+// perk; everyone below the entry tier (<100M) pays per message via x402. Re-pegged 2026-06-23 —
+// see the rationale in numetal.ts. Worst-case cost to us at full daily use (~0.6¢/msg incl. the
+// chaperone passes): 5→$0.03/day, 12→$0.07, 30→$0.18, 60→$0.36 — and the global daily-budget
+// breaker caps total free spend regardless. `none` = 0 closes the old dust-DDoS hole.
+const FREE_QUOTA: Record<PerkLevel, number> = { none: 0, badge: 5, priority: 12, discount: 30, founder: 60 };
 const SESSION_TTL_DAYS = 30;
 const PERK_CACHE_HOURS = 24;
 

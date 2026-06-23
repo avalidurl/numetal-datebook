@@ -229,7 +229,8 @@ adminRoutes.get("/admin", async (c) => {
     `<div class="card"><div class="k">${key}</div><div class="bar" style="margin-top:.35rem"><input id="set_${key}" value="${esc(setVal(d.settings, key, fallback))}" style="width:${width}"><button onclick="saveSetting('${key}','set_${key}')">save</button></div></div>`;
 
   const head = `<div class="bar" style="justify-content:space-between;align-items:baseline">
-<h1>ishtar · ops</h1><span class="reg">doc ish-ops-001 · ${esc(s.sim_mode)} · health ${st(s.health)}</span></div>
+<h1>ISHTAR<span class="hrt">♥</span> · OPS</h1><span class="reg">doc ish-ops-001 · ${esc(s.sim_mode)} · health ${st(s.health)}</span></div>
+<div class="dither"></div>
 <div id="toast"></div>`;
 
   const economics = sec("§01", "capacity & economics", cards([
