@@ -14,8 +14,10 @@ import { accessGate } from "./middleware/access";
 import { geoGate } from "./middleware/geo";
 import { registerMcp } from "./mcp";
 import { rateLimit } from "./middleware/ratelimit";
+import { seal } from "./crypto/box";
 import { captureError, recordError } from "./observability";
 import { adminRoutes } from "./routes/admin";
+import { creativeRoutes } from "./routes/creative";
 import { boardsRoutes } from "./routes/boards";
 import { chatRoutes } from "./routes/chat";
 import { escalationRoutes } from "./routes/escalation";
@@ -123,9 +125,15 @@ app.post("/api/waitlist", rateLimit("intake"), async (c) => {
   const handle = body.handle ? String(body.handle).slice(0, 80) : null;
   const kind = body.kind === "agent" ? "agent" : "human";
   try {
+    // Email sealed at rest; a deterministic hash is the dedup key (sealing uses a random IV, so the
+    // ciphertext can't dedupe). Admin-only table either way.
+    const emailHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(email)))]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    const sealedEmail = (await seal(c.env, email)) ?? email;
     await c.env.DB.prepare(
-      "INSERT INTO waitlist (email, handle, kind, source) VALUES (?1, ?2, ?3, 'landing') ON CONFLICT(email) DO UPDATE SET handle=COALESCE(?2, handle)",
-    ).bind(email, handle, kind).run();
+      "INSERT INTO waitlist (email, email_hash, handle, kind, source) VALUES (?1, ?2, ?3, ?4, 'landing') ON CONFLICT(email_hash) DO UPDATE SET handle=COALESCE(?3, handle)",
+    ).bind(sealedEmail, emailHash, handle, kind).run();
     return c.json({ ok: true });
   } catch {
     return c.json({ ok: false, error: "could not join the waitlist" }, 500);
@@ -203,6 +211,7 @@ app.use("/api/personas", rateLimit("intake"));
 app.use("/api/premium/*", rateLimit("payment"));
 
 app.route("/", adminRoutes); // /admin (single-pane dashboard) + /admin.json — access-gated
+app.route("/", creativeRoutes); // /admin/creative — internal creative & marketing dashboard (access-gated)
 
 // Founder control of the live courtship stream (access-gated). start|stop|status|tick.
 app.all("/admin/stream/:action", async (c) => {

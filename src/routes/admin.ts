@@ -196,6 +196,7 @@ adminRoutes.get("/admin", async (c) => {
           ["api repo", "https://github.com/gokhan-vc/numetal-datebook"],
         ]),
         linkGroup("live surfaces", [
+          ["★ creative & marketing", "/admin/creative"],
           ["Privy claim (human login)", "/claim"],
           ["dashboard", "https://ishtar.numetal.xyz/dashboard/"],
           ["talk to Ishtar", "https://ishtar.numetal.xyz/talk/"],
