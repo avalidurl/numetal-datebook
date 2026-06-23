@@ -96,12 +96,9 @@ export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Respo
   // Bind the consumed token to the Privy identity that redeemed it (one-time + identity-bound).
   await db.update(escalationInvites).set({ status: "claimed", claimedAt: new Date().toISOString(), claimedBy: privy.userId ?? null }).where(eq(escalationInvites.id, invite.id)).run();
 
-  // Kick off the identity check immediately; degrade gracefully if Didit isn't configured.
-  const s = await createDiditSession(c.env, { ownerId: invite.ownerId, callbackUrl: `${new URL(c.req.url).origin}/api/identity/webhook/didit` });
-  if (s.ok && s.sessionId) {
-    await db.insert(identityVerifications).values({ ownerId: invite.ownerId, provider: "didit", sessionId: s.sessionId, status: "pending" }).run();
-  }
-  return c.json({ ok: true, ownerId: invite.ownerId, tier: "profile_claimed", diditUrl: s.ok ? s.url ?? null : null, identityNote: s.ok ? undefined : s.reason });
+  // The 18+ check now runs as a separate, privacy-preserving step (Persona Relay) that the client
+  // starts via /api/age/session after this returns — Didit is parked. Claim records profile_claimed.
+  return c.json({ ok: true, ownerId: invite.ownerId, tier: "profile_claimed" });
 }
 
 /** Map a logged-in Privy user back to the owner whose intro they claimed (claimed_by = privy sub). */
@@ -179,6 +176,7 @@ export function claimPage(c: Context<{ Bindings: Env }>): Response {
       <button id="signin" class="btn primary" disabled>&#9670; Sign in to confirm</button>
     </div>
     <p id="msg" class="sub" style="min-height:1.3em;margin-top:.9rem">Initialising sign-in&hellip;</p>
+    <div id="relay-container" style="margin-top:1.2rem"></div>
     <div id="app" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden"></div>`;
   const headHtml = `<script>window.__PRIVY_APP_ID__=${JSON.stringify(appId)};</script>
 <script src="/claim.js" defer></script>`;
