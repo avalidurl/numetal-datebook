@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db as makeDb } from "../src/db/client";
-import { couples, introConsents, owners, personas } from "../src/db/schema";
+import { couples, identityVerifications, introConsents, owners, personas } from "../src/db/schema";
 import worker from "../src/index";
 
 async function call(method: string, path: string, body?: unknown) {
@@ -55,20 +55,24 @@ describe("Privy+Didit escalation tier", () => {
     expect(r.status).toBe(503); // no PRIVY keys in test env → disabled, not a fake pass
   });
 
-  it("reveal_ready only when BOTH owners identity_verified AND both consented", async () => {
+  it("reveal_ready only when BOTH owners identity_verified, BOTH 18+, AND both consented", async () => {
     const db = makeDb(env.DB);
     // both consent
     for (const ownerId of [o1, o2]) {
       await db.insert(introConsents).values({ coupleId, ownerId, consentKind: "contact_reveal", status: "accepted" }).run();
     }
-    // only one verified → not ready
+    const status = async () => ((await (await call("GET", `/api/escalations/${coupleId}/status`)).json()) as { reveal_ready: boolean }).reveal_ready;
+    // o1 verified + 18+; only one verified → not ready
     await db.update(owners).set({ tier: "identity_verified" }).where(eq(owners.id, o1)).run();
-    let s = (await (await call("GET", `/api/escalations/${coupleId}/status`)).json()) as { reveal_ready: boolean };
-    expect(s.reveal_ready).toBe(false);
-    // both verified → ready
+    await db.insert(identityVerifications).values({ ownerId: o1, provider: "persona", status: "approved", ageOver18: 1 }).run();
+    expect(await status()).toBe(false);
+    // H1: o2 verified but NOT 18+ → STILL not ready. Tier alone must never reach reveal (minor-reveal gate).
     await db.update(owners).set({ tier: "identity_verified" }).where(eq(owners.id, o2)).run();
-    s = (await (await call("GET", `/api/escalations/${coupleId}/status`)).json()) as { reveal_ready: boolean };
-    expect(s.reveal_ready).toBe(true);
+    await db.insert(identityVerifications).values({ ownerId: o2, provider: "persona", status: "approved", ageOver18: 0 }).run();
+    expect(await status()).toBe(false);
+    // o2 records an 18+ pass → both verified AND both adult → ready.
+    await db.insert(identityVerifications).values({ ownerId: o2, provider: "persona", status: "approved", ageOver18: 1 }).run();
+    expect(await status()).toBe(true);
   });
 
   it("Didit webhook is signature-gated, NOT access-gated (reachable without the key)", async () => {
