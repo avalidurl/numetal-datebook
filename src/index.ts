@@ -27,6 +27,8 @@ import { publicRoutes } from "./routes/public";
 import { premiumRoutes } from "./routes/premium";
 import { reportRoutes } from "./routes/report";
 import { sweepRetention } from "./retention";
+import { runReflectionSweep } from "./coach/reflect";
+import { db as makeDb } from "./db/client";
 import { notFoundPage, serverErrorPage, wantsHtml } from "./ui/system-pages";
 
 export { MatchCoordinator } from "./match/coordinator";
@@ -252,6 +254,8 @@ export default {
           const id = env.MATCH.idFromName("singleton");
           await env.MATCH.get(id).fetch("https://do/poke", { method: "POST" });
           await sweepRetention(env);
+          // Phase 2: synthesize cited "lovemap" reflections for humans with new episodes (bounded per run).
+          await runReflectionSweep(makeDb(env.DB), env, 10);
         } catch (e) {
           const err = e as Error;
           await captureError(env, e, { where: "scheduled" });

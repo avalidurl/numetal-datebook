@@ -487,3 +487,60 @@ export const chatTopups = sqliteTable("chat_topups", {
   settlementTx: text("settlement_tx"),
   createdAt: text("created_at").notNull().default(now),
 });
+
+/* ----------------------------------------------------------------- coach memory (Phase 0) */
+// "Capture before you coach" — the human-side episodic substrate for Ishtar Talk. Keyed by the
+// chat wallet `subject` (lowercased address). HUMANS ONLY. The compounding data asset behind the moat.
+export const episodes = sqliteTable(
+  "episodes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    subject: text("subject").notNull(), // lowercased wallet address
+    kind: text("kind").notNull(), // advice | debrief | feedback | match | note
+    content: text("content").notNull(),
+    importance: real("importance").notNull().default(0.5), // 0..1 for scored retrieval
+    source: text("source").notNull().default("coach"),
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({ bySubject: index("idx_episodes_subject").on(t.subject, t.id) }),
+);
+
+export const userFacts = sqliteTable(
+  "user_facts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    subject: text("subject").notNull(),
+    fact: text("fact").notNull(),
+    weight: real("weight").notNull().default(0.5),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => ({ uniq: uniqueIndex("idx_user_facts_unique").on(t.subject, t.fact) }),
+);
+
+export const reflections = sqliteTable(
+  "reflections",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    subject: text("subject").notNull(),
+    summary: text("summary").notNull(),
+    cites: text("cites"), // JSON array of episode ids
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({ bySubject: index("idx_reflections_subject").on(t.subject, t.id) }),
+);
+
+// Feedback → credit (discount) ledger. The discount buys the moat data; per-day cap is enforced in code.
+export const coachFeedback = sqliteTable(
+  "coach_feedback",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    subject: text("subject").notNull(),
+    kind: text("kind").notNull(), // rating | debrief
+    rating: integer("rating"), // 1..5
+    body: text("body"),
+    creditsAwarded: integer("credits_awarded").notNull().default(0),
+    day: text("day").notNull(), // UTC YYYY-MM-DD
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({ bySubjectDay: index("idx_coach_feedback_subject_day").on(t.subject, t.day) }),
+);

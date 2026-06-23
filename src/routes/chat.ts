@@ -23,6 +23,7 @@ import {
   resolveSession,
 } from "../economics/chatcredits";
 import { accrueBuyback } from "../economics/reserve";
+import { recordEpisode, recordFeedback } from "../coach/memory";
 import { makeX402Provider, SKUS, x402Challenge } from "../payments/x402";
 
 export const chatRoutes = new Hono<{ Bindings: Env }>();
@@ -157,6 +158,16 @@ chatRoutes.post("/chat", async (c) => {
   await db.insert(chatMessages).values({ address, role: "user", body: message, mode }).run();
   if (safeReply) await db.insert(chatMessages).values({ address, role: "assistant", body: safeReply, mode }).run();
 
+  // Phase 0 — capture the coaching exchange as an episode (the compounding moat data).
+  // Best-effort: never break the reply over a capture write.
+  if (safeReply) {
+    try {
+      await recordEpisode(db, { subject: address, kind: "advice", content: `Q: ${message}\nA: ${safeReply}`, importance: mode === "coach" ? 0.6 : 0.4 });
+    } catch {
+      /* capture is best-effort */
+    }
+  }
+
   if (!safeReply) return c.json({ ok: true, reply: null, withheld: true, reason: withholdReason, via: charge.via, balance: charge.balance });
   return c.json({ ok: true, reply: safeReply, mode, via: charge.via, balance: charge.balance });
 });
@@ -171,7 +182,40 @@ chatRoutes.get("/chat/balance", async (c) => {
   return c.json({ address, ...(await getBalance(db, c.env, address)) });
 });
 
-/* ---- 5) founder grant (ACCESS_KEY) — issue a session + credits for testing/comps ---------- */
+/* ---- 5) feedback → discount (Phase 0 capture) — HUMANS ONLY ------------------------------- */
+// A rating or (high-signal) date debrief earns chat credits AND mints an episode. The discount
+// buys the proprietary "what actually landed" data the moat needs; awards are capped per day.
+const feedbackSchema = z.object({
+  kind: z.enum(["rating", "debrief"]),
+  rating: z.number().int().min(1).max(5).optional(),
+  body: z.string().max(4000).optional(),
+});
+
+chatRoutes.post("/chat/feedback", async (c) => {
+  const token = bearer(c.req.header("authorization"));
+  if (!token) return c.json({ error: "missing bearer session" }, 401);
+  const db = makeDb(c.env.DB);
+  const address = await resolveSession(db, token);
+  if (!address) return c.json({ error: "invalid or expired session" }, 401);
+
+  const parsed = feedbackSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "kind (rating|debrief) required" }, 400);
+  const { kind, rating, body } = parsed.data;
+  if (kind === "rating" && !rating) return c.json({ error: "rating (1-5) required" }, 400);
+  if (kind === "debrief" && (!body || body.trim().length < 40))
+    return c.json({ error: "a debrief needs at least 40 characters — tell Ishtar what actually happened" }, 400);
+
+  // Chaperone the free-text IN (fail-closed) before storing — it is user content.
+  if (body) {
+    const v = await chaperone(db, c.env, { stage: "chat_input", targetType: "chat_input", targetId: 0, text: body, callerRef: `feedback:${address}` });
+    if (v.verdict !== "allow" && v.verdict !== "sanitize") return c.json({ error: "feedback held by the chaperone", reason: v.reason }, 422);
+  }
+
+  const { awarded } = await recordFeedback(db, { subject: address, kind, rating, body });
+  return c.json({ ok: true, kind, creditsAwarded: awarded, ...(await getBalance(db, c.env, address)) });
+});
+
+/* ---- 6) founder grant (ACCESS_KEY) — issue a session + credits for testing/comps ---------- */
 const grantSchema = z.object({
   address: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   credits: z.number().int().min(0).max(10000).optional(),
