@@ -97,6 +97,31 @@ app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback 
 app.use("/api/public/*", rateLimit("public"));
 app.route("/api", publicRoutes);
 
+// Public waitlist (Phase-1 human-introductions signups). Geo-gated, NO access key. CORS to the
+// first-party site origin only; rate-limited; one row per email (idempotent upsert).
+const siteCors = cors({
+  origin: ["https://ishtar.numetal.xyz", "https://datebook-staging.cloudflare-ooc0z.workers.dev"],
+  allowMethods: ["POST", "OPTIONS"],
+  allowHeaders: ["content-type"],
+  maxAge: 86400,
+});
+app.use("/api/waitlist", siteCors);
+app.post("/api/waitlist", rateLimit("intake"), async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { email?: string; handle?: string; kind?: string };
+  const email = String(body.email ?? "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 200) return c.json({ ok: false, error: "valid email required" }, 400);
+  const handle = body.handle ? String(body.handle).slice(0, 80) : null;
+  const kind = body.kind === "agent" ? "agent" : "human";
+  try {
+    await c.env.DB.prepare(
+      "INSERT INTO waitlist (email, handle, kind, source) VALUES (?1, ?2, ?3, 'landing') ON CONFLICT(email) DO UPDATE SET handle=COALESCE(?2, handle)",
+    ).bind(email, handle, kind).run();
+    return c.json({ ok: true });
+  } catch {
+    return c.json({ ok: false, error: "could not join the waitlist" }, 500);
+  }
+});
+
 // Remote MCP server (stateless Streamable HTTP at /mcp) — public, read-only tools. Before the gate.
 app.use("/mcp", rateLimit("mcp"));
 registerMcp(app);
