@@ -43,8 +43,15 @@ function Bridge() {
         });
         const j = (await r.json()) as { ok?: boolean; reason?: string; error?: string; diditUrl?: string };
         if (j.ok) {
-          setMsg("Confirmed. A quick binding 18+ identity check is next…");
-          if (j.diditUrl) location.href = j.diditUrl;
+          if (j.diditUrl) {
+            setMsg("Confirmed — opening your 18+ identity check…");
+            location.href = j.diditUrl;
+          } else {
+            // Claim is recorded (owner profile_claimed); the 18+ step is sent separately if the
+            // provider is unavailable (e.g. out of credits) — never a silent dead-end.
+            setMsg("✓ Confirmed. Your introduction is locked in — we'll send your 18+ verification link shortly.");
+            if (btn) { btn.disabled = true; btn.textContent = "✓ Confirmed"; }
+          }
         } else {
           setMsg("Could not confirm: " + (j.reason || j.error || r.status), true);
         }
