@@ -9,6 +9,7 @@ import type { DB } from "../db/client";
 import { chatMessages } from "../db/schema";
 import type { Env } from "../env";
 import { normalizeForGuard } from "../chaperone/normalize";
+import { coachContext } from "../coach/reflect";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
 
@@ -63,7 +64,10 @@ export async function ishtarReply(
     .all();
   const history = recent.reverse().map((m) => ({ role: m.role, content: m.body }));
 
-  const system = ISHTAR_SYSTEM + (args.mode === "coach" ? "\n\n" + COACH_ADDENDUM : "");
+  // In coach mode, inject what Ishtar has learned about THIS person (their cited lovemap) — the
+  // evidence-grounded self-knowledge a stateless LLM can't have. Empty until the reflection job runs.
+  const coachAddendum = args.mode === "coach" ? COACH_ADDENDUM + (await coachContext(db, args.address)) : "";
+  const system = ISHTAR_SYSTEM + (coachAddendum ? "\n\n" + coachAddendum : "");
   const messages = [{ role: "system", content: system }, ...history, { role: "user", content: args.message }];
 
   // paid:true — the credit/free-quota system is the spend gate here; the AI Gateway dollar cap is
