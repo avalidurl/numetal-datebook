@@ -35,6 +35,15 @@ async function revealReady(db: DB, coupleId: number): Promise<boolean> {
   if (ids.length < 2) return false;
   const verified = await db.select({ id: owners.id }).from(owners).where(and(inArray(owners.id, ids), eq(owners.tier, "identity_verified"))).all();
   if (verified.length < ids.length) return false;
+  // H1: tier alone is not enough — require a recorded 18+ result for BOTH owners. A provider that
+  // reported verified-but-not-adult must NEVER reach contact reveal. The age flag is the gate.
+  const adult = await db
+    .select({ ownerId: identityVerifications.ownerId })
+    .from(identityVerifications)
+    .where(and(inArray(identityVerifications.ownerId, ids), eq(identityVerifications.ageOver18, 1)))
+    .all();
+  const adultSet = new Set(adult.map((a) => a.ownerId));
+  if (!ids.every((i) => adultSet.has(i))) return false;
   const consents = await db
     .select({ ownerId: introConsents.ownerId })
     .from(introConsents)
@@ -101,13 +110,17 @@ export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Respo
   return c.json({ ok: true, ownerId: invite.ownerId, tier: "profile_claimed" });
 }
 
-/** Map a logged-in Privy user back to the owner whose intro they claimed (claimed_by = privy sub). */
-async function ownerForPrivyUser(env: Env, userId?: string): Promise<number | null> {
-  if (!userId) return null;
-  const row = await env.DB.prepare("SELECT owner_id FROM escalation_invites WHERE claimed_by=?1 ORDER BY id DESC LIMIT 1")
-    .bind(userId)
-    .first<{ owner_id: number }>();
-  return row?.owner_id ?? null;
+/**
+ * Resolve the owner an age request is for — BOUND to the invite token AND the Privy user that
+ * claimed it (red-team C1/H7/M3). No "most-recent-claim" guessing: an attacker can't drive an owner
+ * they didn't claim, and the relay session keys to this exact (invite, login).
+ */
+async function resolveClaimedOwner(env: Env, token?: string, userId?: string): Promise<{ ownerId: number; inviteId: number } | null> {
+  if (!token || !userId) return null;
+  const row = await env.DB.prepare("SELECT id, owner_id FROM escalation_invites WHERE token=?1 AND status='claimed' AND claimed_by=?2 LIMIT 1")
+    .bind(token, userId)
+    .first<{ id: number; owner_id: number }>();
+  return row ? { ownerId: row.owner_id, inviteId: row.id } : null;
 }
 
 /**
@@ -116,36 +129,28 @@ async function ownerForPrivyUser(env: Env, userId?: string): Promise<number | nu
  * consumed invite. Returns the Relay widget access token.
  */
 export async function ageSessionHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { privyToken } = (await c.req.json().catch(() => ({}))) as { privyToken?: string };
-  if (!privyToken) return c.json({ ok: false, error: "privyToken required" }, 400);
+  const { privyToken, token } = (await c.req.json().catch(() => ({}))) as { privyToken?: string; token?: string };
+  if (!privyToken || !token) return c.json({ ok: false, error: "token + privyToken required" }, 400);
   const privy = await verifyPrivyToken(c.env, privyToken);
   if (!privy.ok) return c.json({ ok: false, error: "privy verification failed", reason: privy.reason }, 401);
-  const ownerId = await ownerForPrivyUser(c.env, privy.userId);
-  if (!ownerId) return c.json({ ok: false, error: "no claimed profile for this login" }, 404);
-  const s = await createAgeSession(c.env, ownerId);
+  const claimed = await resolveClaimedOwner(c.env, token, privy.userId);
+  if (!claimed) return c.json({ ok: false, error: "no claimed profile for this login" }, 404);
+  const s = await createAgeSession(c.env, claimed.ownerId, claimed.inviteId, privy.userId as string);
   if (!s.ok) return c.json({ ok: false, error: "age check unavailable", reason: s.reason }, 503);
   return c.json({ ok: true, accessToken: s.accessToken });
 }
 
 /** POST /api/age/claim — redeem the completed Relay claim; on pass, mark the owner identity_verified. */
 export async function ageClaimHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { privyToken } = (await c.req.json().catch(() => ({}))) as { privyToken?: string };
-  if (!privyToken) return c.json({ ok: false, error: "privyToken required" }, 400);
+  const { privyToken, token } = (await c.req.json().catch(() => ({}))) as { privyToken?: string; token?: string };
+  if (!privyToken || !token) return c.json({ ok: false, error: "token + privyToken required" }, 400);
   const privy = await verifyPrivyToken(c.env, privyToken);
   if (!privy.ok) return c.json({ ok: false, error: "privy verification failed", reason: privy.reason }, 401);
-  const ownerId = await ownerForPrivyUser(c.env, privy.userId);
-  if (!ownerId) return c.json({ ok: false, error: "no claimed profile for this login" }, 404);
-  const r = await redeemAgeClaim(c.env, ownerId);
+  const claimed = await resolveClaimedOwner(c.env, token, privy.userId);
+  if (!claimed) return c.json({ ok: false, error: "no claimed profile for this login" }, 404);
+  // The promotion + 18+ record happen atomically + idempotently inside redeemAgeClaim.
+  const r = await redeemAgeClaim(c.env, claimed.ownerId, privy.userId as string);
   if (!r.ok) return c.json({ ok: false, error: "could not retrieve age result", reason: r.reason }, 502);
-  const passed = r.result === "passed";
-  await c.env.DB.prepare("INSERT INTO identity_verifications (owner_id, provider, status, age_over_18) VALUES (?1,'persona',?2,?3)")
-    .bind(ownerId, passed ? "approved" : "declined", passed ? 1 : 0)
-    .run();
-  if (passed) {
-    await c.env.DB.prepare("UPDATE owners SET tier='identity_verified', updated_at=datetime('now') WHERE id=?1 AND tier='profile_claimed'")
-      .bind(ownerId)
-      .run();
-  }
   return c.json({ ok: true, result: r.result });
 }
 

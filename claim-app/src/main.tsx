@@ -37,7 +37,7 @@ function startAgeWidget(accessToken: string) {
       setMsg("Verifying…");
       try {
         const privyToken = getToken ? await getToken() : null;
-        const res = await postJSON("/api/age/claim", { privyToken });
+        const res = await postJSON("/api/age/claim", { token: TOKEN, privyToken });
         if (res.ok && res.result === "passed") setMsg("✓ Verified. Your introduction is unlocked — we'll connect you shortly.");
         else if (res.ok) setMsg("That didn't meet the 18+ requirement. This venue is adults-only.", true);
         else setMsg("Couldn't complete the check: " + (res.reason || res.error || "please try again"), true);
@@ -77,7 +77,7 @@ function Bridge() {
           setMsg("Could not confirm: " + (claim.reason || claim.error), true);
           return;
         }
-        const sess = await postJSON("/api/age/session", { privyToken: await getAccessToken() });
+        const sess = await postJSON("/api/age/session", { token: TOKEN, privyToken: await getAccessToken() });
         if (sess.ok && sess.accessToken) {
           startAgeWidget(String(sess.accessToken));
         } else {
