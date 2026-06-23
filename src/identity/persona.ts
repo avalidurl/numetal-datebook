@@ -12,13 +12,16 @@
  * (status + identity_verifications + tier) in one place so a replay can't double-spend (M2). Error
  * reasons are token-sanitized before they leave this module (L1).
  */
-import { Persona } from "@persona/sdk-node";
 import type { Env } from "../env";
 import { open, seal } from "../crypto/box";
 
 const SESSION_TTL_MS = 15 * 60 * 1000;
 
-function client(env: Env) {
+// Lazy-load the Persona SDK so it stays OUT of the static import graph: the deployed worker bundle
+// inlines this dynamic import (verified live), while the vitest-pool-workers test runtime — which
+// can't CJS-require the SDK's ESM dep — never evaluates it unless a test exercises the age flow.
+async function client(env: Env) {
+  const { Persona } = await import("@persona/sdk-node");
   return new Persona({ apiKey: env.PERSONA_API_KEY });
 }
 
@@ -49,7 +52,7 @@ export async function createAgeSession(
     return { ok: false, reason: "a verification is already in progress for this profile" };
   }
   try {
-    const persona = client(env);
+    const persona = await client(env);
     const claimType = env.PERSONA_CLAIM_TYPE;
     const { relayToken, relaySecret, relaySessionAccessToken } = await persona.relays.create({
       claimType,
@@ -92,7 +95,7 @@ export async function redeemAgeClaim(
     if (row.claimed_by && row.claimed_by !== claimedBy) return { ok: false, reason: "session does not belong to this login" };
     if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) return { ok: false, reason: "age session expired" };
 
-    const persona = client(env);
+    const persona = await client(env);
     const relaySecret = (await open(env, row.relay_secret)) as string;
     const privacyPassToken = (await open(env, row.privacy_pass_token)) as string;
     const { claimPayload } = await persona.relays.generateClaim({ relayToken: row.relay_token, relaySecret, privacyPassToken });
