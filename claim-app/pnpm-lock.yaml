@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@persona/relay':
+        specifier: 0.1.9
+        version: 0.1.9
       '@privy-io/react-auth':
         specifier: ^2.13.0
         version: 2.25.0(@solana/kit@5.5.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))(@solana/web3.js@1.98.4(bufferutil@4.1.0)(encoding@0.1.13)(typescript@5.9.3)(utf-8-validate@6.0.6))(@types/react@19.2.17)(bs58@6.0.0)(bufferutil@4.1.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.6.0(react@18.3.1))(utf-8-validate@6.0.6)(zod@3.25.76)
@@ -515,6 +518,9 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
+
+  '@persona/relay@0.1.9':
+    resolution: {integrity: sha512-i8sX4mcZ/9hrxNDQyFFUDnGgUS0Z4kTJegF+EIlvOD8qZq/rQT/Hwz5j595jasOssO67WijiQg3drHlb+ULEUQ==}
 
   '@phosphor-icons/webcomponents@2.1.5':
     resolution: {integrity: sha512-JcvQkZxvcX2jK+QCclm8+e8HXqtdFW9xV4/kk2aL9Y3dJA2oQVt+pzbv1orkumz3rfx4K9mn9fDoMr1He1yr7Q==}
@@ -3861,6 +3867,10 @@ snapshots:
 
   '@noble/hashes@1.8.0': {}
 
+  '@persona/relay@0.1.9':
+    dependencies:
+      qs: 6.15.2
+
   '@phosphor-icons/webcomponents@2.1.5':
     dependencies:
       lit: 3.3.0
@@ -5332,7 +5342,7 @@ snapshots:
 
   '@types/connect@3.4.38':
     dependencies:
-      '@types/node': 12.20.55
+      '@types/node': 26.0.0
 
   '@types/debug@4.1.13':
     dependencies:
@@ -5359,7 +5369,7 @@ snapshots:
 
   '@types/ws@7.4.7':
     dependencies:
-      '@types/node': 12.20.55
+      '@types/node': 26.0.0
 
   '@types/ws@8.18.1':
     dependencies:
