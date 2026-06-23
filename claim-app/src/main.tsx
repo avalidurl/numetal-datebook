@@ -60,7 +60,10 @@ const mount = document.getElementById("app") || document.body;
 createRoot(mount).render(
   React.createElement(
     PrivyProvider,
-    { appId: APP_ID, config: { embeddedWallets: { ethereum: { createOnLogin: "users-without-wallets" } } } },
+    // No embedded wallet — a human confirming a date only needs to authenticate. Forcing wallet
+    // creation on login was hanging at "creating your wallet". External-wallet *login* still works;
+    // this only disables auto-provisioning an embedded wallet.
+    { appId: APP_ID, config: { embeddedWallets: { ethereum: { createOnLogin: "off" }, solana: { createOnLogin: "off" } } } },
     React.createElement(Bridge),
   ),
 );
