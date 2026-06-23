@@ -12,5 +12,9 @@ export async function sweepRetention(env: Env): Promise<{ deleted: number }> {
   const i = await env.DB.prepare("DELETE FROM inference_costs WHERE created_at < ?1").bind(cutoff).run();
   const a = await env.DB.prepare("DELETE FROM access_denials WHERE created_at < ?1").bind(cutoff).run();
   const x = await env.DB.prepare("DELETE FROM error_events WHERE created_at < ?1").bind(cutoff).run();
-  return { deleted: (e.meta.changes ?? 0) + (i.meta.changes ?? 0) + (a.meta.changes ?? 0) + (x.meta.changes ?? 0) };
+  // Relay sessions hold the (encrypted) age-verification secrets — purge aggressively on a 7-day TTL,
+  // independent of the general retention window (red-team M5). Sessions are also consumed in ~15 min.
+  const relayCutoff = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const rs = await env.DB.prepare("DELETE FROM relay_sessions WHERE created_at < ?1").bind(relayCutoff).run();
+  return { deleted: (e.meta.changes ?? 0) + (i.meta.changes ?? 0) + (a.meta.changes ?? 0) + (x.meta.changes ?? 0) + (rs.meta.changes ?? 0) };
 }

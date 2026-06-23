@@ -37,5 +37,16 @@ export const geoGate = createMiddleware<{ Bindings: Env }>(async (c, next) => {
     if (wantsHtml(c.req.header("accept"))) return c.html(geoBlockPage(), 403);
     return c.json({ error: "service unavailable in this location" }, 403);
   }
+
+  // Red-team M6: fail-CLOSED on UNKNOWN geo for sensitive/regulated routes — if we can't determine
+  // the jurisdiction, we don't serve the gated functionality (claim, age, intake, payments,
+  // escalations). Public surfaces (landing, /health, MCP, read-only stats) stay reachable.
+  if (
+    (country === "XX" || !country) &&
+    /^\/(claim$|api\/(age|intake|premium|escalations|personas))/.test(c.req.path)
+  ) {
+    if (wantsHtml(c.req.header("accept"))) return c.html(geoBlockPage(), 403);
+    return c.json({ error: "service unavailable in this location" }, 403);
+  }
   await next();
 });
