@@ -308,6 +308,7 @@ export const paymentReceipts = sqliteTable(
     orderId: text("order_id").notNull().references(() => premiumOrders.orderId),
     paymentProtocol: text("payment_protocol").notNull().default("x402"),
     network: text("network").notNull(),
+    nonce: text("nonce"), // anti-replay key (red-team C4); UNIQUE(network, nonce) via migration 0010
     facilitator: text("facilitator").notNull(),
     payer: text("payer"),
     payTo: text("pay_to").notNull(),
@@ -482,6 +483,7 @@ export const chatTopups = sqliteTable("chat_topups", {
   amountUsdc: text("amount_usdc").notNull(),
   credits: integer("credits").notNull(),
   network: text("network").notNull(),
+  nonce: text("nonce"), // anti-replay key (red-team C4); UNIQUE(network, nonce) via migration 0010
   settlementTx: text("settlement_tx"),
   createdAt: text("created_at").notNull().default(now),
 });

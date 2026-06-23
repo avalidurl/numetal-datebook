@@ -100,6 +100,7 @@ chatRoutes.post("/chat/topup", async (c) => {
       amountUsdc: v.amountUsdc ?? String(dollars),
       credits,
       network: provider.network,
+      nonce: v.nonce,
       settlementTx: v.tx,
     })
     .onConflictDoNothing()
