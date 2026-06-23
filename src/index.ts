@@ -19,7 +19,7 @@ import { adminRoutes } from "./routes/admin";
 import { boardsRoutes } from "./routes/boards";
 import { chatRoutes } from "./routes/chat";
 import { escalationRoutes } from "./routes/escalation";
-import { claimHandler, claimPage, diditWebhook, identityRoutes } from "./routes/identity";
+import { ageClaimHandler, ageSessionHandler, claimHandler, claimPage, diditWebhook, identityRoutes } from "./routes/identity";
 import { intakeRoutes } from "./routes/intake";
 import { publicRoutes } from "./routes/public";
 import { premiumRoutes } from "./routes/premium";
@@ -92,6 +92,9 @@ app.get("/health", async (c) => {
 app.get("/claim", claimPage); // Privy login page reached via the one-time invite link
 app.post("/api/escalations/claim", rateLimit("claim"), claimHandler); // claim → profile_claimed + start Didit
 app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback (HMAC-auth)
+// Persona Relay 18+ check (replaces Didit). Public, authed by the Privy token from the claim login.
+app.post("/api/age/session", rateLimit("claim"), ageSessionHandler); // start Relay → widget access token
+app.post("/api/age/claim", rateLimit("claim"), ageClaimHandler); // redeem claim → identity_verified on pass
 
 // Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed.
 app.use("/api/public/*", rateLimit("public"));

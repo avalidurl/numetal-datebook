@@ -12,6 +12,7 @@ import { db as makeDb, type DB } from "../db/client";
 import { couples, escalationInvites, events, identityVerifications, introConsents, owners, personas } from "../db/schema";
 import type { Env } from "../env";
 import { createDiditSession, verifyDiditWebhook } from "../identity/didit";
+import { createAgeSession, redeemAgeClaim } from "../identity/persona";
 import { verifyPrivyToken } from "../identity/privy";
 import { claimShell } from "../ui/system-pages";
 
@@ -101,6 +102,54 @@ export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Respo
     await db.insert(identityVerifications).values({ ownerId: invite.ownerId, provider: "didit", sessionId: s.sessionId, status: "pending" }).run();
   }
   return c.json({ ok: true, ownerId: invite.ownerId, tier: "profile_claimed", diditUrl: s.ok ? s.url ?? null : null, identityNote: s.ok ? undefined : s.reason });
+}
+
+/** Map a logged-in Privy user back to the owner whose intro they claimed (claimed_by = privy sub). */
+async function ownerForPrivyUser(env: Env, userId?: string): Promise<number | null> {
+  if (!userId) return null;
+  const row = await env.DB.prepare("SELECT owner_id FROM escalation_invites WHERE claimed_by=?1 ORDER BY id DESC LIMIT 1")
+    .bind(userId)
+    .first<{ owner_id: number }>();
+  return row?.owner_id ?? null;
+}
+
+/**
+ * POST /api/age/session — start the Persona Relay 18+ check for the logged-in claimant. Public,
+ * authed by the Privy token from the claim login (NOT the founder key), mapped to the owner via the
+ * consumed invite. Returns the Relay widget access token.
+ */
+export async function ageSessionHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { privyToken } = (await c.req.json().catch(() => ({}))) as { privyToken?: string };
+  if (!privyToken) return c.json({ ok: false, error: "privyToken required" }, 400);
+  const privy = await verifyPrivyToken(c.env, privyToken);
+  if (!privy.ok) return c.json({ ok: false, error: "privy verification failed", reason: privy.reason }, 401);
+  const ownerId = await ownerForPrivyUser(c.env, privy.userId);
+  if (!ownerId) return c.json({ ok: false, error: "no claimed profile for this login" }, 404);
+  const s = await createAgeSession(c.env, ownerId);
+  if (!s.ok) return c.json({ ok: false, error: "age check unavailable", reason: s.reason }, 503);
+  return c.json({ ok: true, accessToken: s.accessToken });
+}
+
+/** POST /api/age/claim — redeem the completed Relay claim; on pass, mark the owner identity_verified. */
+export async function ageClaimHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { privyToken } = (await c.req.json().catch(() => ({}))) as { privyToken?: string };
+  if (!privyToken) return c.json({ ok: false, error: "privyToken required" }, 400);
+  const privy = await verifyPrivyToken(c.env, privyToken);
+  if (!privy.ok) return c.json({ ok: false, error: "privy verification failed", reason: privy.reason }, 401);
+  const ownerId = await ownerForPrivyUser(c.env, privy.userId);
+  if (!ownerId) return c.json({ ok: false, error: "no claimed profile for this login" }, 404);
+  const r = await redeemAgeClaim(c.env, ownerId);
+  if (!r.ok) return c.json({ ok: false, error: "could not retrieve age result", reason: r.reason }, 502);
+  const passed = r.result === "passed";
+  await c.env.DB.prepare("INSERT INTO identity_verifications (owner_id, provider, status, age_over_18) VALUES (?1,'persona',?2,?3)")
+    .bind(ownerId, passed ? "approved" : "declined", passed ? 1 : 0)
+    .run();
+  if (passed) {
+    await c.env.DB.prepare("UPDATE owners SET tier='identity_verified', updated_at=datetime('now') WHERE id=?1 AND tier='profile_claimed'")
+      .bind(ownerId)
+      .run();
+  }
+  return c.json({ ok: true, result: r.result });
 }
 
 /** PUBLIC claim page (GET /claim?token=…) — minimal Privy login, then POST to /api/escalations/claim

@@ -97,8 +97,12 @@ CHAT_CREDITS_PER_USD = "25"
 # Cloudflare Access (operator email gate on admin.ishtar.numetal.xyz). Not secrets.
 ACCESS_TEAM_DOMAIN = "gokhanturhan.cloudflareaccess.com"
 ACCESS_AUD = "7ed0477d11e5fda6a22390305c1c0136b0ff99c1ca02f10d92db3ea1541a3e80"
+# Persona Relay age-assurance (Phase-1 18+ gate). Set to the "Age 18+ Verified" Claim Type ID from
+# Persona Dashboard → Relay. Empty = the gate degrades gracefully (claim stays profile_claimed).
+PERSONA_CLAIM_TYPE = ""
 
 # Secrets (never in this file):
+#   wrangler secret put PERSONA_API_KEY # Persona Relay (Sandbox key; bypasses credit checks)
 #   wrangler secret put ACCESS_KEY      # operator gate
 #   wrangler secret put PAY_TO          # x402 receive address
 #   wrangler secret put ENCRYPTION_KEY  # base64 of 32 random bytes: openssl rand -base64 32
