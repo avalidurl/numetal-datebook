@@ -67,15 +67,15 @@ describe("talk-to-Ishtar credits", () => {
 
   it("spends the $NUMETAL free allowance before paid credits, bounded by perk quota", async () => {
     const db = makeDb(env.DB);
-    // priority perk = 10 free/day; give 1 paid credit to prove free is used first.
+    // priority perk (≥500M) = 12 free/day; give 1 paid credit to prove free is used first.
     await seed(db, { perk: "priority", credits: 1 });
     const used: string[] = [];
-    for (let i = 0; i < 11; i++) {
+    for (let i = 0; i < 13; i++) {
       const r = await chargeOne(db, env, ADDR);
       if (r.ok) used.push(r.via);
     }
-    // 10 free, then the 11th falls through to the single paid credit.
-    expect(used.filter((v) => v === "free")).toHaveLength(10);
+    // 12 free, then the 13th falls through to the single paid credit.
+    expect(used.filter((v) => v === "free")).toHaveLength(12);
     expect(used.filter((v) => v === "paid")).toHaveLength(1);
     const acct = await db.select().from(chatAccounts).where(eq(chatAccounts.address, ADDR)).get();
     expect(acct?.credits).toBe(0);
