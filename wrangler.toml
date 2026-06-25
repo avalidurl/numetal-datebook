@@ -98,6 +98,9 @@ STREAM_DAILY_BUDGET_USD = "5"
 # model used for gambits, which is poor for open chat). 25 messages per $1 USDC top-up.
 CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 CHAT_CREDITS_PER_USD = "25"
+# Newsletter (Resend). Not secrets — the API key is a Worker secret (wrangler secret put RESEND_API_KEY).
+RESEND_AUDIENCE_ID = "6cf4ebf1-2cd8-47b1-8ae9-7d96b8ea4405"
+NEWSLETTER_FROM = "Ishtar <ishtar@numetal.xyz>"
 # Cloudflare Access (operator email gate on admin.ishtar.numetal.xyz). Not secrets.
 ACCESS_TEAM_DOMAIN = "gokhanturhan.cloudflareaccess.com"
 ACCESS_AUD = "7ed0477d11e5fda6a22390305c1c0136b0ff99c1ca02f10d92db3ea1541a3e80"
