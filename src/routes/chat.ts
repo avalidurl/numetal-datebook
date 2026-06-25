@@ -36,6 +36,23 @@ export const chatRoutes = new Hono<{ Bindings: Env }>();
 const bearer = (auth?: string): string | undefined =>
   auth?.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : undefined;
 
+// Pre-launch access gate: during the closed test only whitelisted wallets get a real coaching reply;
+// everyone else gets a friendly "opens soon". Flip CHAT_LAUNCHED=true (env, no redeploy if read live) at
+// launch to open to all. The founder wallet (gokhan.eth) is ALWAYS allowed; CHAT_WHITELIST adds more.
+const FOUNDER_WALLET = "0x36de990133d36d7e3df9a820aa3ede5a2320de71"; // gokhan.eth — pre-launch tester
+const PRELAUNCH_REPLY =
+  "Ishtar Talk is in a closed test right now — it opens to everyone soon. You're early: join the list at " +
+  "ishtar.numetal.xyz/subscribe and I'll be right here when the doors open.";
+export function chatOpenFor(env: Env, address: string): boolean {
+  if (env.CHAT_LAUNCHED === "true" || env.CHAT_LAUNCHED === "1") return true; // launched → everyone
+  const wl = new Set([FOUNDER_WALLET]);
+  if (env.CHAT_WHITELIST) for (const a of env.CHAT_WHITELIST.split(",")) {
+    const t = a.trim().toLowerCase();
+    if (t) wl.add(t);
+  }
+  return wl.has(address.toLowerCase());
+}
+
 /* ---- 1) session via wallet signature (free path) ----------------------------------------- */
 // The client signs a short message that NAMES the venue and carries a recent ISO timestamp;
 // we verify the signature recovers to the claimed address (viem) and that the message is fresh.
@@ -163,6 +180,12 @@ chatRoutes.post("/chat", async (c) => {
   if (detectMinor(message)) {
     await recordMinorEvent(db, `chat:${address}`);
     return c.json({ ok: true, reply: MINOR_REDIRECT, mode, via: "age_gate", safety: "adults_only", ...(await getBalance(db, c.env, address)) });
+  }
+
+  // (a0c) PRE-LAUNCH gate — closed test: only whitelisted wallets get a real coaching reply; everyone
+  // else gets a friendly "opens soon" (safety layers above still run for all). No charge, no model.
+  if (!chatOpenFor(c.env, address)) {
+    return c.json({ ok: true, reply: PRELAUNCH_REPLY, mode, via: "prelaunch", ...(await getBalance(db, c.env, address)) });
   }
 
   // (a) chaperone the human's input BEFORE charging — a blocked message costs nothing. Fail-closed.
