@@ -16,7 +16,10 @@ import { chatMessages, chatTopups } from "../db/schema";
 import type { Env } from "../env";
 import {
   addCredits,
+  affirms18Plus,
+  attest18,
   chargeOne,
+  isAdultAttested,
   consumeNonce,
   creditsPerUsd,
   getBalance,
@@ -58,6 +61,9 @@ chatRoutes.post("/chat/session", async (c) => {
     return c.json({ error: "message must include an ISO-8601 timestamp issued within 10 minutes" }, 400);
   const nonce = message.match(/nonce:\s*([a-f0-9]{16,})/i)?.[1];
   if (!nonce) return c.json({ error: "message must include a server nonce — GET /api/chat/nonce first" }, 400);
+  // Adults-only: the signed message must affirm 18+. Because it's part of the signed payload, the
+  // attestation is cryptographically bound to the wallet — not a spoofable checkbox.
+  if (!affirms18Plus(message)) return c.json({ error: "message must affirm you are 18 or older (include \"18+\")" }, 400);
   let valid = false;
   try {
     valid = await verifyMessage({ address: address as `0x${string}`, message, signature: signature as `0x${string}` });
@@ -69,16 +75,18 @@ chatRoutes.post("/chat/session", async (c) => {
   const db = makeDb(c.env.DB);
   // Consume the nonce only after the signature checks out → single-use, replay-proof.
   if (!(await consumeNonce(db, nonce))) return c.json({ error: "nonce invalid, expired, or already used — request a new one" }, 401);
+  await attest18(db, address); // signed 18+ affirmation → recorded
   const { token, expiresAt } = await mintSession(db, address, "signature");
   return c.json({ ok: true, sessionToken: token, expiresAt, address: address.toLowerCase(), ...(await getBalance(db, c.env, address)) });
 });
 
 /* ---- 2) top up credits with x402 (USDC on Base) ------------------------------------------ */
-const topupSchema = z.object({ ref: z.string().min(8).max(100) });
+const topupSchema = z.object({ ref: z.string().min(8).max(100), over18: z.boolean().optional() });
 
 chatRoutes.post("/chat/topup", async (c) => {
   const parsed = topupSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "ref (client idempotency key, 8-100 chars) required" }, 400);
+  if (!parsed.data.over18) return c.json({ error: "over18:true required — you must confirm you are 18 or older" }, 400);
   if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
   if (c.env.X402_MODE === "mainnet") return c.json({ error: "mainnet x402 not yet wired — see DEPLOY.md" }, 503);
 
@@ -113,6 +121,7 @@ chatRoutes.post("/chat/topup", async (c) => {
     await addCredits(db, v.payer, credits);
     await accrueBuyback(db, c.env, null, dollars); // chat has no premium_orders row → null order ref
   }
+  await attest18(db, v.payer); // over18 confirmed above → recorded
   const { token, expiresAt } = await mintSession(db, v.payer, "topup");
   return c.json({ ok: true, credited: !!first, sessionToken: token, expiresAt, address: v.payer.toLowerCase(), ...(await getBalance(db, c.env, v.payer)) });
 });
@@ -126,6 +135,10 @@ chatRoutes.post("/chat", async (c) => {
   const db = makeDb(c.env.DB);
   const address = await resolveSession(db, token);
   if (!address) return c.json({ error: "invalid or expired session" }, 401);
+  // Binding adults-only check: a recorded 18+ attestation is required to send (closes pre-attestation
+  // accounts + makes the attestation enforced, not just logged). Re-attest by minting a fresh session.
+  if (!(await isAdultAttested(db, address)))
+    return c.json({ error: "confirm you are 18 or older — start a new session", reattest: true }, 403);
 
   const parsed = chatSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "message (1-2000 chars) required" }, 400);
@@ -219,6 +232,9 @@ chatRoutes.post("/chat/feedback", async (c) => {
   const db = makeDb(c.env.DB);
   const address = await resolveSession(db, token);
   if (!address) return c.json({ error: "invalid or expired session" }, 401);
+  // Same binding adults-only gate as POST /chat — no credit-earning without a recorded 18+ attestation.
+  if (!(await isAdultAttested(db, address)))
+    return c.json({ error: "confirm you are 18 or older — start a new session", reattest: true }, 403);
 
   const parsed = feedbackSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "kind (rating|debrief) required" }, 400);
@@ -267,6 +283,7 @@ chatRoutes.post("/chat/admin/grant", async (c) => {
   const address = (parsed.data.address ?? "0x000000000000000000000000000000000000dEaD").toLowerCase();
   const credits = parsed.data.credits ?? 50;
   await addCredits(db, address, credits);
+  await attest18(db, address); // founder grant (testing/comps) — attested
   const { token, expiresAt } = await mintSession(db, address, "admin");
   return c.json({ ok: true, address, granted: credits, sessionToken: token, expiresAt, ...(await getBalance(db, c.env, address)) });
 });

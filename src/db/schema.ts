@@ -432,6 +432,8 @@ export const chatAccounts = sqliteTable("chat_accounts", {
   freeUsedDay: text("free_used_day"), // YYYY-MM-DD the free counter applies to
   freeUsedCount: integer("free_used_count").notNull().default(0),
   perkCheckedAt: text("perk_checked_at"), // last on-chain balance read (cached ~1 day)
+  ageAttested: integer("age_attested").notNull().default(0), // 18+ attested at session mint
+  ageAttestedAt: text("age_attested_at"),
   createdAt: text("created_at").notNull().default(now),
   updatedAt: text("updated_at").notNull().default(now),
 });
