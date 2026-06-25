@@ -7,7 +7,6 @@
  * chat credits — the discount literally buys the proprietary "what actually landed" data the moat
  * depends on. Awards are CAPPED per UTC day so feedback isn't a free-credit faucet.
  */
-import { and, eq } from "drizzle-orm";
 import type { DB } from "../db/client";
 import { coachFeedback, episodes } from "../db/schema";
 import { utcDay } from "../env";
@@ -36,10 +35,9 @@ export async function recordEpisode(
     .run();
 }
 
-// Credits per feedback kind — a real outcome debrief is worth far more than a thumbs-up.
+// Credits per feedback kind — a real outcome debrief is worth far more than a thumbs-up. With the
+// per-(subject,kind,day) credit-once guarantee (migration 0014), these also cap the daily total at 12.
 const AWARD: Record<"rating" | "debrief", number> = { rating: 2, debrief: 10 };
-// Hard ceiling on credits earnable from feedback per UTC day (anti-farming).
-const DAILY_AWARD_CAP = 12;
 
 export interface FeedbackInput {
   subject: string;
@@ -49,36 +47,40 @@ export interface FeedbackInput {
 }
 
 /**
- * Store feedback, mint the corresponding episode, and award capped chat credits (the "discount").
- * Idempotency/anti-abuse: at most one credited award per KIND per day, and total feedback credits
- * never exceed DAILY_AWARD_CAP/day. Feedback is always stored (data is the point); credits may be 0.
+ * Store feedback, mint the corresponding episode, and award chat credits (the "discount") — at most
+ * ONCE per (subject, kind, day). The award is ATOMIC: insert a CREDITED row and let the partial unique
+ * index (migration 0014) reject a racing second credited row for the same key, awarding only when the
+ * insert actually created the row — the same idempotent pattern as chat top-ups. This closes the
+ * TOCTOU race the old read-then-write had. Feedback is always stored (data is the point); credits 0.
  */
 export async function recordFeedback(db: DB, e: FeedbackInput): Promise<{ awarded: number }> {
   const subject = lc(e.subject);
   const day = utcDay();
+  const award = AWARD[e.kind];
+  const row = {
+    subject,
+    kind: e.kind,
+    rating: e.kind === "rating" ? (e.rating ?? null) : null,
+    body: e.body?.slice(0, 4000) ?? null,
+  };
 
-  const todays = await db
-    .select()
-    .from(coachFeedback)
-    .where(and(eq(coachFeedback.subject, subject), eq(coachFeedback.day, day)))
-    .all();
-  const awardedToday = todays.reduce((s, r) => s + (r.creditsAwarded ?? 0), 0);
-  const alreadyCreditedThisKind = todays.some((r) => r.kind === e.kind && (r.creditsAwarded ?? 0) > 0);
-
-  const want = alreadyCreditedThisKind ? 0 : AWARD[e.kind];
-  const awarded = Math.max(0, Math.min(want, DAILY_AWARD_CAP - awardedToday));
-
-  await db
+  // Atomically CLAIM the once-per-(subject,kind,day) credit: a racing second credited insert hits the
+  // partial unique index and no-ops. Award only when this insert actually created the row.
+  const claimed = await db
     .insert(coachFeedback)
-    .values({
-      subject,
-      kind: e.kind,
-      rating: e.kind === "rating" ? (e.rating ?? null) : null,
-      body: e.body?.slice(0, 4000) ?? null,
-      creditsAwarded: awarded,
-      day,
-    })
-    .run();
+    .values({ ...row, creditsAwarded: award, day })
+    .onConflictDoNothing()
+    .returning({ id: coachFeedback.id })
+    .get();
+
+  let awarded = 0;
+  if (claimed) {
+    awarded = award;
+    await addCredits(db, subject, awarded);
+  } else {
+    // Already credited this kind today → still store the feedback (uncredited) for the data.
+    await db.insert(coachFeedback).values({ ...row, creditsAwarded: 0, day }).run();
+  }
 
   // Mint the episode — a debrief is the high-signal "what actually landed" record.
   await recordEpisode(db, {
@@ -89,6 +91,5 @@ export async function recordFeedback(db: DB, e: FeedbackInput): Promise<{ awarde
     source: "feedback",
   });
 
-  if (awarded > 0) await addCredits(db, subject, awarded);
   return { awarded };
 }

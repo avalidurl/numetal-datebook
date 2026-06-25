@@ -35,6 +35,8 @@ const LEAK_ANCHORS = [
   "you will not produce sexual content",
   "decline warmly and stay ishtar",
   "speak to the human in front of you",
+  "mode: dating coach / vibe-check", // coach-mode parity (audit)
+  "the friend who tells the truth because", // coach-mode parity (audit)
 ];
 export function looksLikeSystemLeak(reply: string): boolean {
   // Normalize first (red-team H5): strip invisibles / fold homoglyphs so a reply like

@@ -14,7 +14,7 @@ import { accessGate } from "./middleware/access";
 import { geoGate } from "./middleware/geo";
 import { registerMcp } from "./mcp";
 import { rateLimit } from "./middleware/ratelimit";
-import { seal } from "./crypto/box";
+import { hmacHex, seal } from "./crypto/box";
 import { captureError, recordError } from "./observability";
 import { adminRoutes } from "./routes/admin";
 import { creativeRoutes } from "./routes/creative";
@@ -127,11 +127,10 @@ app.post("/api/waitlist", rateLimit("intake"), async (c) => {
   const handle = body.handle ? String(body.handle).slice(0, 80) : null;
   const kind = body.kind === "agent" ? "agent" : "human";
   try {
-    // Email sealed at rest; a deterministic hash is the dedup key (sealing uses a random IV, so the
-    // ciphertext can't dedupe). Admin-only table either way.
-    const emailHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(email)))]
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    // Email sealed at rest; a deterministic KEYED hash is the dedup key (sealing uses a random IV, so
+    // the ciphertext can't dedupe). HMAC under the ENCRYPTION_KEY pepper so a DB-only leak can't
+    // rainbow-table which emails are on the list (audit). Admin-only table either way.
+    const emailHash = await hmacHex(c.env, email);
     const sealedEmail = (await seal(c.env, email)) ?? email;
     await c.env.DB.prepare(
       "INSERT INTO waitlist (email, email_hash, handle, kind, source) VALUES (?1, ?2, ?3, ?4, 'landing') ON CONFLICT(email_hash) DO UPDATE SET handle=COALESCE(?3, handle)",
@@ -163,6 +162,7 @@ app.use("/api/chat/topup", rateLimit("payment"));
 app.use("/api/chat/nonce", rateLimit("intake"));
 app.use("/api/chat/session", rateLimit("intake"));
 app.use("/api/chat/balance", rateLimit("intake"));
+app.use("/api/chat/feedback", rateLimit("intake")); // feedback→credit faucet must be throttled (audit)
 app.use("/api/chat", rateLimit("intake"));
 app.route("/api", chatRoutes);
 
