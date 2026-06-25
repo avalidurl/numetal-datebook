@@ -12,7 +12,6 @@ import { db as makeDb, type DB } from "../db/client";
 import { couples, escalationInvites, events, identityVerifications, introConsents, owners, personas } from "../db/schema";
 import type { Env } from "../env";
 import { createDiditSession, verifyDiditWebhook } from "../identity/didit";
-import { createAgeSession, redeemAgeClaim } from "../identity/persona";
 import { verifyPrivyToken } from "../identity/privy";
 import { claimShell } from "../ui/system-pages";
 
@@ -105,53 +104,27 @@ export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Respo
   // Bind the consumed token to the Privy identity that redeemed it (one-time + identity-bound).
   await db.update(escalationInvites).set({ status: "claimed", claimedAt: new Date().toISOString(), claimedBy: privy.userId ?? null }).where(eq(escalationInvites.id, invite.id)).run();
 
-  // The 18+ check now runs as a separate, privacy-preserving step (Persona Relay) that the client
-  // starts via /api/age/session after this returns — Didit is parked. Claim records profile_claimed.
-  return c.json({ ok: true, ownerId: invite.ownerId, tier: "profile_claimed" });
-}
-
-/**
- * Resolve the owner an age request is for — BOUND to the invite token AND the Privy user that
- * claimed it (red-team C1/H7/M3). No "most-recent-claim" guessing: an attacker can't drive an owner
- * they didn't claim, and the relay session keys to this exact (invite, login).
- */
-async function resolveClaimedOwner(env: Env, token?: string, userId?: string): Promise<{ ownerId: number; inviteId: number } | null> {
-  if (!token || !userId) return null;
-  const row = await env.DB.prepare("SELECT id, owner_id FROM escalation_invites WHERE token=?1 AND status='claimed' AND claimed_by=?2 LIMIT 1")
-    .bind(token, userId)
-    .first<{ id: number; owner_id: number }>();
-  return row ? { ownerId: row.owner_id, inviteId: row.id } : null;
-}
-
-/**
- * POST /api/age/session — start the Persona Relay 18+ check for the logged-in claimant. Public,
- * authed by the Privy token from the claim login (NOT the founder key), mapped to the owner via the
- * consumed invite. Returns the Relay widget access token.
- */
-export async function ageSessionHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { privyToken, token } = (await c.req.json().catch(() => ({}))) as { privyToken?: string; token?: string };
-  if (!privyToken || !token) return c.json({ ok: false, error: "token + privyToken required" }, 400);
-  const privy = await verifyPrivyToken(c.env, privyToken);
-  if (!privy.ok) return c.json({ ok: false, error: "privy verification failed", reason: privy.reason }, 401);
-  const claimed = await resolveClaimedOwner(c.env, token, privy.userId);
-  if (!claimed) return c.json({ ok: false, error: "no claimed profile for this login" }, 404);
-  const s = await createAgeSession(c.env, claimed.ownerId, claimed.inviteId, privy.userId as string);
-  if (!s.ok) return c.json({ ok: false, error: "age check unavailable", reason: s.reason }, 503);
-  return c.json({ ok: true, accessToken: s.accessToken });
-}
-
-/** POST /api/age/claim — redeem the completed Relay claim; on pass, mark the owner identity_verified. */
-export async function ageClaimHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { privyToken, token } = (await c.req.json().catch(() => ({}))) as { privyToken?: string; token?: string };
-  if (!privyToken || !token) return c.json({ ok: false, error: "token + privyToken required" }, 400);
-  const privy = await verifyPrivyToken(c.env, privyToken);
-  if (!privy.ok) return c.json({ ok: false, error: "privy verification failed", reason: privy.reason }, 401);
-  const claimed = await resolveClaimedOwner(c.env, token, privy.userId);
-  if (!claimed) return c.json({ ok: false, error: "no claimed profile for this login" }, 404);
-  // The promotion + 18+ record happen atomically + idempotently inside redeemAgeClaim.
-  const r = await redeemAgeClaim(c.env, claimed.ownerId, privy.userId as string);
-  if (!r.ok) return c.json({ ok: false, error: "could not retrieve age result", reason: r.reason }, 502);
-  return c.json({ ok: true, result: r.result });
+  // Start the binding 18+/ID check (Didit) bound to this owner+couple, and return the hosted URL so
+  // the human is redirected straight into it. Didit's signed webhook promotes the owner on approval.
+  // If Didit isn't configured, the claim still succeeds (profile_claimed) — never a dead end.
+  const didit = await createDiditSession(c.env, {
+    ownerId: invite.ownerId,
+    coupleId: invite.coupleId,
+    callbackUrl: `${new URL(c.req.url).origin}/api/identity/webhook/didit`,
+  });
+  if (didit.ok && didit.sessionId) {
+    await db
+      .insert(identityVerifications)
+      .values({ ownerId: invite.ownerId, provider: "didit", sessionId: didit.sessionId, status: "pending" })
+      .run();
+  }
+  return c.json({
+    ok: true,
+    ownerId: invite.ownerId,
+    tier: "profile_claimed",
+    diditUrl: didit.ok ? (didit.url ?? null) : null,
+    diditReason: didit.ok ? undefined : didit.reason,
+  });
 }
 
 /** PUBLIC claim page (GET /claim?token=…) — minimal Privy login, then POST to /api/escalations/claim

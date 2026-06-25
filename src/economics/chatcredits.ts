@@ -41,6 +41,33 @@ export async function ensureAccount(db: DB, address: string): Promise<void> {
   await db.insert(chatAccounts).values({ address: lc(address) }).onConflictDoNothing().run();
 }
 
+/** True when text carries an explicit 18+ affirmation. Used to gate Talk session minting. */
+export function affirms18Plus(text: string): boolean {
+  return /\b18\s*\+|18\s+or\s+older|over\s+18|i\s+am\s+(?:an?\s+)?adult\b/i.test(text || "");
+}
+
+/** Record a timestamped 18+ attestation for a chat account. Adults-only venue, defensible record. */
+export async function attest18(db: DB, address: string): Promise<void> {
+  const addr = lc(address);
+  await ensureAccount(db, addr);
+  await db
+    .update(chatAccounts)
+    .set({ ageAttested: 1, ageAttestedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+    .where(eq(chatAccounts.address, addr))
+    .run();
+}
+
+/** True only if the address has a recorded 18+ attestation. Enforced on every chat message so the
+ *  attestation is binding, not just recorded — and pre-attestation accounts can't slip through. */
+export async function isAdultAttested(db: DB, address: string): Promise<boolean> {
+  const row = await db
+    .select({ a: chatAccounts.ageAttested })
+    .from(chatAccounts)
+    .where(eq(chatAccounts.address, lc(address)))
+    .get();
+  return row?.a === 1;
+}
+
 /** Read $NUMETAL balance (cached ~1 day) and persist the perk tier. Best-effort. */
 export async function refreshPerk(db: DB, env: Env, address: string): Promise<PerkLevel> {
   const addr = lc(address);

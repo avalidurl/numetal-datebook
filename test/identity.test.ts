@@ -64,14 +64,14 @@ describe("Privy+Didit escalation tier", () => {
     const status = async () => ((await (await call("GET", `/api/escalations/${coupleId}/status`)).json()) as { reveal_ready: boolean }).reveal_ready;
     // o1 verified + 18+; only one verified → not ready
     await db.update(owners).set({ tier: "identity_verified" }).where(eq(owners.id, o1)).run();
-    await db.insert(identityVerifications).values({ ownerId: o1, provider: "persona", status: "approved", ageOver18: 1 }).run();
+    await db.insert(identityVerifications).values({ ownerId: o1, provider: "didit", status: "approved", ageOver18: 1 }).run();
     expect(await status()).toBe(false);
     // H1: o2 verified but NOT 18+ → STILL not ready. Tier alone must never reach reveal (minor-reveal gate).
     await db.update(owners).set({ tier: "identity_verified" }).where(eq(owners.id, o2)).run();
-    await db.insert(identityVerifications).values({ ownerId: o2, provider: "persona", status: "approved", ageOver18: 0 }).run();
+    await db.insert(identityVerifications).values({ ownerId: o2, provider: "didit", status: "approved", ageOver18: 0 }).run();
     expect(await status()).toBe(false);
     // o2 records an 18+ pass → both verified AND both adult → ready.
-    await db.insert(identityVerifications).values({ ownerId: o2, provider: "persona", status: "approved", ageOver18: 1 }).run();
+    await db.insert(identityVerifications).values({ ownerId: o2, provider: "didit", status: "approved", ageOver18: 1 }).run();
     expect(await status()).toBe(true);
   });
 

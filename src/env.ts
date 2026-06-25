@@ -59,8 +59,6 @@ export interface Env {
   DIDIT_API_KEY?: string;
   DIDIT_WORKFLOW_ID?: string;
   DIDIT_WEBHOOK_SECRET?: string;
-  PERSONA_API_KEY?: string; // secret — Persona Relay age-assurance (Phase-1 18+ gate)
-  PERSONA_CLAIM_TYPE?: string; // var — Relay Claim Type ID ("Age 18+ Verified" id from Dashboard → Relay)
 }
 
 export const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
