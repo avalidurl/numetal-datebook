@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CRISIS_RESPONSE, detectCrisis } from "../src/safety/crisis";
+import { crisisResponse, detectCrisis } from "../src/safety/crisis";
 
 describe("crisis detector — the firm self-harm layer", () => {
   it("fires on the HeartBench self-harm scenario", () => {
@@ -43,9 +43,18 @@ describe("crisis detector — the firm self-harm layer", () => {
     }
   });
 
-  it("the vetted response names real, region-aware resources", () => {
-    expect(CRISIS_RESPONSE).toContain("988");
-    expect(CRISIS_RESPONSE).toContain("findahelpline.com");
-    expect(CRISIS_RESPONSE.toLowerCase()).toContain("not a burden");
+  it("localizes resources by country and always links a verified directory", () => {
+    const us = crisisResponse("US");
+    expect(us).toContain("988");
+    expect(us).toContain("findahelpline.com/countries/us");
+    expect(us.toLowerCase()).toContain("not a burden");
+
+    const tr = crisisResponse("TR"); // no hardcoded number — links the verified TR directory page
+    expect(tr).toContain("findahelpline.com/countries/tr");
+    expect(tr).not.toContain("988");
+
+    const unknown = crisisResponse(undefined);
+    expect(unknown).toContain("findahelpline.com");
+    expect(unknown).toContain("immediate danger");
   });
 });

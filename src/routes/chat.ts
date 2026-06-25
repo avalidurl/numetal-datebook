@@ -9,7 +9,7 @@ import { verifyMessage } from "viem";
 import { z } from "zod";
 import { chaperone } from "../chaperone";
 import { ishtarReply, looksLikeSystemLeak, type ChatMode } from "../chat/ishtar";
-import { CRISIS_RESPONSE, detectCrisis, recordCrisisEvent } from "../safety/crisis";
+import { crisisResponse, detectCrisis, recordCrisisEvent } from "../safety/crisis";
 import { db as makeDb } from "../db/client";
 import { chatMessages, chatTopups } from "../db/schema";
 import type { Env } from "../env";
@@ -136,10 +136,11 @@ chatRoutes.post("/chat", async (c) => {
   // `safety:"crisis_support"` flag. NOT captured as a coach episode (crisis ≠ lovemap data).
   const crisis = detectCrisis(message);
   if (crisis.hit) {
+    const care = crisisResponse(c.req.header("cf-ipcountry") || undefined);
     await recordCrisisEvent(db, `chat:${address}`, crisis);
     await db.insert(chatMessages).values({ address, role: "user", body: message, mode }).run();
-    await db.insert(chatMessages).values({ address, role: "assistant", body: CRISIS_RESPONSE, mode }).run();
-    return c.json({ ok: true, reply: CRISIS_RESPONSE, mode, via: "crisis", safety: "crisis_support", ...(await getBalance(db, c.env, address)) });
+    await db.insert(chatMessages).values({ address, role: "assistant", body: care, mode }).run();
+    return c.json({ ok: true, reply: care, mode, via: "crisis", safety: "crisis_support", ...(await getBalance(db, c.env, address)) });
   }
 
   // (a) chaperone the human's input BEFORE charging — a blocked message costs nothing. Fail-closed.
@@ -223,7 +224,8 @@ chatRoutes.post("/chat/feedback", async (c) => {
     const cr = detectCrisis(body);
     if (cr.hit) {
       await recordCrisisEvent(db, `feedback:${address}`, cr);
-      return c.json({ ok: true, kind, creditsAwarded: 0, safety: "crisis_support", reply: CRISIS_RESPONSE, ...(await getBalance(db, c.env, address)) });
+      const care = crisisResponse(c.req.header("cf-ipcountry") || undefined);
+      return c.json({ ok: true, kind, creditsAwarded: 0, safety: "crisis_support", reply: care, ...(await getBalance(db, c.env, address)) });
     }
   }
 
