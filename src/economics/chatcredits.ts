@@ -10,24 +10,17 @@ import type { DB } from "../db/client";
 import { chatAccounts, chatNonces, chatSessions } from "../db/schema";
 import type { Env } from "../env";
 import { utcDay } from "../env";
-import { readNumetalPerk, type PerkLevel } from "./numetal";
+import { freeQuotaForUsd, readNumetalUsd, type PerkLevel } from "./numetal";
 
-// Daily free messages by $NUMETAL holding tier (thresholds in economics/numetal.ts). Holders'
-// perk; everyone below the entry tier (<100M) pays per message via x402. Re-pegged 2026-06-23 —
-// see the rationale in numetal.ts. Worst-case cost to us at full daily use (~0.6¢/msg incl. the
-// chaperone passes): 5→$0.03/day, 12→$0.07, 30→$0.18, 60→$0.36 — and the global daily-budget
-// breaker caps total free spend regardless. `none` = 0 closes the old dust-DDoS hole.
-const FREE_QUOTA: Record<PerkLevel, number> = { none: 0, badge: 5, priority: 12, discount: 30, founder: 60 };
+// Free messages are sized by the USD value of $NUMETAL held (floor $30, doubling every $30) — the
+// model + rationale live in economics/numetal.ts (`freeQuotaForUsd`). Below $30 held → 0 free, pay
+// per message via x402. The global daily-budget breaker still caps total free inference spend.
 const SESSION_TTL_DAYS = 30;
 const PERK_CACHE_HOURS = 24;
 
 export function creditsPerUsd(env: Env): number {
   const n = Number(env.CHAT_CREDITS_PER_USD ?? "25");
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 25;
-}
-
-export function freeQuotaFor(perk: string): number {
-  return FREE_QUOTA[(perk as PerkLevel) in FREE_QUOTA ? (perk as PerkLevel) : "none"];
 }
 
 const lc = (a: string) => a.trim().toLowerCase();
@@ -68,25 +61,26 @@ export async function isAdultAttested(db: DB, address: string): Promise<boolean>
   return row?.a === 1;
 }
 
-/** Read $NUMETAL balance (cached ~1 day) and persist the perk tier. Best-effort. */
-export async function refreshPerk(db: DB, env: Env, address: string): Promise<PerkLevel> {
+/** Read $NUMETAL balance × price (cached ~1 day) and persist the perk tier + USD held. Best-effort. */
+export async function refreshPerk(db: DB, env: Env, address: string): Promise<{ perk: PerkLevel; usdHeld: number }> {
   const addr = lc(address);
   await ensureAccount(db, addr);
   const acct = await db.select().from(chatAccounts).where(eq(chatAccounts.address, addr)).get();
   const fresh =
     acct?.perkCheckedAt && Date.now() - new Date(acct.perkCheckedAt).getTime() < PERK_CACHE_HOURS * 3600_000;
-  if (fresh) return (acct!.perkLevel as PerkLevel) ?? "none";
-  const { perkLevel } = await readNumetalPerk(addr, { rpcUrl: env.BASE_RPC_URL, contract: env.NUMETAL_CA });
+  if (fresh) return { perk: (acct!.perkLevel as PerkLevel) ?? "none", usdHeld: acct!.usdHeld ?? 0 };
+  const { perkLevel, usdHeld } = await readNumetalUsd(addr, { rpcUrl: env.BASE_RPC_URL, contract: env.NUMETAL_CA });
   await db
     .update(chatAccounts)
-    .set({ perkLevel, perkCheckedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+    .set({ perkLevel, usdHeld, perkCheckedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
     .where(eq(chatAccounts.address, addr))
     .run();
-  return perkLevel;
+  return { perk: perkLevel, usdHeld };
 }
 
 export interface Balance {
   perk: PerkLevel;
+  usdHeld: number;
   credits: number;
   freeQuota: number;
   freeRemaining: number;
@@ -94,12 +88,12 @@ export interface Balance {
 
 export async function getBalance(db: DB, env: Env, address: string): Promise<Balance> {
   const addr = lc(address);
-  const perk = await refreshPerk(db, env, addr);
+  const { perk, usdHeld } = await refreshPerk(db, env, addr);
   const acct = await db.select().from(chatAccounts).where(eq(chatAccounts.address, addr)).get();
-  const quota = freeQuotaFor(perk);
+  const quota = freeQuotaForUsd(usdHeld);
   const today = utcDay();
   const usedToday = acct?.freeUsedDay === today ? (acct?.freeUsedCount ?? 0) : 0;
-  return { perk, credits: acct?.credits ?? 0, freeQuota: quota, freeRemaining: Math.max(0, quota - usedToday) };
+  return { perk, usdHeld, credits: acct?.credits ?? 0, freeQuota: quota, freeRemaining: Math.max(0, quota - usedToday) };
 }
 
 export type ChargeResult = { ok: true; via: "free" | "paid"; balance: Balance } | { ok: false; balance: Balance };
