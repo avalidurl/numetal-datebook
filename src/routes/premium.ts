@@ -57,18 +57,26 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     .onConflictDoNothing()
     .run();
 
-  const paymentHeader = c.req.header("x-payment");
-  if (!paymentHeader) {
-    await db
-      .update(premiumOrders)
-      .set({ status: "challenged" })
-      .where(eq(premiumOrders.orderId, orderId))
-      .run();
-    return x402Challenge({ sku, network: provider.network, payTo: c.env.PAY_TO, orderId });
+  // Comped participants (e.g. Ishtar + the Intern for the live dating demo) skip the x402 paywall:
+  // the real flow runs end-to-end, just without a charge. Everyone else still pays.
+  const comped = (c.env.X402_FREE_OWNERS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(String(ownerId));
+  let receiptId: number | null = null;
+  if (comped) {
+    await db.update(premiumOrders).set({ status: "comped" }).where(eq(premiumOrders.orderId, orderId)).run();
+  } else {
+    const paymentHeader = c.req.header("x-payment");
+    if (!paymentHeader) {
+      await db.update(premiumOrders).set({ status: "challenged" }).where(eq(premiumOrders.orderId, orderId)).run();
+      return x402Challenge({ sku, network: provider.network, payTo: c.env.PAY_TO, orderId });
+    }
+    const settled = await settleAndPersist(db, c.env, provider, { orderId, sku, payTo: c.env.PAY_TO }, paymentHeader);
+    if (!settled.ok) return c.json({ error: "payment not verified", reason: settled.reason }, 402);
+    receiptId = settled.receiptId ?? null;
   }
-
-  const settled = await settleAndPersist(db, c.env, provider, { orderId, sku, payTo: c.env.PAY_TO }, paymentHeader);
-  if (!settled.ok) return c.json({ error: "payment not verified", reason: settled.reason }, 402);
 
   // Paid → generate the artifact (cost tracked, but not subject to the free-tier budget cap).
   const result = await runGuarded(db, c.env, {
@@ -103,12 +111,12 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
   // allow → deliver as-is; sanitize → deliver the REDACTED text; anything else → withhold.
   if (verdict.verdict !== "allow" && verdict.verdict !== "sanitize") {
     await db.insert(events).values({ kind: "paid_output_withheld", payload: JSON.stringify({ orderId, reason: verdict.reason }) }).run();
-    return c.json({ ok: true, orderId, receiptId: settled.receiptId, report: null, withheld: true, reason: `held for review: ${verdict.reason}` });
+    return c.json({ ok: true, orderId, receiptId, report: null, withheld: true, reason: `held for review: ${verdict.reason}` });
   }
   return c.json({
     ok: true,
     orderId,
-    receiptId: settled.receiptId,
+    receiptId,
     report: verdict.text ?? reportText,
     sanitized: verdict.verdict === "sanitize" || undefined,
   });
