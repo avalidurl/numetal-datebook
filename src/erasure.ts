@@ -10,6 +10,8 @@ import {
   agentEndpoints,
   chatMessages,
   chatTopups,
+  coachFeedback,
+  episodes,
   escalationInvites,
   heartFiles,
   identityVerifications,
@@ -20,6 +22,8 @@ import {
   paymentReceipts,
   personas,
   premiumOrders,
+  reflections,
+  userFacts,
 } from "./db/schema";
 import type { Env } from "./env";
 import { deleteHeartVector } from "./match/shortlist";
@@ -59,6 +63,15 @@ export async function eraseOwner(db: DB, env: Env, ownerId: number): Promise<Era
   if (addrs.length) {
     await db.delete(chatMessages).where(inArray(chatMessages.address, addrs)).run();
     await db.delete(chatTopups).where(inArray(chatTopups.payer, addrs)).run();
+    // Coach-memory tables are keyed by the LOWERCASED wallet address (subject). They hold the most
+    // sensitive verbatim dating disclosures + the synthesized reflections re-injected into chat —
+    // erasure MUST reach them, or a "successful" deletion leaves them and coachContext() can resurface
+    // them in a later session (audit HIGH / GDPR Art.17).
+    const lcAddrs = addrs.map((a) => a.toLowerCase());
+    await db.delete(episodes).where(inArray(episodes.subject, lcAddrs)).run();
+    await db.delete(reflections).where(inArray(reflections.subject, lcAddrs)).run();
+    await db.delete(userFacts).where(inArray(userFacts.subject, lcAddrs)).run();
+    await db.delete(coachFeedback).where(inArray(coachFeedback.subject, lcAddrs)).run();
   }
   // Financial records tied to this owner (delete receipts first — they FK premium_orders.orderId).
   const orders = await db.select({ orderId: premiumOrders.orderId }).from(premiumOrders).where(eq(premiumOrders.ownerId, ownerId)).all();

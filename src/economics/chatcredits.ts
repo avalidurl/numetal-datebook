@@ -86,20 +86,22 @@ export async function chargeOne(db: DB, env: Env, address: string): Promise<Char
   const before = await getBalance(db, env, addr);
   const today = utcDay();
 
-  // 1) free allowance (resets daily)
-  if (before.freeRemaining > 0) {
-    const acct = await db.select().from(chatAccounts).where(eq(chatAccounts.address, addr)).get();
-    const sameDay = acct?.freeUsedDay === today;
-    await db
-      .update(chatAccounts)
-      .set({
-        freeUsedDay: today,
-        freeUsedCount: sameDay ? (acct!.freeUsedCount ?? 0) + 1 : 1,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(chatAccounts.address, addr))
+  // 1) free allowance — ATOMIC + race-safe: roll the day in SQL and increment ONLY if the
+  //    effective (day-aware) used-count is still below the quota. The old JS-computed increment with
+  //    an address-only WHERE let concurrent requests both read 0 and both write 1 (lost update →
+  //    free-quota bypass). This mirrors the paid path's conditional guard (`AND credits > 0`).
+  if (before.freeQuota > 0) {
+    const res = await env.DB.prepare(
+      `UPDATE chat_accounts
+         SET free_used_day = ?1,
+             free_used_count = CASE WHEN free_used_day = ?1 THEN free_used_count + 1 ELSE 1 END,
+             updated_at = datetime('now')
+       WHERE address = ?2
+         AND (CASE WHEN free_used_day = ?1 THEN free_used_count ELSE 0 END) < ?3`,
+    )
+      .bind(today, addr, before.freeQuota)
       .run();
-    return { ok: true, via: "free", balance: await getBalance(db, env, addr) };
+    if ((res.meta?.changes ?? 0) > 0) return { ok: true, via: "free", balance: await getBalance(db, env, addr) };
   }
 
   // 2) paid credits — decrement only if > 0 (guards against going negative under races)
