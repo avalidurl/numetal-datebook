@@ -1,35 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { FREE_MAX, freeQuotaForUsd, perkForUsd } from "../src/economics/numetal";
+import { FREE_FLOOR, FREE_MAX, freeQuotaForUsd, perkForUsd } from "../src/economics/numetal";
 
-describe("freeQuotaForUsd — $30 floor, doubling every $30", () => {
-  it("gives 0 free messages below the $30 floor", () => {
-    for (const usd of [0, 1, 15, 29.99]) expect(freeQuotaForUsd(usd)).toBe(0);
+describe("freeQuotaForUsd — 3 free base, 50 at $30, doubling, capped", () => {
+  it("gives the free base (3/day) below the $30 floor — everyone, no holding needed", () => {
+    for (const usd of [0, 1, 15, 29.99]) expect(freeQuotaForUsd(usd)).toBe(FREE_FLOOR);
+    expect(FREE_FLOOR).toBe(3);
   });
 
-  it("doubles each $30 step", () => {
-    expect(freeQuotaForUsd(30)).toBe(5);
-    expect(freeQuotaForUsd(59.99)).toBe(5); // still in the first $30 band
-    expect(freeQuotaForUsd(60)).toBe(10);
-    expect(freeQuotaForUsd(90)).toBe(20);
-    expect(freeQuotaForUsd(120)).toBe(40);
-    expect(freeQuotaForUsd(150)).toBe(80);
-    expect(freeQuotaForUsd(180)).toBe(160);
+  it("jumps to 50 at $30, then doubles each $30 step", () => {
+    expect(freeQuotaForUsd(30)).toBe(50);
+    expect(freeQuotaForUsd(59.99)).toBe(50); // still in the first $30 band
+    expect(freeQuotaForUsd(60)).toBe(100);
+    expect(freeQuotaForUsd(90)).toBe(200);
+    expect(freeQuotaForUsd(120)).toBe(400);
   });
 
-  it("is bounded by FREE_MAX so a whale can't open an unbounded free tap", () => {
+  it("is bounded by FREE_MAX (500) so a whale can't open an unbounded free tap", () => {
+    expect(FREE_MAX).toBe(500);
+    expect(freeQuotaForUsd(150)).toBe(500); // 50·2^4 = 800 → capped to 500
     expect(freeQuotaForUsd(1_000_000)).toBe(FREE_MAX);
-    expect(freeQuotaForUsd(300)).toBeLessThanOrEqual(FREE_MAX);
   });
 
-  it("treats junk / non-finite input as 0 (fail-safe)", () => {
-    expect(freeQuotaForUsd(Number.NaN)).toBe(0);
-    expect(freeQuotaForUsd(-50)).toBe(0);
-    expect(freeQuotaForUsd(Number.POSITIVE_INFINITY)).toBe(0); // non-finite → fail-safe to no free tier
+  it("treats junk / non-finite input as the free base (everyone still gets 3)", () => {
+    expect(freeQuotaForUsd(Number.NaN)).toBe(FREE_FLOOR);
+    expect(freeQuotaForUsd(-50)).toBe(FREE_FLOOR);
+    expect(freeQuotaForUsd(Number.POSITIVE_INFINITY)).toBe(FREE_FLOOR);
   });
 
   it("honors runtime knob overrides", () => {
-    expect(freeQuotaForUsd(60, { step: 30, base: 3, max: 1000 })).toBe(6);
-    expect(freeQuotaForUsd(60, { max: 5 })).toBe(5); // cap below the doubled value
+    expect(freeQuotaForUsd(60, { step: 30, base: 30, max: 1000 })).toBe(60);
+    expect(freeQuotaForUsd(60, { max: 55 })).toBe(55); // cap below the doubled value
+    expect(freeQuotaForUsd(10, { floor: 1 })).toBe(1); // floor override
   });
 });
 

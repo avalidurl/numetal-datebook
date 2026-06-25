@@ -15,22 +15,30 @@ const DEFAULT_PAIR = "0xf0ba727d596861455b31d6e444ed3ee41c77709a27f7d787ccf609f6
 
 export type PerkLevel = "none" | "badge" | "priority" | "discount" | "founder";
 
-// USD-denominated free-message model (decided 2026-06-25). Rationale: the old thresholds were raw
-// token amounts (the top tier wanted 10,000,000,000 tokens ≈ 10% of supply — unattainable; a thin,
-// volatile float makes any token-amount tier either absurd or trivially sybil-able). USD-pegging fixes
-// both: the floor to earn ANY free messages is $30 of $NUMETAL, and every additional $30 held DOUBLES
-// the daily allowance — 5/day at $30 → 10 @ $60 → 20 @ $90 → 40 @ $120 → 80 @ $150 → … — bounded by
-// FREE_MAX so a whale can't open an unbounded free-inference tap. All three are runtime knobs.
+// USD-denominated free-message model (decided 2026-06-25, cost-grounded). Per-message cost on Workers AI
+// is ~$0.00136 (llama-3.3-70b reply + 2 llama-guard passes; verified against CF's published pricing), so
+// generous quotas are cheap — they're CEILINGS real humans rarely hit, and a venue-wide daily spend
+// breaker (economics/budget.ts) backstops the worst case. The curve:
+//   • FREE_FLOOR = 3/day for ANY signed-in 18+ wallet (even $0 held) — the funnel; ≤$0.12/mo if maxed.
+//   • FREE_BASE  = 50/day at the $30 holding floor (≤~$2/mo if maxed) — the holder reward.
+//   • doubling every +$30 (100 @ $60, 200 @ $90, 400 @ $120, …), bounded by
+//   • FREE_MAX  = 500/day (~$120–150) so no single wallet can open an unbounded free-inference tap.
+// USD-pegged (not raw token amounts) so a thin/volatile float can't make tiers absurd. All are knobs.
 export const FREE_STEP_USD = 30;
-export const FREE_BASE = 5;
-export const FREE_MAX = 1280; // clean doubling through ~$270 (5·2^8), then flat
+export const FREE_FLOOR = 3; // everyone (any signed-in 18+ wallet), even $0 held
+export const FREE_BASE = 50; // at the $30 holding floor
+export const FREE_MAX = 500; // generous ceiling (~$120–150) that bounds our worst-case cost
 
 /** Daily free messages for a wallet holding `usdHeld` USD of $NUMETAL. Pure; the public contract. */
-export function freeQuotaForUsd(usdHeld: number, opts?: { step?: number; base?: number; max?: number }): number {
+export function freeQuotaForUsd(
+  usdHeld: number,
+  opts?: { step?: number; base?: number; max?: number; floor?: number },
+): number {
   const step = opts?.step ?? FREE_STEP_USD;
   const base = opts?.base ?? FREE_BASE;
   const max = opts?.max ?? FREE_MAX;
-  if (!Number.isFinite(usdHeld) || usdHeld < step) return 0; // below the $30 floor → pay per message
+  const floor = opts?.floor ?? FREE_FLOOR;
+  if (!Number.isFinite(usdHeld) || usdHeld < step) return floor; // free base for everyone, no holding needed
   const steps = Math.floor(usdHeld / step); // 1 at $30, 2 at $60, …
   return Math.min(max, base * 2 ** (steps - 1));
 }

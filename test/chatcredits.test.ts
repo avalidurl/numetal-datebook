@@ -47,37 +47,38 @@ describe("talk-to-Ishtar credits", () => {
     expect(await consumeNonce(db, "nothex!")).toBe(false); // malformed rejected
   });
 
-  it("fails to charge with no free quota and no credits (→ 402)", async () => {
+  it("gives every wallet the 3/day free base, then 402 once it's spent (no credits)", async () => {
     const db = makeDb(env.DB);
-    await seed(db, { perk: "none", credits: 0 });
-    const r = await chargeOne(db, env, ADDR);
-    expect(r.ok).toBe(false);
+    await seed(db, { usd: 0, credits: 0 }); // $0 held → 3 free/day base, no paid credits
+    const rs = [];
+    for (let i = 0; i < 4; i++) rs.push(await chargeOne(db, env, ADDR));
+    expect(rs.slice(0, 3).every((r) => r.ok && r.via === "free")).toBe(true); // 3 free
+    expect(rs[3]?.ok).toBe(false); // 4th → no free left, no credits → 402
   });
 
-  it("debits one paid credit per message, then fails when empty", async () => {
+  it("debits paid credits only after the free base is used, then fails when empty", async () => {
     const db = makeDb(env.DB);
-    await seed(db, { perk: "none", credits: 2 });
-    const a = await chargeOne(db, env, ADDR);
-    const b = await chargeOne(db, env, ADDR);
-    const c = await chargeOne(db, env, ADDR);
-    expect(a.ok && a.via).toBe("paid");
-    expect(b.ok && b.via).toBe("paid");
-    expect(c.ok).toBe(false);
+    await seed(db, { usd: 0, credits: 2 }); // 3 free + 2 paid
+    const rs = [];
+    for (let i = 0; i < 6; i++) rs.push(await chargeOne(db, env, ADDR));
+    expect(rs.filter((r) => r.ok && r.via === "free")).toHaveLength(3);
+    expect(rs.filter((r) => r.ok && r.via === "paid")).toHaveLength(2);
+    expect(rs[5]?.ok).toBe(false);
     const acct = await db.select().from(chatAccounts).where(eq(chatAccounts.address, ADDR)).get();
     expect(acct?.credits).toBe(0);
   });
 
-  it("spends the $NUMETAL free allowance before paid credits, bounded by the USD quota", async () => {
+  it("holders get a bigger free allowance ($30 → 50/day), spent before paid credits", async () => {
     const db = makeDb(env.DB);
-    // $60 held = 2 doubling-steps = 10 free/day; give 1 paid credit to prove free is used first.
-    await seed(db, { usd: 60, credits: 1 });
+    // $30 held = 50 free/day; prove the holder quota applies and free is used before the paid credit.
+    await seed(db, { usd: 30, credits: 1 });
     const used: string[] = [];
-    for (let i = 0; i < 11; i++) {
+    for (let i = 0; i < 51; i++) {
       const r = await chargeOne(db, env, ADDR);
       if (r.ok) used.push(r.via);
     }
-    // 10 free, then the 11th falls through to the single paid credit.
-    expect(used.filter((v) => v === "free")).toHaveLength(10);
+    // 50 free, then the 51st falls through to the single paid credit.
+    expect(used.filter((v) => v === "free")).toHaveLength(50);
     expect(used.filter((v) => v === "paid")).toHaveLength(1);
     const acct = await db.select().from(chatAccounts).where(eq(chatAccounts.address, ADDR)).get();
     expect(acct?.credits).toBe(0);
