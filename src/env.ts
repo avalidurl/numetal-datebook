@@ -53,6 +53,7 @@ export interface Env {
   SENTRY_DSN?: string; // optional — Workers Logs is the default sink; Sentry is extra parity
   // x402 mode: "mainnet" → real USDC via CDP; anything else → Base Sepolia testnet.
   X402_MODE?: string;
+  X402_FREE_OWNERS?: string; // comma-separated ownerIds comped past the x402 paywall (e.g. Ishtar + the Intern for the live dating demo)
   CDP_API_KEY_ID?: string;
   CDP_API_KEY_SECRET?: string;
   // Escalation tier (humans meet). All optional → the tier is disabled (no-op) until set.
