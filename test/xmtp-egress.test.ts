@@ -88,7 +88,7 @@ describe("handleDM — structural defense against a fully-injected model", () =>
   it("is stateless across conversations (cross-user isolation)", async () => {
     const seenTexts: string[] = [];
     const spy: ModelFn = async (msgs) => {
-      seenTexts.push(msgs[1].content);
+      seenTexts.push(msgs[1]?.content ?? "");
       return "ok";
     };
     await handleDM({ conversationId: "A", text: "my private secret is hunter2" }, spy);

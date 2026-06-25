@@ -428,10 +428,11 @@ export const events = sqliteTable("events", {
 export const chatAccounts = sqliteTable("chat_accounts", {
   address: text("address").primaryKey(), // lowercased 0x…
   credits: integer("credits").notNull().default(0),
-  perkLevel: text("perk_level").notNull().default("none"), // none|badge|priority|discount|founder
+  perkLevel: text("perk_level").notNull().default("none"), // none|badge|priority|discount|founder (USD-pegged)
+  usdHeld: real("usd_held").notNull().default(0), // USD value of $NUMETAL held at last check → free-msg quota
   freeUsedDay: text("free_used_day"), // YYYY-MM-DD the free counter applies to
   freeUsedCount: integer("free_used_count").notNull().default(0),
-  perkCheckedAt: text("perk_checked_at"), // last on-chain balance read (cached ~1 day)
+  perkCheckedAt: text("perk_checked_at"), // last on-chain balance+price read (cached ~1 day)
   ageAttested: integer("age_attested").notNull().default(0), // 18+ attested at session mint
   ageAttestedAt: text("age_attested_at"),
   createdAt: text("created_at").notNull().default(now),

@@ -14,14 +14,16 @@ import {
 
 const ADDR = "0x1111111111111111111111111111111111111111";
 
-// Seed an account with a FRESH perk cache so refreshPerk() returns the given tier WITHOUT a
-// network read (readNumetalPerk would otherwise hit a Base RPC — kept out of unit tests).
-async function seed(db: DB, opts: { perk?: string; credits?: number } = {}) {
+// Seed an account with a FRESH perk cache so refreshPerk() returns the cached USD/tier WITHOUT a
+// network read (readNumetalUsd would otherwise hit a Base RPC + DexScreener — kept out of unit tests).
+// `usd` is the cached USD value of $NUMETAL held → free-message quota (floor $30, doubling per $30).
+async function seed(db: DB, opts: { perk?: string; credits?: number; usd?: number } = {}) {
   await db
     .insert(chatAccounts)
     .values({
       address: ADDR,
       perkLevel: opts.perk ?? "none",
+      usdHeld: opts.usd ?? 0,
       credits: opts.credits ?? 0,
       perkCheckedAt: new Date().toISOString(),
     })
@@ -65,17 +67,17 @@ describe("talk-to-Ishtar credits", () => {
     expect(acct?.credits).toBe(0);
   });
 
-  it("spends the $NUMETAL free allowance before paid credits, bounded by perk quota", async () => {
+  it("spends the $NUMETAL free allowance before paid credits, bounded by the USD quota", async () => {
     const db = makeDb(env.DB);
-    // priority perk (≥500M) = 12 free/day; give 1 paid credit to prove free is used first.
-    await seed(db, { perk: "priority", credits: 1 });
+    // $60 held = 2 doubling-steps = 10 free/day; give 1 paid credit to prove free is used first.
+    await seed(db, { usd: 60, credits: 1 });
     const used: string[] = [];
-    for (let i = 0; i < 13; i++) {
+    for (let i = 0; i < 11; i++) {
       const r = await chargeOne(db, env, ADDR);
       if (r.ok) used.push(r.via);
     }
-    // 12 free, then the 13th falls through to the single paid credit.
-    expect(used.filter((v) => v === "free")).toHaveLength(12);
+    // 10 free, then the 11th falls through to the single paid credit.
+    expect(used.filter((v) => v === "free")).toHaveLength(10);
     expect(used.filter((v) => v === "paid")).toHaveLength(1);
     const acct = await db.select().from(chatAccounts).where(eq(chatAccounts.address, ADDR)).get();
     expect(acct?.credits).toBe(0);
