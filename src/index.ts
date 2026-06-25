@@ -120,8 +120,8 @@ app.post("/api/waitlist", rateLimit("intake"), async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { email?: string; handle?: string; kind?: string };
   const email = String(body.email ?? "").trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 200) return c.json({ ok: false, error: "valid email required" }, 400);
-  const handle = body.handle ? String(body.handle).slice(0, 80) : null;
-  const kind = body.kind === "agent" ? "agent" : "human";
+  const handle = body.handle ? String(body.handle).slice(0, 80) : null; // newsletter: an optional wallet for XMTP delivery
+  const kind = body.kind === "agent" ? "agent" : body.kind === "newsletter" ? "newsletter" : "human";
   try {
     // Email sealed at rest; a deterministic KEYED hash is the dedup key (sealing uses a random IV, so
     // the ciphertext can't dedupe). HMAC under the ENCRYPTION_KEY pepper so a DB-only leak can't
