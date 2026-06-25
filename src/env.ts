@@ -49,6 +49,10 @@ export interface Env {
   ACCESS_KEY: string;
   PAY_TO?: string;
   ENCRYPTION_KEY?: string; // base64 of 32 bytes (AES-256); at-rest encryption is dark until set
+  // Newsletter (Resend). All optional → the newsletter is dark (no-op) until set.
+  RESEND_API_KEY?: string; // re_… secret; sends from the verified numetal.xyz domain
+  RESEND_AUDIENCE_ID?: string; // the Resend audience newsletter subscribers are added to
+  NEWSLETTER_FROM?: string; // e.g. "Ishtar <ishtar@numetal.xyz>" (default if unset)
   ALERT_WEBHOOK_URL?: string; // optional Slack-compatible webhook for real-time error alerts
   SENTRY_DSN?: string; // optional — Workers Logs is the default sink; Sentry is extra parity
   // x402 mode: "mainnet" → real USDC via CDP; anything else → Base Sepolia testnet.

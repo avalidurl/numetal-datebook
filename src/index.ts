@@ -23,6 +23,8 @@ import { chatRoutes } from "./routes/chat";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes } from "./routes/identity";
 import { intakeRoutes } from "./routes/intake";
+import { newsletterRoutes } from "./routes/newsletter";
+import { resendAddContact } from "./newsletter/resend";
 import { publicRoutes } from "./routes/public";
 import { premiumRoutes } from "./routes/premium";
 import { reportRoutes } from "./routes/report";
@@ -131,6 +133,8 @@ app.post("/api/waitlist", rateLimit("intake"), async (c) => {
     await c.env.DB.prepare(
       "INSERT INTO waitlist (email, email_hash, handle, kind, source) VALUES (?1, ?2, ?3, ?4, 'landing') ON CONFLICT(email_hash) DO UPDATE SET handle=COALESCE(?3, handle)",
     ).bind(sealedEmail, emailHash, handle, kind).run();
+    // Newsletter signups also join the Resend audience for broadcasts (best-effort, fail-soft).
+    if (kind === "newsletter") c.executionCtx.waitUntil(resendAddContact(c.env, email).then(() => {}));
     return c.json({ ok: true });
   } catch {
     return c.json({ ok: false, error: "could not join the waitlist" }, 500);
@@ -220,6 +224,7 @@ app.all("/admin/stream/:action", async (c) => {
   return new Response(res.body, { status: res.status, headers: { "content-type": "application/json" } });
 });
 app.route("/api", intakeRoutes);
+app.route("/api", newsletterRoutes);
 app.route("/api", boardsRoutes);
 app.route("/api", premiumRoutes);
 app.route("/api", reportRoutes);
