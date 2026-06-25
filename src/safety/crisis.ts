@@ -60,16 +60,40 @@ export function detectCrisis(text: string): CrisisDetection {
 }
 
 /**
- * The vetted crisis response. Warm, brief, non-clinical, non-preachy; gives a real, region-aware
- * resource set. Edit with care — this is human-reviewed copy, not model output.
+ * High-confidence, verified national lines. Kept DELIBERATELY small — we only hardcode famous,
+ * stable lines. For every other country we link findahelpline.com's per-country page, which is
+ * verified and maintained by them, so we never serve a stale or wrong number.
  */
-export const CRISIS_RESPONSE =
-  "I want to pause the dating talk, because what you just said matters far more than any of it. I'm " +
-  "really glad you told me — and please hear this clearly: you are not a burden, and you deserve " +
-  "support right now. Reach out to someone who can be with you in this — a person you trust, or a " +
-  "crisis line. In the US you can call or text 988 (the Suicide & Crisis Lifeline), any time, free and " +
-  "confidential. Anywhere in the world, findahelpline.com lists free, confidential lines near you, and " +
-  "if you're in immediate danger please call your local emergency number. You don't have to carry this alone.";
+const DIRECT_LINES: Record<string, { name: string; line: string }> = {
+  US: { name: "the US", line: "call or text 988 (the Suicide & Crisis Lifeline)" },
+  CA: { name: "Canada", line: "call or text 988" },
+  GB: { name: "the UK", line: "call 116 123 (Samaritans, free)" },
+  IE: { name: "Ireland", line: "call 116 123 (Samaritans, free)" },
+  AU: { name: "Australia", line: "call 13 11 14 (Lifeline)" },
+  NZ: { name: "New Zealand", line: "call or text 1737" },
+};
+
+/**
+ * The vetted crisis response, localized to the visitor's country (ISO alpha-2, from Cloudflare).
+ * Always points at findahelpline.com's verified per-country directory so the actual local number is
+ * correct and current for ANY country — the hardcoded lines above are just a fast path for a few.
+ * Warm, brief, non-clinical, non-preachy. Edit with care — human-reviewed copy, not model output.
+ */
+export function crisisResponse(country?: string): string {
+  const cc = (country || "").toUpperCase();
+  const direct = DIRECT_LINES[cc];
+  const helpline = /^[A-Z]{2}$/.test(cc) ? `findahelpline.com/countries/${cc.toLowerCase()}` : "findahelpline.com";
+  return [
+    "I want to pause the dating talk, because what you just said matters far more than any of it. I'm really glad you told me — and please hear this clearly: you are not a burden, and you deserve support right now.",
+    "Reach out to someone who can be with you in this — a person you trust, or a crisis line.",
+    direct ? `In ${direct.name} you can ${direct.line}, any time, free and confidential.` : "",
+    `You can also find a verified, free, confidential line near you any time at ${helpline}.`,
+    "If you're in immediate danger, please call your local emergency number (911 in the US and Canada, 112 across Europe and Türkiye).",
+    "You don't have to carry this alone.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
 
 /**
  * Flag a crisis intervention for the operator. PRIVACY: logs only the detection signal + caller —
