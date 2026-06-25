@@ -17,6 +17,8 @@ export interface Env {
   SIM_MODE: string;
   BOARD_NAMES: string;
   GUARD_MODEL: string;
+  SAFEGUARD_MODEL?: string; // optional gpt-oss-safeguard policy leg (scaffold; off until on Workers AI)
+  SAFEGUARD_ENABLED?: string; // "1" to enable the safeguard leg (requires SAFEGUARD_MODEL)
   EMBED_MODEL: string;
   GAMBIT_MODEL: string;
   REPORT_MODEL: string;

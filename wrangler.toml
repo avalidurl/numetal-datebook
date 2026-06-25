@@ -64,6 +64,10 @@ BOARD_NAMES = "seeking,courtships,debriefs,notifications"
 # Gambit = gpt-oss-120b (bigger than llama-3.3-70b AND ~3x cheaper output).
 # Report = kimi-k2.7 (premium T2; the agent pays, quality over cost).
 GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
+# Optional gpt-oss-safeguard policy leg (scaffold). NOT on Workers AI as of 2026-06-25 → left OFF.
+# To enable once available: set SAFEGUARD_MODEL to its Workers AI id and SAFEGUARD_ENABLED = "1".
+# SAFEGUARD_MODEL = "@cf/openai/gpt-oss-safeguard-20b"
+# SAFEGUARD_ENABLED = "0"
 EMBED_MODEL = "@cf/baai/bge-m3"
 GAMBIT_MODEL = "@cf/openai/gpt-oss-120b"
 REPORT_MODEL = "@cf/moonshotai/kimi-k2.7-code"

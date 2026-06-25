@@ -8,6 +8,7 @@ import type { DB } from "../db/client";
 import { chaperoneDecisions, events } from "../db/schema";
 import type { Env } from "../env";
 import { llamaGuard, type GuardResult } from "./guard";
+import { safeguardClassify, safeguardEnabled } from "./safeguard";
 import { normalizeForGuard } from "./normalize";
 import { childSafetyHit, denylistHit, leakHold, redactPII } from "./patterns";
 
@@ -141,6 +142,18 @@ export async function chaperone(
     await record(db, a, verdict, r, env.GUARD_MODEL, g.raw);
     if (isChild) await flagChildSafety(db, a, "guard_S4");
     return { verdict, reason: r };
+  }
+
+  // Gate 4 (optional, default OFF): gpt-oss-safeguard policy-conditioned leg — see chaperone/safeguard.ts.
+  // Only runs when SAFEGUARD_ENABLED=1 and SAFEGUARD_MODEL is set; otherwise behavior is unchanged.
+  if (safeguardEnabled(env)) {
+    const sg = await safeguardClassify(db, env, text, `safeguard:${a.stage}`, a.callerRef);
+    if (!sg.safe) {
+      const verdict: Verdict = sg.category === "error" || sg.category === "unparseable" ? "hold" : "deny";
+      const r = `safeguard_${verdict}: ${sg.category ?? "policy"}`;
+      await record(db, a, verdict, r, env.SAFEGUARD_MODEL ?? "safeguard", sg.raw);
+      return { verdict, reason: r };
+    }
   }
 
   await record(db, a, "allow", "passed", env.GUARD_MODEL, g.raw);
