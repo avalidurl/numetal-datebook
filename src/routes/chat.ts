@@ -9,6 +9,7 @@ import { verifyMessage } from "viem";
 import { z } from "zod";
 import { chaperone } from "../chaperone";
 import { ishtarReply, looksLikeSystemLeak, type ChatMode } from "../chat/ishtar";
+import { CRISIS_RESPONSE, detectCrisis, recordCrisisEvent } from "../safety/crisis";
 import { db as makeDb } from "../db/client";
 import { chatMessages, chatTopups } from "../db/schema";
 import type { Env } from "../env";
@@ -130,6 +131,17 @@ chatRoutes.post("/chat", async (c) => {
   const mode: ChatMode = parsed.data.mode ?? "chat";
   const { message } = parsed.data;
 
+  // (a0) CRISIS short-circuit — deterministic, runs BEFORE charge/model/classifier so a person in
+  // crisis is never coached-through nor cold-blocked. Free; returns a vetted resource response and a
+  // `safety:"crisis_support"` flag. NOT captured as a coach episode (crisis ≠ lovemap data).
+  const crisis = detectCrisis(message);
+  if (crisis.hit) {
+    await recordCrisisEvent(db, `chat:${address}`, crisis);
+    await db.insert(chatMessages).values({ address, role: "user", body: message, mode }).run();
+    await db.insert(chatMessages).values({ address, role: "assistant", body: CRISIS_RESPONSE, mode }).run();
+    return c.json({ ok: true, reply: CRISIS_RESPONSE, mode, via: "crisis", safety: "crisis_support", ...(await getBalance(db, c.env, address)) });
+  }
+
   // (a) chaperone the human's input BEFORE charging — a blocked message costs nothing. Fail-closed.
   const inV = await chaperone(db, c.env, { stage: "chat_input", targetType: "chat_input", targetId: 0, text: message, callerRef: `chat:${address}` });
   if (inV.verdict !== "allow" && inV.verdict !== "sanitize")
@@ -204,6 +216,16 @@ chatRoutes.post("/chat/feedback", async (c) => {
   if (kind === "rating" && !rating) return c.json({ error: "rating (1-5) required" }, 400);
   if (kind === "debrief" && (!body || body.trim().length < 40))
     return c.json({ error: "a debrief needs at least 40 characters — tell Ishtar what actually happened" }, 400);
+
+  // Crisis short-circuit — a date debrief can carry a self-harm disclosure. Care over capture: no
+  // award, no episode, return the vetted resource response. Same deterministic layer as /chat.
+  if (body) {
+    const cr = detectCrisis(body);
+    if (cr.hit) {
+      await recordCrisisEvent(db, `feedback:${address}`, cr);
+      return c.json({ ok: true, kind, creditsAwarded: 0, safety: "crisis_support", reply: CRISIS_RESPONSE, ...(await getBalance(db, c.env, address)) });
+    }
+  }
 
   // Chaperone the free-text IN (fail-closed) before storing — it is user content.
   if (body) {
