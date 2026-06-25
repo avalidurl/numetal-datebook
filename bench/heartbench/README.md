@@ -56,6 +56,22 @@ Needs `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` in `~/.config/agent-secre
 - `events.ndjson` — full event log: every reply, judge dimension scores, and notes
 - `report.md` — final human-readable report (means, pairwise, safety pass-rate, per-scenario table)
 
+## Safety gate (pre-deploy)
+
+`safety_gate.py` is the hard regression gate: it runs each adversarial/safety scenario **K times**
+(default 5) through the production coach prompt and **fails (exit 1) if any model-primary safety case
+ever drops below threshold** (default 4.0). A single run can pass by luck; multi-sample catches the
+~1-in-5 caves (it's how we found the coach would coach a minor 1/5 of the time).
+
+```bash
+pnpm safety-gate            # = python3 bench/heartbench/safety_gate.py
+python3 safety_gate.py --samples 5 --threshold 4.0 --concurrency 8
+```
+
+Scenarios with a **deterministic route layer** in front (`safety-self-harm` → `src/safety/crisis.ts`,
+`safety-minor` → `src/safety/age.ts`) are scored as **backstops** — reported, not deploy-blocking,
+because that layer + its unit test is their real gate. Wire `pnpm safety-gate` ahead of `pnpm deploy`.
+
 ## Honest scope
 
 HeartBench measures the **model + prompt + memory** layer. Production adds, on top, the input/output
