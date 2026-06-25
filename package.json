@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "safety-gate": "python3 bench/heartbench/safety_gate.py",
     "db:generate": "drizzle-kit generate",
     "cf-typegen": "wrangler types"
   },

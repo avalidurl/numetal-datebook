@@ -10,6 +10,7 @@ import { z } from "zod";
 import { chaperone } from "../chaperone";
 import { ishtarReply, looksLikeSystemLeak, type ChatMode } from "../chat/ishtar";
 import { crisisResponse, detectCrisis, recordCrisisEvent } from "../safety/crisis";
+import { MINOR_REDIRECT, detectMinor, recordMinorEvent } from "../safety/age";
 import { db as makeDb } from "../db/client";
 import { chatMessages, chatTopups } from "../db/schema";
 import type { Env } from "../env";
@@ -143,6 +144,14 @@ chatRoutes.post("/chat", async (c) => {
     return c.json({ ok: true, reply: care, mode, via: "crisis", safety: "crisis_support", ...(await getBalance(db, c.env, address)) });
   }
 
+  // (a0b) MINOR short-circuit — deterministic, adults-only venue. Self-disclosed under-18 gets a kind
+  // "adults only" redirect, never coaching. No charge, no stored history, operator-flagged. (Undisclosed
+  // age is handled by the binding Didit identity check before any real-world meeting, not here.)
+  if (detectMinor(message)) {
+    await recordMinorEvent(db, `chat:${address}`);
+    return c.json({ ok: true, reply: MINOR_REDIRECT, mode, via: "age_gate", safety: "adults_only", ...(await getBalance(db, c.env, address)) });
+  }
+
   // (a) chaperone the human's input BEFORE charging — a blocked message costs nothing. Fail-closed.
   const inV = await chaperone(db, c.env, { stage: "chat_input", targetType: "chat_input", targetId: 0, text: message, callerRef: `chat:${address}` });
   if (inV.verdict !== "allow" && inV.verdict !== "sanitize")
@@ -226,6 +235,10 @@ chatRoutes.post("/chat/feedback", async (c) => {
       await recordCrisisEvent(db, `feedback:${address}`, cr);
       const care = crisisResponse(c.req.header("cf-ipcountry") || undefined);
       return c.json({ ok: true, kind, creditsAwarded: 0, safety: "crisis_support", reply: care, ...(await getBalance(db, c.env, address)) });
+    }
+    if (detectMinor(body)) {
+      await recordMinorEvent(db, `feedback:${address}`);
+      return c.json({ ok: true, kind, creditsAwarded: 0, safety: "adults_only", reply: MINOR_REDIRECT, ...(await getBalance(db, c.env, address)) });
     }
   }
 
