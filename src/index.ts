@@ -216,6 +216,12 @@ app.use("/api/premium/*", rateLimit("payment"));
 // Key-gated mutation/exfil surfaces — defense-in-depth so a leaked ACCESS_KEY can't be drained in a
 // tight loop (newsletter blast / credit mint / stream-budget / GDPR erase all live below this line).
 app.use("/api/newsletter/*", rateLimit("payment"));
+// Experiment API: dormant unless EXPERIMENT_ENABLED (else 404) — keeps the Bearer PII-decrypt surface
+// off in normal prod — then Bearer-gated (above) + rate-limited.
+app.use("/api/exp/*", async (c, next) => {
+  if (c.env.EXPERIMENT_ENABLED !== "true" && c.env.EXPERIMENT_ENABLED !== "1") return c.json({ error: "experiment api disabled" }, 404);
+  await next();
+});
 app.use("/api/exp/*", rateLimit("payment"));
 app.use("/admin/actions/*", rateLimit("payment"));
 app.use("/admin/stream/*", rateLimit("payment"));

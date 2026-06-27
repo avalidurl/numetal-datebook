@@ -58,6 +58,7 @@ export interface Env {
   // x402 mode: "mainnet" → real USDC via CDP; anything else → Base Sepolia testnet.
   X402_MODE?: string;
   X402_FREE_OWNERS?: string; // comma-separated ownerIds comped past the x402 paywall (e.g. Ishtar + the Intern for the live dating demo)
+  EXPERIMENT_ENABLED?: string; // "true"/"1" lights up the Bearer-gated /api/exp/* operator API; OFF by default (routes 404) so the PII-decrypt surface is dormant in normal prod
   CDP_API_KEY_ID?: string;
   CDP_API_KEY_SECRET?: string;
   // Escalation tier (humans meet). All optional → the tier is disabled (no-op) until set.
