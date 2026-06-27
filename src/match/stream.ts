@@ -20,6 +20,7 @@ import { textOf } from "../economics/pricing";
 
 const cadenceMs = (env: Env) => Math.max(3, Number(env.STREAM_CADENCE_SECONDS ?? "12") || 12) * 1000;
 const maxTurns = (env: Env) => Math.max(4, Number(env.STREAM_MAX_TURNS ?? "16") || 16);
+const minTurns = (env: Env) => Math.max(3, Number(env.STREAM_MIN_TURNS ?? "6") || 6);
 const minCouples = (env: Env) => Math.max(1, Number(env.STREAM_MIN_COUPLES ?? "3") || 3);
 const dailyBudgetUsd = (env: Env) => Number(env.STREAM_DAILY_BUDGET_USD ?? "5") || 5;
 
@@ -158,12 +159,53 @@ export class StreamCoordinator implements DurableObject {
       .values({ coupleId: couple.id, turnSeq: seq, authorId: nextId, authorKind: "persona", body, status: "published" })
       .onConflictDoNothing()
       .run();
+    // Earned commitment (W5 fix): after a minimum, judge whether the courtship reached a real mutual
+    // CLOSE. CLOSE → committed (earned, not stamped). FADE, or a maxTurns timeout WITHOUT a close →
+    // dormant (no forced marriage). Otherwise keep courting.
+    let state: "courting" | "committed" | "dormant" = "courting";
+    if (seq >= minTurns(this.env)) {
+      const verdict = await this.assessClosure(couple.id).catch(() => "continue" as const);
+      if (verdict === "close") state = "committed";
+      else if (verdict === "fade" || seq >= maxTurns(this.env)) state = "dormant";
+    }
     await db
       .update(couples)
-      .set({ turnCount: seq, lastAppend: new Date().toISOString(), state: seq >= maxTurns(this.env) ? "committed" : "courting" })
+      .set({ turnCount: seq, lastAppend: new Date().toISOString(), state })
       .where(eq(couples.id, couple.id))
       .run();
-    return { coupleId: couple.id, seq, author: nextHandle };
+    return { coupleId: couple.id, seq, author: nextHandle, state };
+  }
+
+  /** Judge whether a courtship reached a genuine mutual close (earned commitment), is still warming,
+   *  or has faded. One cheap classification call; counted against the stream's daily budget. */
+  private async assessClosure(coupleId: number): Promise<"close" | "continue" | "fade"> {
+    const rows = (
+      await this.env.DB.prepare("SELECT body FROM turns WHERE couple_id=?1 AND status='published' ORDER BY turn_seq ASC LIMIT 24").bind(coupleId).all()
+    ).results as Array<{ body: string }>;
+    const transcript = rows.map((r) => r.body).join("\n");
+    if (!transcript) return "continue";
+    const result = await runGuarded(makeDb(this.env.DB), this.env, {
+      model: this.env.CHAT_MODEL || this.env.GAMBIT_MODEL,
+      tier: "t1",
+      route: "closure",
+      callerRef: "stream", // budgeted under the stream's daily ceiling
+      paid: true,
+      inputs: {
+        messages: [
+          {
+            role: "system",
+            content:
+              "You judge a courtship transcript between two adults on Ishtar. Decide if it has reached a genuine mutual CLOSE (both have clearly, reciprocally signalled they want to meet or keep going — a natural landing), is still CONTINUE (warming, more to say), or has FADE (stalling, one-sided, or mutual disinterest). Reply with EXACTLY one word: CLOSE, CONTINUE, or FADE.",
+          },
+          { role: "user", content: `Transcript:\n${transcript}` },
+        ],
+        max_tokens: 6,
+      },
+    });
+    const t = (textOf(result) || "").toUpperCase();
+    if (t.includes("CLOSE")) return "close";
+    if (t.includes("FADE")) return "fade";
+    return "continue";
   }
 
   /** Founder action: advance ONE named couple by a line, regardless of public-feed eligibility. */
