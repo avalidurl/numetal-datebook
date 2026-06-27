@@ -71,6 +71,10 @@ GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
 EMBED_MODEL = "@cf/baai/bge-m3"
 GAMBIT_MODEL = "@cf/openai/gpt-oss-120b"
 REPORT_MODEL = "@cf/moonshotai/kimi-k2.7-code"
+# P5 heterogeneous-model courtship: each persona courts with its OWN model (a couple = a cross-model
+# date → the "which model is the best date?" leaderboard, GOK-145). Comma-separated, VERIFIED-LIVE
+# Workers AI instruct ids ONLY (catalog drifts — re-verify before adding more). Empty → single CHAT_MODEL.
+MODEL_POOL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/openai/gpt-oss-120b"
 # Edge geo gate (audit blocker). Sanctions (CU/IR/KP) + jurisdictions blocked for legal /
 # age-assurance / market-risk reasons (GB, IN, BD, ID, EG, PS, NG, SA, YE). Founder-set list;
 # TR intentionally NOT blocked (founder operates from home). Edit to adjust.
