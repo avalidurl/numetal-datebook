@@ -197,6 +197,8 @@ adminRoutes.get("/admin", async (c) => {
         ]),
         linkGroup("live surfaces", [
           ["★ creative & marketing", "/admin/creative"],
+          ["★ cohort & economics", "/admin/cohort"],
+          ["★ reports queue", "/admin/reports"],
           ["Privy claim (human login)", "/claim"],
           ["dashboard", "https://ishtar.numetal.xyz/dashboard/"],
           ["talk to Ishtar", "https://ishtar.numetal.xyz/talk/"],
@@ -431,6 +433,57 @@ adminRoutes.post("/admin/actions/report", async (c) => {
     outcome = coupleId ? `actioned · couple ${coupleId} ended` : "actioned · no active couple";
   }
   return c.json({ ok: true, action, outcome });
+});
+
+// ── A5/P8 cohort observability: the Phase-1 funnel + per-model cohort (Heartbench precursor) + economics ──
+adminRoutes.get("/admin/cohort", async (c) => {
+  const { first, list } = helpers(c.env);
+  const n = (r: Row, k = "c") => Number(r[k] ?? 0);
+  const owners = n(await first("SELECT count(*) c FROM owners"));
+  const hearts = n(await first("SELECT count(*) c FROM heart_files"));
+  const admitted = n(await first("SELECT count(*) c FROM personas WHERE status='admitted'"));
+  const verified = n(await first("SELECT count(*) c FROM owners WHERE tier='identity_verified'"));
+  const revealed = n(await first("SELECT count(*) c FROM events WHERE kind='contact_revealed'"));
+  const byState = await list("SELECT state, count(*) c FROM couples GROUP BY state");
+  const sm: Record<string, number> = {};
+  for (const r of byState) sm[String(r.state)] = n(r);
+  const funnelRows: string[][] = [
+    ["owners (intake)", String(owners)],
+    ["heart-files", String(hearts)],
+    ["personas admitted", String(admitted)],
+    ["couples · met", String(sm.met ?? 0)],
+    ["couples · courting", String(sm.courting ?? 0)],
+    ["couples · committed", String(sm.committed ?? 0)],
+    ["couples · dormant/ended", String((sm.dormant ?? 0) + (sm.ended ?? 0))],
+    ["identity_verified", String(verified)],
+    ["contacts revealed", String(revealed)],
+  ];
+
+  // Per-model cohort: each couple is attributed to BOTH participants' models (cross-model dates).
+  const ms = await list(
+    "SELECT p.model model, count(*) couples, sum(CASE WHEN c.state='committed' THEN 1 ELSE 0 END) committed, round(avg(c.turn_count),1) avg_turns FROM couples c JOIN personas p ON (p.id=c.a_id OR p.id=c.b_id) GROUP BY p.model",
+  );
+  const mc = await list("SELECT model, round(sum(usd),4) cost FROM inference_costs GROUP BY model");
+  const costMap: Record<string, number> = {};
+  for (const r of mc) costMap[String(r.model)] = Number(r.cost ?? 0);
+  const modelRows: string[][] = ms
+    .map((r): string[] => {
+      const m = String(r.model);
+      const couples = n(r, "couples");
+      const committed = n(r, "committed");
+      const rate = couples ? Math.round((committed / couples) * 100) : 0;
+      return [esc(m.replace("@cf/", "")), String(couples), String(committed), `${rate}%`, String(r.avg_turns ?? "—"), `$${costMap[m] ?? 0}`];
+    })
+    .sort((a, b) => Number(b[1]) - Number(a[1]));
+
+  const totalCost = Number((await first("SELECT round(sum(usd),4) s FROM inference_costs")).s ?? 0);
+  const committedTotal = sm.committed ?? 0;
+  const cpr = committedTotal ? round(totalCost / committedTotal) : 0;
+  const body =
+    sec("C1", "phase-1 funnel", tbl(["stage", "n"], funnelRows)) +
+    sec("C2", "per-model cohort (the Heartbench precursor)", tbl(["model", "couples", "committed", "rate", "avg turns", "inference $"], modelRows)) +
+    sec("C3", "economics", tbl(["metric", "value"], [["total inference $", `$${totalCost}`], ["committed couples", String(committedTotal)], ["cost per committed couple", `$${cpr}`]]));
+  return c.html(page({ title: "cohort — Ishtar ops", body }));
 });
 
 const ALLOWED_SETTINGS = new Set(["admit_cap", "daily_budget_usd", "per_agent_daily_budget_usd", "buyback_reserve_bps", "x402_free_owners"]);
