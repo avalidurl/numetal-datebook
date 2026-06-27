@@ -21,7 +21,7 @@ import { creativeRoutes } from "./routes/creative";
 import { boardsRoutes } from "./routes/boards";
 import { chatRoutes } from "./routes/chat";
 import { escalationRoutes } from "./routes/escalation";
-import { claimHandler, claimPage, diditWebhook, identityRoutes } from "./routes/identity";
+import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
 import { intakeRoutes } from "./routes/intake";
 import { newsletterRoutes } from "./routes/newsletter";
 import { onboardRoutes } from "./routes/onboard";
@@ -105,6 +105,7 @@ app.get("/health", async (c) => {
 // (claim) and HMAC + timestamp (Didit webhook). Geo-gated only.
 app.get("/claim", claimPage); // Privy login page reached via the one-time invite link
 app.post("/api/escalations/claim", rateLimit("claim"), claimHandler); // claim → profile_claimed + start Didit
+app.post("/api/escalations/reveal", rateLimit("claim"), revealHandler); // bilateral reveal (Privy-auth, gated on revealReady; held until Didit verifies both)
 app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback (HMAC-auth)
 
 // Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed.
