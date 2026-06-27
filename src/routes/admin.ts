@@ -372,6 +372,74 @@ adminRoutes.post("/admin/actions/note", async (c) => {
   return c.json({ ok: true });
 });
 
+// ── P7 safety: reports moderation queue (open→reviewed→actioned + age-gap flags) ──────
+adminRoutes.get("/admin/reports", async (c) => {
+  const { list } = helpers(c.env);
+  const reps = await list("SELECT id, target_type, target_id, reason, status, created_at FROM reports ORDER BY (status='open') DESC, id DESC LIMIT 100");
+  const flags = await list("SELECT payload, created_at FROM events WHERE kind='age_gap_flag' ORDER BY id DESC LIMIT 50");
+  const btn = (id: number, a: string, label: string) => `<button onclick="act(${id},'${a}')" style="margin-right:.3rem;cursor:pointer">${esc(label)}</button>`;
+  const repRows = reps.map((r): string[] => {
+    const id = Number(r.id);
+    const open = String(r.status) !== "actioned";
+    const actions = open ? btn(id, "warn", "warn") + btn(id, "freeze", "freeze") + btn(id, "end-couple", "end couple") + btn(id, "dismiss", "dismiss") : "—";
+    return [String(id), `${esc(String(r.target_type))} #${esc(String(r.target_id))}`, esc(String(r.reason ?? "")), esc(String(r.status)), esc(String(r.created_at ?? "")), actions];
+  });
+  const flagRows = flags.map((f): string[] => {
+    let p: Record<string, unknown> = {};
+    try { p = JSON.parse(String(f.payload ?? "{}")) as Record<string, unknown>; } catch { /* skip */ }
+    return [esc(String(p.coupleId ?? "")), esc(String(p.reason ?? "")), esc(String(f.created_at ?? ""))];
+  });
+  const script =
+    `<script>var Q=location.search||'';` +
+    `async function post(p,b){const r=await fetch(p+Q,{method:'POST',headers:{'content-type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json();}` +
+    `async function act(id,a){if(!confirm(a+' report #'+id+'?'))return;var j=await post('/admin/actions/report',{reportId:id,action:a});alert(JSON.stringify(j));location.reload();}</script>`;
+  const body =
+    sec("R1", "reports queue", tbl(["id", "target", "reason", "status", "when", "actions"], repRows)) +
+    sec("R2", "age-gap flags (on couple formation)", tbl(["couple", "reason", "when"], flagRows)) +
+    script;
+  return c.html(page({ title: "reports — Ishtar ops", body }));
+});
+
+// Operator action on a report: warn (log) · freeze (offending persona, + end couple) · end-couple · dismiss.
+adminRoutes.post("/admin/actions/report", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { reportId?: number; action?: string };
+  const reportId = Number(body.reportId);
+  const action = String(body.action || "");
+  if (!Number.isInteger(reportId) || reportId <= 0) return c.json({ ok: false, error: "reportId required" }, 400);
+  if (!["warn", "freeze", "end-couple", "dismiss"].includes(action)) return c.json({ ok: false, error: "bad action" }, 400);
+  const db = c.env.DB;
+  const r = await db.prepare("SELECT id, target_type, target_id, status FROM reports WHERE id=?1").bind(reportId).first<{ target_type: string; target_id: number }>();
+  if (!r) return c.json({ ok: false, error: "no such report" }, 404);
+  const ev = { reportId, targetType: r.target_type, targetId: r.target_id };
+  const logEv = (kind: string, payload: object) => db.prepare("INSERT INTO events (kind, payload) VALUES (?1, ?2)").bind(kind, JSON.stringify(payload)).run();
+  let outcome = "reviewed";
+
+  if (action === "dismiss" || action === "warn") {
+    if (action === "warn") await logEv("warned", ev);
+    await db.prepare("UPDATE reports SET status='reviewed' WHERE id=?1").bind(reportId).run();
+  } else if (action === "freeze") {
+    if (r.target_type === "persona") {
+      await db.prepare("UPDATE personas SET status='frozen', reject_reason='reported' WHERE id=?1").bind(r.target_id).run();
+    } else if (r.target_type === "couple") {
+      await db.prepare("UPDATE personas SET status='frozen', reject_reason='reported' WHERE id IN (SELECT a_id FROM couples WHERE id=?1 UNION SELECT b_id FROM couples WHERE id=?1)").bind(r.target_id).run();
+      await db.prepare("UPDATE couples SET state='ended' WHERE id=?1").bind(r.target_id).run();
+    }
+    await logEv("frozen", ev);
+    await db.prepare("UPDATE reports SET status='actioned' WHERE id=?1").bind(reportId).run();
+    outcome = "actioned · frozen";
+  } else if (action === "end-couple") {
+    const coupleId =
+      r.target_type === "couple"
+        ? r.target_id
+        : Number((await db.prepare("SELECT id FROM couples WHERE (a_id=?1 OR b_id=?1) AND state IN ('met','courting','committed') ORDER BY id DESC LIMIT 1").bind(r.target_id).first<{ id: number }>())?.id ?? 0);
+    if (coupleId) await db.prepare("UPDATE couples SET state='ended' WHERE id=?1").bind(coupleId).run();
+    await logEv("ended", { ...ev, coupleId });
+    await db.prepare("UPDATE reports SET status='actioned' WHERE id=?1").bind(reportId).run();
+    outcome = coupleId ? `actioned · couple ${coupleId} ended` : "actioned · no active couple";
+  }
+  return c.json({ ok: true, action, outcome });
+});
+
 const ALLOWED_SETTINGS = new Set(["admit_cap", "daily_budget_usd", "per_agent_daily_budget_usd", "buyback_reserve_bps", "x402_free_owners"]);
 adminRoutes.post("/admin/actions/settings", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { key?: string; value?: string };
