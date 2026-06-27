@@ -172,3 +172,18 @@ export function coldScore(a: EligPersona, b: EligPersona): number {
   for (const w of b.parsed.text.split(/\W+/)) if (w.length > 4 && at.has(w)) overlap++;
   return Math.min(0.95, s + Math.min(0.3, overlap * 0.02));
 }
+
+/**
+ * Safety flag (P7): a large age gap on couple formation gets logged for operator review — NOT a
+ * hard block (consenting adults can have age gaps), but a grooming-risk tripwire. Flags a large
+ * absolute gap, OR a moderate gap when one party is young. Ages come from the structured prefs
+ * (self.age); missing ages never flag (we don't fabricate suspicion from absent data).
+ */
+export function ageGapFlag(ageA?: number, ageB?: number, thresholdYears = 18): { flagged: boolean; gap: number; reason: string } {
+  if (!ageA || !ageB) return { flagged: false, gap: 0, reason: "" };
+  const gap = Math.abs(ageA - ageB);
+  const younger = Math.min(ageA, ageB);
+  if (gap >= thresholdYears) return { flagged: true, gap, reason: `age gap ${gap}y (≥${thresholdYears})` };
+  if (younger < 25 && gap >= 12) return { flagged: true, gap, reason: `age gap ${gap}y, young party (${younger})` };
+  return { flagged: false, gap, reason: "" };
+}
