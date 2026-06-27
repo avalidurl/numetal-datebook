@@ -16,6 +16,7 @@ import type { DB } from "../db/client";
 import { episodes, reflections } from "../db/schema";
 import type { Env } from "../env";
 import { looksLikeSystemLeak } from "../chat/ishtar";
+import { egressFilter } from "../xmtp/egress";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
 
@@ -73,7 +74,8 @@ export async function reflectForSubject(db: DB, env: Env, subject: string): Prom
   if (!summary) return { ok: false, reason: "empty reflection" };
   // Defense-in-depth (audit hardening): never persist/inject a reflection that echoes system/
   // instruction text — it would otherwise resurface verbatim in a later coach session.
-  if (looksLikeSystemLeak(summary)) return { ok: false, reason: "reflection withheld: instruction echo" };
+  if (looksLikeSystemLeak(summary) || !egressFilter(summary).safe)
+    return { ok: false, reason: "reflection withheld: instruction/secret echo" };
 
   const row = await db
     .insert(reflections)

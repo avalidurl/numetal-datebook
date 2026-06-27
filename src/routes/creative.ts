@@ -49,18 +49,26 @@ creativeRoutes.post("/admin/creative/status", async (c) => {
 });
 
 creativeRoutes.get("/admin/creative", async (c) => {
+  // PII minimization: the sealed waitlist emails are decrypted ONLY on an explicit opt-in (?reveal=1).
+  // The default view carries ZERO plaintext — so a stray, cached, or leaked-key GET of this admin page
+  // can't dump all ~1000 emails at once. The founder adds ?reveal=1 (one keystroke) to export/copy.
+  const reveal = c.req.query("reveal") === "1";
   const rows = (await c.env.DB.prepare("SELECT item_key, status FROM creative_status").all<{ item_key: string; status: string }>()).results ?? [];
   const st = new Map(rows.map((r) => [r.item_key, r.status]));
-  // Decrypt the sealed waitlist emails for the founder (admin-only, server-side).
   const wl = (await c.env.DB.prepare("SELECT email, handle, kind, created_at FROM waitlist ORDER BY id DESC LIMIT 1000").all<{ email: string; handle: string | null; kind: string; created_at: string }>()).results ?? [];
   const waitlist: Array<{ email: string; handle: string; kind: string; at: string }> = [];
-  for (const r of wl) waitlist.push({ email: ((await open(c.env, r.email)) ?? r.email) || "", handle: r.handle ?? "", kind: r.kind, at: r.created_at });
+  for (const r of wl) {
+    const email = reveal ? ((await open(c.env, r.email)) ?? r.email) || "" : "";
+    waitlist.push({ email, handle: r.handle ?? "", kind: r.kind, at: r.created_at });
+  }
 
   const data = {
     videos: VIDEOS.map((v) => ({ ...v, status: st.get(v.key) ?? "todo" })),
     gtm: GTM.map((g) => ({ ...g, status: st.get(g.key) ?? "todo" })),
     models: MODELS,
     waitlist,
+    revealed: reveal,
+    count: wl.length,
     article: ARTICLE,
   };
   return c.html(PAGE.replace("__DATA__", JSON.stringify(data).replace(/</g, "\\u003c")));
@@ -128,9 +136,10 @@ function renderList(){
   D.videos.forEach(function(v){h+='<div class="row nav" data-key="'+v.key+'" data-kind="status"><span><span class="k">'+esc(v.n)+' · '+esc(v.title)+'</span> <span class="d">'+esc(v.on)+'</span></span><span class="'+statusClass(v.status)+'">'+esc(v.status)+'</span></div>'});
   h+='<div class="seclbl">B · go-to-market <span class="hint">x402 + bankr</span></div>';
   D.gtm.forEach(function(g){h+='<div class="row nav" data-key="'+g.key+'" data-kind="status" data-href="'+esc(g.href)+'"><span class="k">'+esc(g.label)+'</span><span class="'+statusClass(g.status)+'">'+esc(g.status)+'</span></div>'});
-  h+='<div class="seclbl">C · waitlist <span class="hint">'+D.waitlist.length+' · decrypted · e=CSV y=copy</span></div>';
-  if(!D.waitlist.length)h+='<div class="row muted">No signups yet.</div>';
-  D.waitlist.slice(0,80).forEach(function(w){h+='<div class="row nav" data-kind="mail" data-href="mailto:'+esc(w.email)+'"><span><span class="k">'+esc(w.email)+'</span> '+(w.handle?'<span class="d">'+esc(w.handle)+'</span>':'')+'</span><span class="muted" style="font-size:12px">'+esc((w.at||"").slice(0,10))+'</span></div>'});
+  h+='<div class="seclbl">C · waitlist <span class="hint">'+D.count+(D.revealed?' · decrypted · e=CSV y=copy':' · hidden — ?reveal=1 to load')+'</span></div>';
+  if(!D.count)h+='<div class="row muted">No signups yet.</div>';
+  else if(!D.revealed)h+='<div class="row muted">'+D.count+' signups — emails hidden for safety. Append <code>?reveal=1</code> to the URL to decrypt them for export / copy.</div>';
+  else D.waitlist.slice(0,80).forEach(function(w){h+='<div class="row nav" data-kind="mail" data-href="mailto:'+esc(w.email)+'"><span><span class="k">'+esc(w.email)+'</span> '+(w.handle?'<span class="d">'+esc(w.handle)+'</span>':'')+'</span><span class="muted" style="font-size:12px">'+esc((w.at||"").slice(0,10))+'</span></div>'});
   h+='<div class="seclbl">D · production stack <span class="hint">hugging face</span></div>';
   D.models.forEach(function(m){h+='<div class="row"><span><span class="k">'+esc(m.role)+'</span> <code class="muted">'+esc(m.id)+'</code></span><span class="muted" style="font-size:12px">'+esc(m.how)+'</span></div>'});
   h+='<div class="seclbl">E · launch article</div><details><summary>read / copy the Phase-0 launch article</summary><div class="art">'+esc(D.article)+'</div></details>';
@@ -170,8 +179,8 @@ function renderKanban(){
 function paintK(){var cards=[].slice.call(app.querySelectorAll(".kcard"));cards.forEach(function(el,i){el.classList.toggle("sel",i===kSel)});var el=cards[kSel];if(el){el.scrollIntoView({block:"nearest"});var it=kItems[el.getAttribute("data-idx")];sl.textContent=(it.title||it.label)+"  —  "+it.status}}
 function moveK(dir){var cards=[].slice.call(app.querySelectorAll(".kcard"));var el=cards[kSel];if(!el)return;var it=kItems[el.getAttribute("data-idx")];var col=colOf(it)+dir;col=Math.max(0,Math.min(2,col));it.status=stageForCol(it,col);postStatus(it.key,it.status);renderKanban()}
 // ---------- WAITLIST EXPORT ----------
-function exportCSV(){var rows=[["email","handle","kind","signed_up"]].concat(D.waitlist.map(function(w){return[w.email,w.handle,w.kind,w.at]}));var csv=rows.map(function(r){return r.map(function(c){return '"'+String(c==null?"":c).replace(/"/g,'""')+'"'}).join(",")}).join("\\n");var b=new Blob([csv],{type:"text/csv"});var a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="ishtar-waitlist.csv";a.click();sl.textContent="exported "+D.waitlist.length+" signups → ishtar-waitlist.csv"}
-function copyEmails(){var t=D.waitlist.map(function(w){return w.email}).join(", ");navigator.clipboard.writeText(t).then(function(){sl.textContent="copied "+D.waitlist.length+" emails"}).catch(function(){sl.textContent="copy failed"})}
+function exportCSV(){if(!D.revealed){sl.textContent="emails hidden — reload with ?reveal=1 to export";return}var rows=[["email","handle","kind","signed_up"]].concat(D.waitlist.map(function(w){return[w.email,w.handle,w.kind,w.at]}));var csv=rows.map(function(r){return r.map(function(c){return '"'+String(c==null?"":c).replace(/"/g,'""')+'"'}).join(",")}).join("\\n");var b=new Blob([csv],{type:"text/csv"});var a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="ishtar-waitlist.csv";a.click();sl.textContent="exported "+D.waitlist.length+" signups → ishtar-waitlist.csv"}
+function copyEmails(){if(!D.revealed){sl.textContent="emails hidden — reload with ?reveal=1 to copy";return}var t=D.waitlist.map(function(w){return w.email}).join(", ");navigator.clipboard.writeText(t).then(function(){sl.textContent="copied "+D.waitlist.length+" emails"}).catch(function(){sl.textContent="copy failed"})}
 // ---------- KEYS ----------
 function setMode(m){mode=m;modeEl.textContent=m.toUpperCase()}
 document.addEventListener("keydown",function(e){

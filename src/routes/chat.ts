@@ -8,7 +8,8 @@ import { Hono } from "hono";
 import { verifyMessage } from "viem";
 import { z } from "zod";
 import { chaperone } from "../chaperone";
-import { ishtarReply, looksLikeSystemLeak, type ChatMode } from "../chat/ishtar";
+import { egressFilter } from "../xmtp/egress";
+import { ishtarReply, looksLikeSystemLeak, ISHTAR_PROMPT_ANCHORS, type ChatMode } from "../chat/ishtar";
 import { crisisResponse, detectCrisis, recordCrisisEvent } from "../safety/crisis";
 import { MINOR_REDIRECT, detectMinor, recordMinorEvent } from "../safety/age";
 import { db as makeDb } from "../db/client";
@@ -30,6 +31,7 @@ import {
 import { accrueBuyback } from "../economics/reserve";
 import { recordEpisode, recordFeedback } from "../coach/memory";
 import { makeX402Provider, SKUS, x402Challenge } from "../payments/x402";
+import { timingSafeEqualStr } from "../util/timing";
 
 export const chatRoutes = new Hono<{ Bindings: Env }>();
 
@@ -206,12 +208,22 @@ chatRoutes.post("/chat", async (c) => {
     return c.json({ error: "Ishtar is resting — try again shortly." }, 503);
   }
 
-  // (d) chaperone the OUTPUT (fail-closed): withhold anything not allow/sanitize, AND withhold a
-  // reply that leaks the system prompt (a confidentiality leak the safety classifier won't flag).
+  // (d) OUTPUT defenses, ALL fail-closed and independent of each other:
+  //   1. egress scrub — deterministic redaction of secret shapes (API keys / JWT / seeds / hex /
+  //      base64 / NAME=secret) and verbatim system-prompt fragments. Independent of the model AND of
+  //      the safety classifier (Llama-Guard won't flag a leaked key as "unsafe"). Any hit → withhold.
+  //   2. looksLikeSystemLeak — fixed-anchor backstop for prompt-echo paraphrases.
+  //   3. chaperone — Llama-Guard safety categories.
+  const egress = egressFilter(reply, ISHTAR_PROMPT_ANCHORS);
   const leak = looksLikeSystemLeak(reply);
   const outV = await chaperone(db, c.env, { stage: "chat_output", targetType: "chat_output", targetId: 0, text: reply, callerRef: `chat:${address}` });
-  const safeReply = !leak && (outV.verdict === "allow" || outV.verdict === "sanitize") ? outV.text ?? reply : null;
-  const withholdReason = leak ? "withheld: instruction disclosure" : outV.reason;
+  const safeReply =
+    egress.safe && !leak && (outV.verdict === "allow" || outV.verdict === "sanitize") ? outV.text ?? reply : null;
+  const withholdReason = !egress.safe
+    ? `withheld: secret/prompt leak (${egress.hits.join(",")})`
+    : leak
+      ? "withheld: instruction disclosure"
+      : outV.reason;
 
   await db.insert(chatMessages).values({ address, role: "user", body: message, mode }).run();
   if (safeReply) await db.insert(chatMessages).values({ address, role: "assistant", body: safeReply, mode }).run();
@@ -299,7 +311,8 @@ const grantSchema = z.object({
 
 chatRoutes.post("/chat/admin/grant", async (c) => {
   const tok = bearer(c.req.header("authorization"));
-  if (!c.env.ACCESS_KEY || tok !== c.env.ACCESS_KEY) return c.json({ error: "founder only" }, 403);
+  if (!c.env.ACCESS_KEY || !tok || !(await timingSafeEqualStr(tok, c.env.ACCESS_KEY)))
+    return c.json({ error: "founder only" }, 403);
   const parsed = grantSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "bad body" }, 400);
   const db = makeDb(c.env.DB);

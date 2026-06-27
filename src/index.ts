@@ -163,6 +163,7 @@ app.use("/api/chat/nonce", rateLimit("intake"));
 app.use("/api/chat/session", rateLimit("intake"));
 app.use("/api/chat/balance", rateLimit("intake"));
 app.use("/api/chat/feedback", rateLimit("intake")); // feedback→credit faucet must be throttled (audit)
+app.use("/api/chat/admin/grant", rateLimit("payment")); // founder grant (ACCESS_KEY) — throttle so a leaked key can't be looped
 app.use("/api/chat", rateLimit("intake"));
 app.route("/api", chatRoutes);
 
@@ -211,6 +212,11 @@ app.use("*", accessGate);
 app.use("/api/intake/*", rateLimit("intake"));
 app.use("/api/personas", rateLimit("intake"));
 app.use("/api/premium/*", rateLimit("payment"));
+// Key-gated mutation/exfil surfaces — defense-in-depth so a leaked ACCESS_KEY can't be drained in a
+// tight loop (newsletter blast / credit mint / stream-budget / GDPR erase all live below this line).
+app.use("/api/newsletter/*", rateLimit("payment"));
+app.use("/admin/actions/*", rateLimit("payment"));
+app.use("/admin/stream/*", rateLimit("payment"));
 
 app.route("/", adminRoutes); // /admin (single-pane dashboard) + /admin.json — access-gated
 app.route("/", creativeRoutes); // /admin/creative — internal creative & marketing dashboard (access-gated)
