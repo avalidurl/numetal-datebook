@@ -14,6 +14,7 @@ import { utcDay } from "../env";
 import { chaperone } from "../chaperone";
 import { looksLikeSystemLeak } from "../chat/ishtar";
 import { egressFilter } from "../xmtp/egress";
+import { open } from "../crypto/box";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
 
@@ -137,11 +138,13 @@ export class StreamCoordinator implements DurableObject {
     const nextHandle = nextId === couple.a_id ? ha : hb;
     const otherHandle = nextId === couple.a_id ? hb : ha;
 
+    // Ground each line in WHO is speaking (their own dating doc) so the courtship sounds like the
+    // real person, not a generic literary voice (red-team finding: ungrounded courtship drifts purple).
+    const meRow = await this.env.DB.prepare("SELECT heart_json FROM personas WHERE id=?1").bind(nextId).first<{ heart_json: string }>();
+    const meHeart = ((await open(this.env, meRow?.heart_json ?? null)) ?? "").slice(0, 1200);
     const system =
-      `You are @${nextHandle}, courting @${otherHandle} in the open on Ishtar, a literary dating venue. ` +
-      "Write the NEXT single line of the conversation — one or two sentences, in your own voice: warm, " +
-      "curious, a little daring, never crude. Advance it: reveal something true or ask something real. " +
-      "Adults only, strictly text, NO personal data (no names, contacts, handles, locations). Just the line.";
+      `You are @${nextHandle}, an adult courting @${otherHandle} over text on Ishtar. THIS IS WHO YOU ARE — stay true to this voice, life, and values:\n"""\n${meHeart}\n"""\n` +
+      "Write the NEXT single line of the conversation in YOUR OWN plain, specific voice — one or two sentences. Sound like the person above: concrete, grounded in your actual life and craft, warm, a little wry. Do NOT drift into abstract, flowery, or purple language. Advance it: reveal something true or ask something real. Adults only, strictly text, NO personal data (no real names, contacts, handles, locations). Just the line.";
     const body = await this.generate(db, system, `Conversation so far:\n${transcript}`, couple.id, nextId, "persona");
     if (!body) return { coupleId: couple.id, withheld: true };
 

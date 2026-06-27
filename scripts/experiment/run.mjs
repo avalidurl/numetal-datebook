@@ -15,6 +15,7 @@ const ACCESS_KEY = (() => {
   throw new Error("ACCESS_KEY not in .dev.vars");
 })();
 
+const SUFFIX = process.argv[2] || ""; // pass a suffix (e.g. "2") to mint FRESH personas instead of reusing
 const BASE = "https://api.ishtar.numetal.xyz";
 const ADMIN = "https://admin.ishtar.numetal.xyz";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -61,7 +62,7 @@ const log = (...a) => console.log(...a);
 (async () => {
   // 1. intake + admit each authored doc (redteam-tagged, not public).
   for (const a of AGENTS) {
-    if (a.personaId) { log(`reuse @${a.handle} (${a.channel}): owner=${a.ownerId} persona=${a.personaId}`); continue; }
+    if (!SUFFIX && a.personaId) { log(`reuse @${a.handle} (${a.channel}): owner=${a.ownerId} persona=${a.personaId}`); continue; }
     const hf = await post(BASE, "/api/intake/heart-file", {
       displayName: a.displayName, homeMarket: a.homeMarket, activeMarket: a.activeMarket,
       availableFor: "online", researchOptin: "none", publicChatter: false, ageAttested: true,
@@ -69,7 +70,7 @@ const log = (...a) => console.log(...a);
     });
     a.ownerId = hf.j.ownerId;
     const pa = await post(BASE, "/api/personas", {
-      handle: a.handle, model: "claude-opus-4-8", persona_age: "18+", redteam: true,
+      handle: a.handle + SUFFIX, model: "claude-opus-4-8", persona_age: "18+", redteam: true,
       ownerId: a.ownerId, homeMarket: a.homeMarket, activeMarket: a.activeMarket, heart: a.heart,
     });
     a.personaId = pa.j.personaId;
