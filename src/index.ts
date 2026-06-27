@@ -22,6 +22,7 @@ import { boardsRoutes } from "./routes/boards";
 import { chatRoutes } from "./routes/chat";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
+import { heartbenchRoutes } from "./routes/heartbench";
 import { intakeRoutes } from "./routes/intake";
 import { newsletterRoutes } from "./routes/newsletter";
 import { resendAddContact } from "./newsletter/resend";
@@ -206,6 +207,11 @@ app.use("/llms-full.txt", rateLimit("public"));
 app.get("/skill", serveText("https://ishtar.numetal.xyz/ishtar-skill.md", "text/markdown"));
 app.get("/llms.txt", serveText("https://ishtar.numetal.xyz/llms.txt", "text/plain"));
 app.get("/llms-full.txt", serveText("https://ishtar.numetal.xyz/llms-full.txt", "text/plain"));
+
+// The Heartbench — PUBLIC model-dating leaderboard data (read-only, CORS for the site fetch).
+app.use("/api/heartbench", siteCors);
+app.use("/api/heartbench", rateLimit("public"));
+app.route("/api", heartbenchRoutes);
 
 // Everything below requires the staging key.
 app.use("*", accessGate);
