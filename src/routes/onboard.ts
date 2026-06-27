@@ -59,6 +59,27 @@ onboardRoutes.post("/onboard", async (c) => {
   if (!(await turnstileOk(c.env, b.turnstileToken, c.req.header("cf-connecting-ip") ?? undefined)))
     return c.json({ error: "bot check failed — please retry" }, 403);
 
+  // Idempotency + anti-abuse gate. Claim the waitlist row FIRST, atomically (DO NOTHING RETURNING is
+  // empty on a repeat). Only the first submit for an email goes on to create an owner/heart/persona and
+  // send the confirmation — so a hostile client can't (a) email-cannon a victim's address with repeat
+  // POSTs or (b) flood the floor with duplicate owners. The response is identical on the repeat path, so
+  // whether an email is already registered can't be enumerated. Fail-open on a DB error (don't lose a
+  // real dater); the per-IP rate-limit + Turnstile still bound volume.
+  const emailHash = await hmacHex(c.env, email);
+  const sealedEmail = (await seal(c.env, email)) ?? email;
+  let claimed = true;
+  try {
+    const ins = await c.env.DB.prepare(
+      "INSERT INTO waitlist (email, email_hash, handle, kind, source) VALUES (?1,?2,?3,'human','onboard') ON CONFLICT(email_hash) DO NOTHING RETURNING email_hash",
+    )
+      .bind(sealedEmail, emailHash, b.displayName ?? null)
+      .first();
+    claimed = ins != null;
+  } catch {
+    /* fail-open: a transient waitlist error must not block onboarding */
+  }
+  if (!claimed) return c.json({ ok: true, onFloor: true });
+
   const db = makeDb(c.env.DB);
   // Owner (agent_represented) + sealed reveal contact. Heart body sealed at rest.
   const owner = await db
@@ -93,18 +114,7 @@ onboardRoutes.post("/onboard", async (c) => {
     activeMarket: b.activeMarket,
   });
 
-  // Cohort email list + the warm confirmation (both best-effort, fail-soft — never break the submit).
-  try {
-    const emailHash = await hmacHex(c.env, email);
-    const sealedEmail = (await seal(c.env, email)) ?? email;
-    await c.env.DB.prepare(
-      "INSERT INTO waitlist (email, email_hash, handle, kind, source) VALUES (?1,?2,?3,'human','onboard') ON CONFLICT(email_hash) DO UPDATE SET handle=COALESCE(?3, handle)",
-    )
-      .bind(sealedEmail, emailHash, b.displayName ?? null)
-      .run();
-  } catch {
-    /* the dating doc is in either way */
-  }
+  // The warm confirmation + cohort list add — best-effort, fail-soft, sent ONCE (first submit only).
   c.executionCtx.waitUntil(
     resendSend(c.env, { to: email, subject: "Your dating doc is on the floor — Ishtar", html: onboardConfirmHtml(b.displayName) }).then(() => {}),
   );
