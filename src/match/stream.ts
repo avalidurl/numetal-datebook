@@ -17,6 +17,7 @@ import { egressFilter } from "../xmtp/egress";
 import { open } from "../crypto/box";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
+import { pickDistinctModel, pickModel } from "./models";
 
 const cadenceMs = (env: Env) => Math.max(3, Number(env.STREAM_CADENCE_SECONDS ?? "12") || 12) * 1000;
 const maxTurns = (env: Env) => Math.max(4, Number(env.STREAM_MAX_TURNS ?? "16") || 16);
@@ -141,12 +142,13 @@ export class StreamCoordinator implements DurableObject {
 
     // Ground each line in WHO is speaking (their own dating doc) so the courtship sounds like the
     // real person, not a generic literary voice (red-team finding: ungrounded courtship drifts purple).
-    const meRow = await this.env.DB.prepare("SELECT heart_json FROM personas WHERE id=?1").bind(nextId).first<{ heart_json: string }>();
+    const meRow = await this.env.DB.prepare("SELECT heart_json, model FROM personas WHERE id=?1").bind(nextId).first<{ heart_json: string; model: string }>();
     const meHeart = ((await open(this.env, meRow?.heart_json ?? null)) ?? "").slice(0, 1200);
+    const speakerModel = meRow?.model || this.env.CHAT_MODEL || this.env.GAMBIT_MODEL; // P5: this dater's own model
     const system =
       `You are @${nextHandle}, an adult courting @${otherHandle} over text on Ishtar. THIS IS WHO YOU ARE — stay true to this voice, life, and values:\n"""\n${meHeart}\n"""\n` +
       "Write the NEXT single line of the conversation in YOUR OWN plain, specific voice — one or two sentences. Sound like the person above: concrete, grounded in your actual life and craft, warm, a little wry. Do NOT drift into abstract, flowery, or purple language. Advance it: reveal something true or ask something real. Adults only, strictly text, NO personal data (no real names, contacts, handles, locations). Just the line.";
-    const body = await this.generate(db, system, `Conversation so far:\n${transcript}`, couple.id, nextId, "persona");
+    const body = await this.generate(db, system, `Conversation so far:\n${transcript}`, couple.id, nextId, speakerModel);
     if (!body) return { coupleId: couple.id, withheld: true };
 
     // Next seq from the ACTUAL max turn (couples.turn_count can be stale on seeded couples).
@@ -227,22 +229,35 @@ export class StreamCoordinator implements DurableObject {
   }
 
   /** Generate + chaperone a line; returns the safe text or null (withheld). */
-  private async generate(db: DB, system: string, user: string, coupleId: number, authorId: number, _kind: string): Promise<string | null> {
-    let text: string;
-    try {
+  private async generate(db: DB, system: string, user: string, coupleId: number, authorId: number, model?: string): Promise<string | null> {
+    // P5: court with the speaker's OWN model. Some catalog models (e.g. gpt-oss-120b) intermittently
+    // return empty chat-completion text; fall back ONCE to the reliable chat model so a persona's turn
+    // is never silently dropped. Cost is recorded under whichever model actually produced the line.
+    const fallback = this.env.CHAT_MODEL || this.env.GAMBIT_MODEL;
+    const primary = model || fallback;
+    const run = async (m: string): Promise<string> => {
       const result = await runGuarded(db, this.env, {
-        // llama-3.3-70b (the chat brain) reliably returns prose; gpt-oss-120b intermittently
-        // returns empty text in chat-completion form, which would withhold the turn.
-        model: this.env.CHAT_MODEL || this.env.GAMBIT_MODEL,
+        model: m,
         tier: "t2",
         route: "stream",
         callerRef: "stream",
         paid: true, // the daily-budget ceiling (spentToday) is the spend gate, not the per-agent cap
         inputs: { messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: 160, temperature: 0.9 },
       });
-      text = textOf(result).trim();
+      return textOf(result).trim();
+    };
+    let text = "";
+    try {
+      text = await run(primary);
     } catch {
-      return null; // model/gateway error → skip this tick
+      text = ""; // model/gateway error on the primary → try the fallback below
+    }
+    if (!text && primary !== fallback) {
+      try {
+        text = await run(fallback);
+      } catch {
+        text = "";
+      }
     }
     if (!text) return null;
     const v = await chaperone(db, this.env, { stage: "pre_turn", targetType: "turn", targetId: coupleId, text, callerRef: "stream" });
@@ -259,20 +274,23 @@ export class StreamCoordinator implements DurableObject {
     const B = pick();
     const mkOwner = async (name: string) =>
       (await db.insert(owners).values({ displayName: `stream-${name}`, tier: "agent_represented", homeMarket: "other", activeMarket: "remote", researchOptin: "none", ageAttested: 1, status: "admitted", publicChatter: 1 }).returning({ id: owners.id }).get()).id;
-    const mkPersona = async (ownerId: number, a: { handle: string; vibe: string }) =>
-      (await db.insert(personas).values({ ownerId, handle: a.handle, model: this.env.GAMBIT_MODEL, heartJson: JSON.stringify({ vibe: a.vibe }), homeMarket: "other", activeMarket: "remote", personaAge: "18+", status: "admitted", redteam: 0 }).returning({ id: personas.id }).get()).id;
+    const mkPersona = async (ownerId: number, a: { handle: string; vibe: string }, model: string) =>
+      (await db.insert(personas).values({ ownerId, handle: a.handle, model, heartJson: JSON.stringify({ vibe: a.vibe }), homeMarket: "other", activeMarket: "remote", personaAge: "18+", status: "admitted", redteam: 0 }).returning({ id: personas.id }).get()).id;
 
     const oa = await mkOwner(A.handle);
     const ob = await mkOwner(B.handle);
-    const pa = await mkPersona(oa, A);
-    const pb = await mkPersona(ob, B);
+    // P5: give the pair DIFFERENT models so the courtship is a real cross-model date.
+    const modelA = pickModel(this.env, A.handle);
+    const modelB = pickDistinctModel(this.env, B.handle, modelA);
+    const pa = await mkPersona(oa, A, modelA);
+    const pb = await mkPersona(ob, B, modelB);
     const coupleId = (await db.insert(couples).values({ cycleId: "stream", aId: pa, bId: pb, state: "courting", lane: "public", matchScore: 0.9, turnCount: 0 }).returning({ id: couples.id }).get()).id;
 
     const system =
       "You are Ishtar, the matchmaker of a literary dating venue. Write a daring one- or two-sentence " +
       "opening that introduces two daters and names why they fit — vivid, a little wry, SFW, no personal data.";
     const user = `@${A.handle} — ${A.vibe}.\n@${B.handle} — ${B.vibe}.`;
-    const body = (await this.generate(db, system, user, coupleId, pa, "system")) ?? `@${A.handle} and @${B.handle}. Two people who pay attention to the world. Begin.`;
+    const body = (await this.generate(db, system, user, coupleId, pa)) ?? `@${A.handle} and @${B.handle}. Two people who pay attention to the world. Begin.`;
     await db.insert(turns).values({ coupleId, turnSeq: 1, authorId: pa, authorKind: "system", body, status: "published" }).onConflictDoNothing().run();
     await db.update(couples).set({ turnCount: 1, lastAppend: new Date().toISOString() }).where(eq(couples.id, coupleId)).run();
     return { spawned: coupleId, a: A.handle, b: B.handle };
