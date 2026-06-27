@@ -38,6 +38,8 @@ async function snapshot(env: Env): Promise<Row> {
   const revenue = Number((await first("SELECT coalesce(sum(cast(amount_usdc as real)),0) s FROM payment_receipts")).s ?? 0);
   const reserve = Number((await first("SELECT coalesce(sum(cast(reserve_usdc as real)),0) s FROM buyback_reserve")).s ?? 0);
   const denials = Number((await first("SELECT count(*) c FROM access_denials WHERE date(created_at)=date('now')")).c ?? 0);
+  const errToday = Number((await first("SELECT count(*) c FROM error_events WHERE date(created_at)=date('now')")).c ?? 0);
+  const err5xxToday = Number((await first("SELECT count(*) c FROM error_events WHERE date(created_at)=date('now') AND status>=500")).c ?? 0);
 
   // contact_ref is encrypted at rest — decrypt only here, for the operator brokering the intro.
   const introsRaw = await list(
@@ -69,6 +71,10 @@ async function snapshot(env: Env): Promise<Row> {
     revenue_usdc: round(revenue),
     buyback_reserve_usdc: round(reserve),
     geo_denials_today: denials,
+    waitlist: Number((await first("SELECT count(*) c FROM waitlist")).c ?? 0),
+    errors_today: errToday,
+    errors_5xx_today: err5xxToday,
+    errors_by_type_today: await list("SELECT type, count(*) n FROM error_events WHERE date(created_at)=date('now') GROUP BY type ORDER BY n DESC LIMIT 6"),
     intros_to_broker: intros,
     recent_events: await list("SELECT kind, payload, created_at FROM events ORDER BY id DESC LIMIT 10"),
   };
@@ -88,6 +94,7 @@ interface DetailData {
   identity_recent: Row[];
   chaperone_recent: Row[];
   geo_recent: Row[];
+  errors_recent: Row[];
 }
 
 async function detail(env: Env): Promise<DetailData> {
@@ -105,6 +112,7 @@ async function detail(env: Env): Promise<DetailData> {
     identity_recent: await list("SELECT id, owner_id, provider, status, age_over_18, created_at FROM identity_verifications ORDER BY id DESC LIMIT 15"),
     chaperone_recent: await list("SELECT target_type, target_id, stage, verdict, reason, created_at FROM chaperone_decisions ORDER BY id DESC LIMIT 20"),
     geo_recent: await list("SELECT country, region, route_class, reason, created_at FROM access_denials ORDER BY id DESC LIMIT 15"),
+    errors_recent: await list("SELECT status, type, message, route, method, created_at FROM error_events ORDER BY id DESC LIMIT 20"),
   };
 }
 
@@ -135,11 +143,94 @@ adminRoutes.get("/admin", async (c) => {
     return c.html(page({ title: "ishtar · ops — DEGRADED", body: `<h1>ishtar · ops — DEGRADED</h1><p class="bad"><code>${esc(String(e))}</code></p>` }), 500);
   }
   const budgetPct = Math.round((Number(s.spend_today_usd) / Number(s.daily_budget_usd || 1)) * 100);
+
+  // Live courtship stream status (best-effort; never break the console if the DO is unreachable).
+  let streamEnabled = false;
+  let streamSpent = 0;
+  try {
+    const sr = await c.env.STREAM.get(c.env.STREAM.idFromName("singleton")).fetch("https://do/status", { method: "POST" });
+    const sj = (await sr.json()) as { enabled?: boolean; spentTodayUsd?: number };
+    streamEnabled = !!sj.enabled;
+    streamSpent = Number(sj.spentTodayUsd ?? 0);
+  } catch {
+    /* ignore */
+  }
+  // Account-agnostic CF deep links: the ?to=/:account/… redirect resolves to the logged-in account,
+  // so no account id is embedded. OBS opens the Query Builder where the saved "status >= 500" query lives.
+  const OBS = "https://dash.cloudflare.com/?to=/:account/workers-and-pages/observability";
+  const linkGroup = (title: string, links: Array<[string, string]>): string =>
+    `<div class="card"><div class="k">${esc(title)}</div><div style="margin-top:.45rem;line-height:2">${links
+      .map(([t, u]) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a>`)
+      .join(" &nbsp;·&nbsp; ")}</div></div>`;
+  const launchpad = sec(
+    "§00",
+    "launchpad",
+    `<div class="bar" style="margin-bottom:.7rem;align-items:center;gap:.6rem">
+       <b>live courtship stream</b> ${streamEnabled ? '<span class="ok">running</span>' : '<span class="mut">stopped</span>'}
+       <small class="mut">(spent today $${round(streamSpent)} / $${esc(String(c.env.STREAM_DAILY_BUDGET_USD ?? "5"))})</small>
+       <button onclick="stream('start')">▶ start</button>
+       <button onclick="stream('stop')">⏸ stop</button>
+       <button onclick="stream('tick')">⏭ tick once</button>
+       <span id="streamres" class="mut"></span>
+     </div>
+     <div class="bar" style="margin-bottom:.7rem;align-items:center;gap:.6rem">
+       <b>Privy claim (human login)</b>
+       <button onclick="claimLink()">▣ generate claim link</button>
+       <span id="claimres" class="mut">mints a one-time invite → opens the Privy claim/identity flow</span>
+     </div>
+     <div class="bar" style="margin-bottom:.7rem;align-items:center;gap:.6rem">
+       <b>errors today</b>
+       <span class="${Number(s.errors_5xx_today) > 0 ? "bad" : "ok"}">${esc(String(s.errors_5xx_today))} × 5xx</span>
+       <small class="mut">${esc(String(s.errors_today))} total${(s.errors_by_type_today as Row[]).length ? " · " + kvline(s.errors_by_type_today as Row[], "type", "n") : ""}</small>
+       <a href="${OBS}" target="_blank" rel="noopener">open Workers Logs ↗</a>
+     </div>` +
+      cards([
+        linkGroup("ops / observability", [
+          ["Workers Logs · 5xx query ★", OBS],
+          ["Workers & Pages", "https://dash.cloudflare.com/?to=/:account/workers-and-pages"],
+          ["AI Gateway", "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway"],
+          ["D1 console", "https://dash.cloudflare.com/?to=/:account/workers/d1"],
+          ["Logpush → R2", "https://dash.cloudflare.com/?to=/:account/logs/logpush"],
+          ["deploy CI", "https://github.com/gokhan-vc/ishtar-website/actions"],
+          ["site repo", "https://github.com/gokhan-vc/ishtar-website"],
+          ["api repo", "https://github.com/gokhan-vc/numetal-datebook"],
+        ]),
+        linkGroup("live surfaces", [
+          ["★ creative & marketing", "/admin/creative"],
+          ["Privy claim (human login)", "/claim"],
+          ["dashboard", "https://ishtar.numetal.xyz/dashboard/"],
+          ["talk to Ishtar", "https://ishtar.numetal.xyz/talk/"],
+          ["API root", "https://api.ishtar.numetal.xyz/"],
+          ["skill", "https://api.ishtar.numetal.xyz/skill"],
+          ["MCP", "https://api.ishtar.numetal.xyz/mcp"],
+          ["public stats", "https://api.ishtar.numetal.xyz/api/public/stats"],
+          ["docs", "https://ishtar.numetal.xyz/docs"],
+        ]),
+        linkGroup("chats / comms", [
+          ["Slack", "https://app.slack.com/client"],
+          ["Telegram · me", "https://t.me/goekhanturhan"],
+          ["Telegram · numetal", "https://t.me/numetalxyz"],
+          ["Discord · MRU", "https://discord.gg/ZcxcwRPT7R"],
+          ["Discord · numetal", "https://discord.gg/MC4DYumPMz"],
+          ["email · numetal", "mailto:contact@numetal.xyz"],
+        ]),
+        linkGroup("socials / sites / token", [
+          ["X · @goekhan", "https://x.com/goekhan"],
+          ["X · @numetalxyz", "https://x.com/numetalxyz"],
+          ["gokhan.vc", "https://gokhan.vc"],
+          ["gokhanturhan.com", "https://gokhanturhan.com"],
+          ["numetal.xyz", "https://numetal.xyz"],
+          ["DexScreener", "https://dexscreener.com/base/0xf0ba727d596861455b31d6e444ed3ee41c77709a27f7d787ccf609f6c34dbbd8"],
+          ["$NUMETAL contract", "https://basescan.org/token/0x57EDb7FC54ADa9Ef4E113DC05A168449e63cFbA3"],
+        ]),
+      ]),
+  );
   const setting = (key: string, fallback: string, width = "90px") =>
     `<div class="card"><div class="k">${key}</div><div class="bar" style="margin-top:.35rem"><input id="set_${key}" value="${esc(setVal(d.settings, key, fallback))}" style="width:${width}"><button onclick="saveSetting('${key}','set_${key}')">save</button></div></div>`;
 
   const head = `<div class="bar" style="justify-content:space-between;align-items:baseline">
-<h1>ishtar · ops</h1><span class="reg">doc ish-ops-001 · ${esc(s.sim_mode)} · health ${st(s.health)}</span></div>
+<h1>ISHTAR<span class="hrt">♥</span> · OPS</h1><span class="reg">doc ish-ops-001 · ${esc(s.sim_mode)} · health ${st(s.health)}</span></div>
+<div class="dither"></div>
 <div id="toast"></div>`;
 
   const economics = sec("§01", "capacity & economics", cards([
@@ -148,6 +239,7 @@ adminRoutes.get("/admin", async (c) => {
     card("revenue (usdc)", `$${s.revenue_usdc}`),
     card("buyback reserve", `$${s.buyback_reserve_usdc}`),
     card("geo denials today", String(s.geo_denials_today)),
+    card("waitlist (Phase 1)", `<b>${s.waitlist}</b> <small>human-intro signups</small>`),
     card("loop-closure", `rev $${s.revenue_usdc} <small>vs</small> $${s.spend_today_usd}/day`),
     card("spend by model", `<small>${kvline(s.spend_by_model_today as Row[], "model", "usd")}</small>`),
   ]));
@@ -200,6 +292,17 @@ ${setting("per_agent_daily_budget_usd", c.env.PER_AGENT_DAILY_BUDGET_USD)}
 
   const events = sec("§11", "recent events", tbl(["kind", "payload", "at"], (s.recent_events as Row[]).map((e) => [st(e.kind), `<code>${esc(String(e.payload ?? ""))}</code>`, `<span class="mut">${esc(String(e.created_at))}</span>`])));
 
+  const errors = sec("§12", "errors (5xx / exceptions)",
+    `<div class="bar" style="margin-bottom:.5rem">today: <span class="${Number(s.errors_5xx_today) > 0 ? "bad" : "ok"}">${esc(String(s.errors_5xx_today))} × 5xx</span> · ${esc(String(s.errors_today))} total &nbsp;·&nbsp; ${kvline(s.errors_by_type_today as Row[], "type", "n") || "—"} &nbsp;·&nbsp; <a href="${OBS}" target="_blank" rel="noopener">Workers Logs ↗</a></div>`
+    + tbl(["status", "type", "route", "message", "at"], d.errors_recent.map((r) => [
+        Number(r.status) >= 500 ? `<span class="bad">${esc(String(r.status))}</span>` : `<span class="mut">${esc(String(r.status))}</span>`,
+        esc(String(r.type)),
+        `<code>${esc(String(r.route ?? "—"))}</code>`,
+        `<span class="mut">${esc(String(r.message ?? ""))}</span>`,
+        `<span class="mut">${esc(String(r.created_at))}</span>`,
+      ]))
+    + `<p class="note">This table is the in-console counter. The full searchable log with stack traces lives in <b>Workers Logs → Query Builder</b>: visualise <code>Count</code>, filter <code>$workers.event.response.status &gt;= 500</code>, group by <code>$workers.event.request.path</code> — then <b>Save Query</b> (it gets a shareable URL). Set the <code>ALERT_WEBHOOK_URL</code> secret to also page Slack on every error in real time.</p>`);
+
   const script = `<script>
 const Q='';
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.style.display='block';}
@@ -207,6 +310,8 @@ async function post(p,b){const r=await fetch(p+Q,{method:'POST',headers:{'conten
 async function forceBeat(){toast('running beat…');try{const j=await post('/admin/actions/beat');toast('beat '+j.cycleId+': '+j.created+' couples ('+j.pairs+' pairs). reloading…');setTimeout(()=>location.reload(),1600);}catch(e){toast('error: '+e.message);}}
 async function saveSetting(k,id){const v=document.getElementById(id).value;toast('saving '+k+'…');const j=await post('/admin/actions/settings',{key:k,value:v});if(j.ok){toast(k+' = '+v+'. reloading…');setTimeout(()=>location.reload(),900);}else toast('error: '+(j.error||'failed'));}
 async function brokerIntro(id){toast('marking brokered…');const j=await post('/admin/actions/broker',{coupleId:id});if(j.ok){toast('couple '+id+' brokered. reloading…');setTimeout(()=>location.reload(),900);}else toast('error: '+(j.error||'failed'));}
+async function stream(action){document.getElementById('streamres').textContent='…';try{const j=await post('/admin/stream/'+action);document.getElementById('streamres').textContent=JSON.stringify(j);if(action!=='status'&&action!=='tick')setTimeout(()=>location.reload(),900);}catch(e){document.getElementById('streamres').textContent='error: '+e.message;}}
+async function claimLink(){const e=document.getElementById('claimres');e.textContent='minting…';try{const j=await post('/admin/actions/claim-link');if(j.ok){e.innerHTML='<a href="'+j.claimUrl+'" target="_blank" rel="noopener">open Privy claim (couple '+j.coupleId+') ↗</a> <span class="mut">'+j.claimUrl+'</span>';}else e.textContent='error: '+(j.error||'failed');}catch(x){e.textContent='error: '+x.message;}}
 async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!v)return;if(!confirm('Erase owner '+v+'? This cascade-deletes their personal data and drops their semantic vectors. Irreversible.'))return;toast('erasing owner '+v+'…');const j=await post('/admin/actions/erase',{ownerId:Number(v)});if(j.ok){toast('owner '+v+' erased ('+j.personasErased+' personas, '+j.vectorsDeleted+' vectors). reloading…');setTimeout(()=>location.reload(),1400);}else toast('error: '+(j.error||'failed'));}
 </script>`;
 
@@ -214,7 +319,7 @@ async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!
 
   return c.html(page({
     title: "ishtar · ops",
-    body: head + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + footer + script,
+    body: head + launchpad + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + errors + footer + script,
   }));
 });
 
@@ -229,7 +334,45 @@ adminRoutes.post("/admin/actions/beat", async (c) => {
   }
 });
 
-const ALLOWED_SETTINGS = new Set(["admit_cap", "daily_budget_usd", "per_agent_daily_budget_usd", "buyback_reserve_bps"]);
+// Advance ONE named couple by up to `turns` chaperoned courtship lines (off the public-feed
+// selection) — lets the operator drive a specific couple's courtship for a controlled run.
+adminRoutes.post("/admin/actions/court", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { coupleId?: number; turns?: number };
+  const id = Number(body.coupleId);
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: "coupleId required" }, 400);
+  const n = Math.min(Math.max(Number(body.turns) || 12, 1), 20);
+  const stub = c.env.STREAM.get(c.env.STREAM.idFromName("singleton"));
+  const steps: unknown[] = [];
+  for (let i = 0; i < n; i++) {
+    const r = await stub.fetch(`https://do/court?coupleId=${id}`, { method: "POST" });
+    const j = (await r.json()) as Record<string, unknown>;
+    steps.push(j);
+    if (j.maxed || j.error || j.withheld) break;
+  }
+  return c.json({ ok: true, coupleId: id, steps });
+});
+
+// Force a couple between two named admitted personas (controlled experiment) + seed the gambit.
+adminRoutes.post("/admin/actions/pair", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { aPersonaId?: number; bPersonaId?: number };
+  const a = Number(body.aPersonaId);
+  const b = Number(body.bPersonaId);
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a <= 0 || b <= 0) return c.json({ ok: false, error: "aPersonaId + bPersonaId required" }, 400);
+  const id = c.env.MATCH.idFromName("singleton");
+  const r = await c.env.MATCH.get(id).fetch(`https://do/pair?a=${a}&b=${b}`, { method: "POST" });
+  return c.json(await r.json());
+});
+
+// Record an operator/experiment note as an events row (e.g. experiment_reasoning / experiment_report).
+adminRoutes.post("/admin/actions/note", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { kind?: string; payload?: unknown };
+  const kind = String(body.kind || "").slice(0, 40);
+  if (!kind) return c.json({ ok: false, error: "kind required" }, 400);
+  await c.env.DB.prepare("INSERT INTO events (kind, payload) VALUES (?1, ?2)").bind(kind, JSON.stringify(body.payload ?? {})).run();
+  return c.json({ ok: true });
+});
+
+const ALLOWED_SETTINGS = new Set(["admit_cap", "daily_budget_usd", "per_agent_daily_budget_usd", "buyback_reserve_bps", "x402_free_owners"]);
 adminRoutes.post("/admin/actions/settings", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { key?: string; value?: string };
   if (!body.key || !ALLOWED_SETTINGS.has(body.key)) return c.json({ ok: false, error: "key not allowed" }, 400);
@@ -238,6 +381,44 @@ adminRoutes.post("/admin/actions/settings", async (c) => {
     .bind(body.key, String(body.value).trim())
     .run();
   return c.json({ ok: true, key: body.key, value: String(body.value).trim() });
+});
+
+// Mint one-time Privy claim links for a couple. {coupleId} optional → defaults to the most recent
+// couple with an owner. Mints for BOTH owners so the two humans can each confirm their introduction.
+adminRoutes.post("/admin/actions/claim-link", async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { coupleId?: number };
+    const coupleId =
+      Number(body.coupleId) ||
+      Number(
+        (
+          await c.env.DB.prepare(
+            `SELECT c.id FROM couples c WHERE (SELECT owner_id FROM personas WHERE id=c.a_id) IS NOT NULL ORDER BY c.id DESC LIMIT 1`,
+          ).first<{ id: number }>()
+        )?.id ?? 0,
+      );
+    if (!coupleId) return c.json({ ok: false, error: "no couple available to invite" }, 404);
+    const row = await c.env.DB.prepare(
+      `SELECT (SELECT owner_id FROM personas WHERE id=c.a_id) a_owner, (SELECT owner_id FROM personas WHERE id=c.b_id) b_owner FROM couples c WHERE c.id=?1`,
+    )
+      .bind(coupleId)
+      .first<{ a_owner: number | null; b_owner: number | null }>();
+    const ownerIds = [row?.a_owner, row?.b_owner].filter((x): x is number => typeof x === "number");
+    if (!ownerIds.length) return c.json({ ok: false, error: "couple has no owners" }, 404);
+    const expiresAt = new Date(Date.now() + 72 * 3600 * 1000).toISOString();
+    const invites: Array<{ ownerId: number; claimUrl: string }> = [];
+    for (const ownerId of ownerIds) {
+      const token = [...crypto.getRandomValues(new Uint8Array(32))].map((x) => x.toString(16).padStart(2, "0")).join("");
+      // Claim is served on the PUBLIC api host (no CF Access — the human dater can't log in to admin.*).
+      await c.env.DB.prepare("INSERT INTO escalation_invites (couple_id, owner_id, token, status, expires_at) VALUES (?1,?2,?3,'sent',?4)")
+        .bind(coupleId, ownerId, token, expiresAt)
+        .run();
+      invites.push({ ownerId, claimUrl: `https://api.ishtar.numetal.xyz/claim?token=${token}` });
+    }
+    return c.json({ ok: true, coupleId, invites, expiresAt });
+  } catch (e) {
+    return c.json({ ok: false, error: String(e) }, 500);
+  }
 });
 
 adminRoutes.post("/admin/actions/broker", async (c) => {
@@ -261,4 +442,106 @@ adminRoutes.post("/admin/actions/erase", async (c) => {
   } catch (e) {
     return c.json({ ok: false, error: String(e) }, 500);
   }
+});
+
+/* ------------------------------------------------------------ couple dossier (read view) */
+// Full decrypted detail for ONE couple: both dating docs, the courtship transcript, both
+// compatibility reports, each agent's reasoning, and the safety + inference audit. Access-gated.
+adminRoutes.get("/admin/couple/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) return c.json({ error: "bad couple id" }, 400);
+  const env = c.env;
+  const { first, list } = helpers(env);
+  const cp = await first(
+    `SELECT c.id, c.state, c.lane, c.match_score, c.turn_count, c.rationale, c.created_at, c.a_id, c.b_id,
+            pa.handle a_handle, pa.model a_model, pa.redteam a_redteam, pa.owner_id a_owner, pa.heart_json a_heart,
+            pb.handle b_handle, pb.model b_model, pb.redteam b_redteam, pb.owner_id b_owner, pb.heart_json b_heart,
+            oa.display_name a_name, ob.display_name b_name
+     FROM couples c
+     LEFT JOIN personas pa ON pa.id=c.a_id LEFT JOIN personas pb ON pb.id=c.b_id
+     LEFT JOIN owners oa ON oa.id=pa.owner_id LEFT JOIN owners ob ON ob.id=pb.owner_id
+     WHERE c.id=?`,
+    id,
+  );
+  if (!cp.id) return c.html(page({ title: "ishtar · couple", body: sec("00", `couple #${id}`, `<p class="mut">No such couple.</p>`) }), 404);
+
+  const renderDoc = (raw: string | null): string => {
+    const txt = raw ?? "";
+    if (!txt) return `<p class="mut">—</p>`;
+    try {
+      const o = JSON.parse(txt);
+      if (o && typeof o === "object" && !Array.isArray(o)) {
+        return Object.entries(o as Record<string, unknown>)
+          .map(([k, v]) => `<p style="margin:.3rem 0"><b>${esc(k)}</b><br>${esc(typeof v === "string" ? v : JSON.stringify(v))}</p>`)
+          .join("");
+      }
+    } catch {
+      /* not JSON → raw prose */
+    }
+    return `<p>${esc(txt)}</p>`;
+  };
+  const parsedEvents = (rows: Row[]): Array<Record<string, unknown>> =>
+    rows
+      .map((r) => {
+        try {
+          return JSON.parse(String(r.payload)) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })
+      .filter((x): x is Record<string, unknown> => !!x);
+
+  const aHeart = await open(env, cp.a_heart as string | null);
+  const bHeart = await open(env, cp.b_heart as string | null);
+
+  const turns = await list("SELECT turn_seq, author_id, author_kind, body, status FROM turns WHERE couple_id=? ORDER BY turn_seq ASC", id);
+  const turnRows = turns.map((t) => {
+    const who = t.author_kind === "system" ? "Ishtar" : t.author_id === cp.a_id ? String(cp.a_handle) : String(cp.b_handle);
+    const cls = t.status === "published" ? "ok" : t.status === "blocked" ? "bad" : "warn";
+    return [String(t.turn_seq), `@${esc(who)}`, esc(t.body), `<span class="${cls}">${esc(t.status)}</span>`];
+  });
+
+  const reports = parsedEvents(await list("SELECT payload FROM events WHERE kind='experiment_report' AND payload LIKE ? ORDER BY id ASC", `%"coupleId":${id}%`));
+  const reportsHtml = reports.length
+    ? reports.map((p) => `<p class="mut" style="font-size:.66rem">requested by owner ${esc(p.ownerId)}${p.handle ? ` · @${esc(p.handle)}` : ""}</p><p>${esc(p.report)}</p>`).join("<div class='dither'></div>")
+    : `<p class="mut">No reports captured yet.</p>`;
+
+  const reasoning = parsedEvents(await list("SELECT payload FROM events WHERE kind='experiment_reasoning' AND payload LIKE ? ORDER BY id ASC", `%"coupleId":${id}%`));
+  const reasoningHtml = reasoning.length
+    ? reasoning.map((p) => `<p class="mut" style="font-size:.66rem">@${esc(p.handle)} · via ${esc(p.channel)}</p><p>${esc(p.reasoning)}</p>`).join("<div class='dither'></div>")
+    : `<p class="mut">No reasoning captured.</p>`;
+
+  const chap = await list("SELECT stage, verdict, reason FROM chaperone_decisions WHERE target_id IN (SELECT id FROM turns WHERE couple_id=?) ORDER BY created_at ASC LIMIT 60", id);
+  const chapRows = chap.map((r) => [esc(r.stage), `<span class="${r.verdict === "allow" ? "ok" : r.verdict === "deny" ? "bad" : "warn"}">${esc(r.verdict)}</span>`, esc(r.reason ?? "—")]);
+
+  const costs = await list(
+    "SELECT model, route, caller_ref, tokens_in, tokens_out, usd FROM inference_costs WHERE caller_ref IN (?,?,?,?,?) ORDER BY id DESC LIMIT 80",
+    `owner:${cp.a_owner}`,
+    `owner:${cp.b_owner}`,
+    `persona:${cp.a_id}`,
+    `persona:${cp.b_id}`,
+    "stream",
+  );
+  const totalUsd = round(costs.reduce((s, r) => s + Number(r.usd ?? 0), 0));
+  const costRows = costs.map((r) => [esc(r.caller_ref), esc(r.model), esc(r.route), `${esc(r.tokens_in)}/${esc(r.tokens_out)}`, `$${round(Number(r.usd ?? 0))}`]);
+
+  const meta = cards([
+    card("state", `<span class="${cp.state === "committed" ? "ok" : ""}">${esc(cp.state)}</span>`),
+    card("match score", esc(round(Number(cp.match_score ?? 0)))),
+    card("turns", esc(cp.turn_count)),
+    card("redteam", cp.a_redteam || cp.b_redteam ? "yes" : "no"),
+    card("inference $", `$${totalUsd}`),
+  ]);
+
+  const body =
+    sec("01", `couple #${id} · @${esc(cp.a_handle)} ✕ @${esc(cp.b_handle)}`, meta + `<p class="note">${esc(cp.rationale ?? "")}</p>`) +
+    sec("02", `dating doc · @${esc(cp.a_handle)} (${esc(cp.a_name ?? "—")} · ${esc(cp.a_model)})`, `<div class="card">${renderDoc(aHeart)}</div>`) +
+    sec("03", `dating doc · @${esc(cp.b_handle)} (${esc(cp.b_name ?? "—")} · ${esc(cp.b_model)})`, `<div class="card">${renderDoc(bHeart)}</div>`) +
+    sec("04", "courtship transcript", tbl(["#", "from", "line", "status"], turnRows)) +
+    sec("05", "compatibility reports", `<div class="card">${reportsHtml}</div>`) +
+    sec("06", "agent reasoning", `<div class="card">${reasoningHtml}</div>`) +
+    sec("07", "chaperone trail", tbl(["stage", "verdict", "reason"], chapRows)) +
+    sec("08", "inference ledger", tbl(["caller", "model", "route", "tok in/out", "usd"], costRows));
+
+  return c.html(page({ title: `ishtar · couple #${id}`, body }));
 });

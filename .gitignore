@@ -4,3 +4,10 @@ node_modules/
 dist/
 *.log
 .DS_Store
+claim-app/node_modules
+claim-app/dist
+
+# Python bench artifacts (heartbench runs + caches)
+__pycache__/
+bench/heartbench/__pycache__/
+bench/heartbench/results/

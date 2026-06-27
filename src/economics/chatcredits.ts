@@ -1,0 +1,187 @@
+/**
+ * Talk-to-Ishtar credit + session accounting. Two ways to spend a message:
+ *   1. a daily FREE allowance sized by the wallet's $NUMETAL perk level (holders' perk), or
+ *   2. paid CREDITS bought via x402 top-up.
+ * Sessions are opaque bearer tokens; only their SHA-256 hash is stored. Everything is
+ * fail-safe: a perk read that fails just yields "none" (no free messages), never an error.
+ */
+import { eq, sql } from "drizzle-orm";
+import type { DB } from "../db/client";
+import { chatAccounts, chatNonces, chatSessions } from "../db/schema";
+import type { Env } from "../env";
+import { utcDay } from "../env";
+import { freeQuotaForUsd, readNumetalUsd, type PerkLevel } from "./numetal";
+
+// Free messages are sized by the USD value of $NUMETAL held (floor $30, doubling every $30) — the
+// model + rationale live in economics/numetal.ts (`freeQuotaForUsd`). Below $30 held → 0 free, pay
+// per message via x402. The global daily-budget breaker still caps total free inference spend.
+const SESSION_TTL_DAYS = 30;
+const PERK_CACHE_HOURS = 24;
+
+export function creditsPerUsd(env: Env): number {
+  const n = Number(env.CHAT_CREDITS_PER_USD ?? "25");
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 25;
+}
+
+const lc = (a: string) => a.trim().toLowerCase();
+
+async function sha256Hex(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function ensureAccount(db: DB, address: string): Promise<void> {
+  await db.insert(chatAccounts).values({ address: lc(address) }).onConflictDoNothing().run();
+}
+
+/** True when text carries an explicit 18+ affirmation. Used to gate Talk session minting. */
+export function affirms18Plus(text: string): boolean {
+  return /\b18\s*\+|18\s+or\s+older|over\s+18|i\s+am\s+(?:an?\s+)?adult\b/i.test(text || "");
+}
+
+/** Record a timestamped 18+ attestation for a chat account. Adults-only venue, defensible record. */
+export async function attest18(db: DB, address: string): Promise<void> {
+  const addr = lc(address);
+  await ensureAccount(db, addr);
+  await db
+    .update(chatAccounts)
+    .set({ ageAttested: 1, ageAttestedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+    .where(eq(chatAccounts.address, addr))
+    .run();
+}
+
+/** True only if the address has a recorded 18+ attestation. Enforced on every chat message so the
+ *  attestation is binding, not just recorded — and pre-attestation accounts can't slip through. */
+export async function isAdultAttested(db: DB, address: string): Promise<boolean> {
+  const row = await db
+    .select({ a: chatAccounts.ageAttested })
+    .from(chatAccounts)
+    .where(eq(chatAccounts.address, lc(address)))
+    .get();
+  return row?.a === 1;
+}
+
+/** Read $NUMETAL balance × price (cached ~1 day) and persist the perk tier + USD held. Best-effort. */
+export async function refreshPerk(db: DB, env: Env, address: string): Promise<{ perk: PerkLevel; usdHeld: number }> {
+  const addr = lc(address);
+  await ensureAccount(db, addr);
+  const acct = await db.select().from(chatAccounts).where(eq(chatAccounts.address, addr)).get();
+  const fresh =
+    acct?.perkCheckedAt && Date.now() - new Date(acct.perkCheckedAt).getTime() < PERK_CACHE_HOURS * 3600_000;
+  if (fresh) return { perk: (acct!.perkLevel as PerkLevel) ?? "none", usdHeld: acct!.usdHeld ?? 0 };
+  const { perkLevel, usdHeld } = await readNumetalUsd(addr, { rpcUrl: env.BASE_RPC_URL, contract: env.NUMETAL_CA });
+  await db
+    .update(chatAccounts)
+    .set({ perkLevel, usdHeld, perkCheckedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+    .where(eq(chatAccounts.address, addr))
+    .run();
+  return { perk: perkLevel, usdHeld };
+}
+
+export interface Balance {
+  perk: PerkLevel;
+  usdHeld: number;
+  credits: number;
+  freeQuota: number;
+  freeRemaining: number;
+}
+
+export async function getBalance(db: DB, env: Env, address: string): Promise<Balance> {
+  const addr = lc(address);
+  const { perk, usdHeld } = await refreshPerk(db, env, addr);
+  const acct = await db.select().from(chatAccounts).where(eq(chatAccounts.address, addr)).get();
+  const quota = freeQuotaForUsd(usdHeld);
+  const today = utcDay();
+  const usedToday = acct?.freeUsedDay === today ? (acct?.freeUsedCount ?? 0) : 0;
+  return { perk, usdHeld, credits: acct?.credits ?? 0, freeQuota: quota, freeRemaining: Math.max(0, quota - usedToday) };
+}
+
+export type ChargeResult = { ok: true; via: "free" | "paid"; balance: Balance } | { ok: false; balance: Balance };
+
+/**
+ * Charge one message: prefer the free daily allowance, then paid credits. Atomic-ish via
+ * conditional UPDATEs (D1 is single-writer per row). Returns ok:false → caller responds 402.
+ */
+export async function chargeOne(db: DB, env: Env, address: string): Promise<ChargeResult> {
+  const addr = lc(address);
+  const before = await getBalance(db, env, addr);
+  const today = utcDay();
+
+  // 1) free allowance — ATOMIC + race-safe: roll the day in SQL and increment ONLY if the
+  //    effective (day-aware) used-count is still below the quota. The old JS-computed increment with
+  //    an address-only WHERE let concurrent requests both read 0 and both write 1 (lost update →
+  //    free-quota bypass). This mirrors the paid path's conditional guard (`AND credits > 0`).
+  if (before.freeQuota > 0) {
+    const res = await env.DB.prepare(
+      `UPDATE chat_accounts
+         SET free_used_day = ?1,
+             free_used_count = CASE WHEN free_used_day = ?1 THEN free_used_count + 1 ELSE 1 END,
+             updated_at = datetime('now')
+       WHERE address = ?2
+         AND (CASE WHEN free_used_day = ?1 THEN free_used_count ELSE 0 END) < ?3`,
+    )
+      .bind(today, addr, before.freeQuota)
+      .run();
+    if ((res.meta?.changes ?? 0) > 0) return { ok: true, via: "free", balance: await getBalance(db, env, addr) };
+  }
+
+  // 2) paid credits — decrement only if > 0 (guards against going negative under races)
+  const res = await db
+    .update(chatAccounts)
+    .set({ credits: sql`${chatAccounts.credits} - 1`, updatedAt: new Date().toISOString() })
+    .where(sql`${chatAccounts.address} = ${addr} AND ${chatAccounts.credits} > 0`)
+    .run();
+  if ((res.meta?.changes ?? 0) > 0) return { ok: true, via: "paid", balance: await getBalance(db, env, addr) };
+
+  return { ok: false, balance: before };
+}
+
+export async function addCredits(db: DB, address: string, n: number): Promise<void> {
+  const addr = lc(address);
+  await ensureAccount(db, addr);
+  await db
+    .update(chatAccounts)
+    .set({ credits: sql`${chatAccounts.credits} + ${Math.max(0, Math.trunc(n))}`, updatedAt: new Date().toISOString() })
+    .where(eq(chatAccounts.address, addr))
+    .run();
+}
+
+/** Mint a single-use sign-in nonce; opportunistically prune nonces older than an hour. */
+export async function mintNonce(db: DB): Promise<string> {
+  const raw = crypto.getRandomValues(new Uint8Array(16));
+  const nonce = [...raw].map((b) => b.toString(16).padStart(2, "0")).join("");
+  await db.delete(chatNonces).where(sql`${chatNonces.createdAt} < datetime('now','-1 hour')`).run();
+  await db.insert(chatNonces).values({ nonce }).run();
+  return nonce;
+}
+
+/** Atomically consume a nonce: true only if it existed, was unused, and is < 10 min old. */
+export async function consumeNonce(db: DB, nonce: string): Promise<boolean> {
+  if (!/^[a-f0-9]{16,}$/i.test(nonce)) return false;
+  const res = await db
+    .update(chatNonces)
+    .set({ used: 1 })
+    .where(sql`${chatNonces.nonce} = ${nonce} AND ${chatNonces.used} = 0 AND ${chatNonces.createdAt} > datetime('now','-10 minutes')`)
+    .run();
+  return (res.meta?.changes ?? 0) > 0;
+}
+
+/** Mint a bearer session for a (proven) address. Returns the plaintext token (shown once). */
+export async function mintSession(db: DB, address: string, source: "signature" | "topup" | "admin"): Promise<{ token: string; expiresAt: string }> {
+  const addr = lc(address);
+  await ensureAccount(db, addr);
+  const raw = crypto.getRandomValues(new Uint8Array(32));
+  const token = "ish_" + [...raw].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 86400_000).toISOString();
+  await db.insert(chatSessions).values({ tokenHash: await sha256Hex(token), address: addr, source, expiresAt }).run();
+  return { token, expiresAt };
+}
+
+/** Resolve a bearer token → address, honoring expiry + revocation. Null if invalid. */
+export async function resolveSession(db: DB, token: string): Promise<string | null> {
+  if (!token || !token.startsWith("ish_")) return null;
+  const row = await db.select().from(chatSessions).where(eq(chatSessions.tokenHash, await sha256Hex(token))).get();
+  if (!row || row.revoked) return null;
+  if (new Date(row.expiresAt).getTime() < Date.now()) return null;
+  return row.address;
+}

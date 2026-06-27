@@ -7,7 +7,9 @@
  */
 import type { Env } from "../env";
 
-const DIDIT_API = "https://verification.didit.me/v2/session/";
+// v2 is retired (it 404s/4xxs → no session URL). v3 is the current create-session endpoint —
+// verified against docs.didit.me 2026-06; same request shape, returns 201 + { session_id, url }.
+const DIDIT_API = "https://verification.didit.me/v3/session/";
 
 export interface SessionResult {
   ok: boolean;
@@ -41,10 +43,14 @@ export async function createDiditSession(
         workflow_id: env.DIDIT_WORKFLOW_ID,
         vendor_data: String(input.ownerId), // echoed back in the webhook → maps result → owner
         callback: input.callbackUrl,
+        callback_method: "both", // fire the redirect from whichever device finishes (Didit-recommended)
         metadata: { coupleId: input.coupleId },
       }),
     });
-    if (!res.ok) return { ok: false, reason: `didit ${res.status}` };
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return { ok: false, reason: `didit ${res.status}: ${detail.slice(0, 300)}` };
+    }
     const j = (await res.json()) as { session_id?: string; url?: string; session_url?: string };
     return { ok: true, sessionId: j.session_id, url: j.url ?? j.session_url };
   } catch (e) {

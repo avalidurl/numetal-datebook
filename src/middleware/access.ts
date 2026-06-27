@@ -10,6 +10,7 @@ import { getCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
 import type { Env } from "../env";
 import { verifyAccessJwt } from "../identity/cfaccess";
+import { timingSafeEqualStr } from "../util/timing";
 
 export const accessGate = createMiddleware<{ Bindings: Env }>(async (c, next) => {
   // 1) Cloudflare Access (email) — the operator path.
@@ -21,7 +22,8 @@ export const accessGate = createMiddleware<{ Bindings: Env }>(async (c, next) =>
   // 2) Bearer ACCESS_KEY — the API/agent path.
   const auth = c.req.header("authorization");
   const bearer = auth?.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : undefined;
-  if (c.env.ACCESS_KEY && bearer === c.env.ACCESS_KEY) {
+  // Constant-time compare — a plain `===` leaks the key prefix via response timing.
+  if (c.env.ACCESS_KEY && bearer && (await timingSafeEqualStr(bearer, c.env.ACCESS_KEY))) {
     await next();
     return;
   }

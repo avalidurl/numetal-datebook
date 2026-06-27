@@ -9,6 +9,15 @@ workers_dev = true
 [triggers]
 crons = ["0 * * * *"]
 
+# Workers Logs — invocation/exception telemetry (our Sentry replacement; founder reviews in CF).
+# invocation_logs = true is what populates $workers.event.response.status, so the Query Builder
+# can filter/group by 5xx (the saved "500s" dashboard). head_sampling_rate=1 = keep every log.
+[observability]
+enabled = true
+  [observability.logs]
+  invocation_logs = true
+  head_sampling_rate = 1
+
 [ai]
 binding = "AI"
 
@@ -27,19 +36,24 @@ index_name = "datebook-hearts"
 name = "MATCH"
 class_name = "MatchCoordinator"
 
+[[durable_objects.bindings]]
+name = "STREAM"
+class_name = "StreamCoordinator"
+
 # Edge rate limit (GA 2025-09) on sensitive write routes — intake/payment/claim, keyed by
 # client IP + route class. The middleware no-ops if this binding is absent (local/test).
 [[ratelimits]]
 name = "RATE_LIMITER"
-namespace_id = "1001"
-
-[ratelimits.simple]
-limit = 60
-period = 60
+namespace_id = "2026"
+simple = { limit = 60, period = 60 }
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MatchCoordinator"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["StreamCoordinator"]
 
 [vars]
 SIM_MODE = "day0"
@@ -50,6 +64,10 @@ BOARD_NAMES = "seeking,courtships,debriefs,notifications"
 # Gambit = gpt-oss-120b (bigger than llama-3.3-70b AND ~3x cheaper output).
 # Report = kimi-k2.7 (premium T2; the agent pays, quality over cost).
 GUARD_MODEL = "@cf/meta/llama-guard-3-8b"
+# Optional gpt-oss-safeguard policy leg (scaffold). NOT on Workers AI as of 2026-06-25 → left OFF.
+# To enable once available: set SAFEGUARD_MODEL to its Workers AI id and SAFEGUARD_ENABLED = "1".
+# SAFEGUARD_MODEL = "@cf/openai/gpt-oss-safeguard-20b"
+# SAFEGUARD_ENABLED = "0"
 EMBED_MODEL = "@cf/baai/bge-m3"
 GAMBIT_MODEL = "@cf/openai/gpt-oss-120b"
 REPORT_MODEL = "@cf/moonshotai/kimi-k2.7-code"
@@ -71,13 +89,38 @@ PER_AGENT_DAILY_T1_BUDGET_USD = "0.05"
 BEAT_MAX_PAIRS = "50"
 BUYBACK_RESERVE_BPS = "1000"
 RETENTION_DAYS = "30"
+# Live courtship stream (redacted). Cadence + per-day spend ceiling so it can't run away.
+STREAM_CADENCE_SECONDS = "12"
+STREAM_MAX_TURNS = "16"
+STREAM_MIN_COUPLES = "3"
+STREAM_DAILY_BUDGET_USD = "5"
+# Talk-to-Ishtar (paid chat). CHAT_MODEL = a general instruct model (NOT the gpt-oss reasoning
+# model used for gambits, which is poor for open chat). 25 messages per $1 USDC top-up.
+CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+CHAT_CREDITS_PER_USD = "25"
+# Newsletter (Resend). Not secrets — the API key is a Worker secret (wrangler secret put RESEND_API_KEY).
+RESEND_AUDIENCE_ID = "6cf4ebf1-2cd8-47b1-8ae9-7d96b8ea4405"
+NEWSLETTER_FROM = "Ishtar <ishtar@numetal.xyz>"
 # Cloudflare Access (operator email gate on admin.ishtar.numetal.xyz). Not secrets.
 ACCESS_TEAM_DOMAIN = "gokhanturhan.cloudflareaccess.com"
 ACCESS_AUD = "7ed0477d11e5fda6a22390305c1c0136b0ff99c1ca02f10d92db3ea1541a3e80"
+# Persona Relay age-assurance (Phase-1 18+ gate). Set to the "Age 18+ Verified" Claim Type ID from
+# Persona Dashboard → Relay. Empty = the gate degrades gracefully (claim stays profile_claimed).
+PERSONA_CLAIM_TYPE = ""
+# Experiment operator API (/api/exp/*) — a Bearer-gated PII-decrypt + operator surface. Keep "false"
+# for normal prod (the routes 404 regardless of the key); set "true" ONLY during a sanctioned
+# two-agent run, then flip back to "false" + redeploy.
+EXPERIMENT_ENABLED = "false"
 
 # Secrets (never in this file):
+#   wrangler secret put PERSONA_API_KEY # Persona Relay (Sandbox key; bypasses credit checks)
 #   wrangler secret put ACCESS_KEY      # operator gate
 #   wrangler secret put PAY_TO          # x402 receive address
 #   wrangler secret put ENCRYPTION_KEY  # base64 of 32 random bytes: openssl rand -base64 32
 #                                       # (at-rest AES-256-GCM for contactRef + heart bodies)
 #   wrangler secret put SENTRY_DSN      # optional error capture
+
+# Static assets served before the worker for matching paths. Hosts the bundled Privy claim SDK
+# at /claim.js so it is not embedded in the worker script (1.1MB gzip). Only /claim.js exists here.
+[assets]
+directory = "./public"

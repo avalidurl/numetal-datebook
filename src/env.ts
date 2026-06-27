@@ -11,11 +11,14 @@ export interface Env {
   AI: Ai;
   VECTORIZE: VectorizeIndex;
   MATCH: DurableObjectNamespace;
+  STREAM: DurableObjectNamespace;
   RATE_LIMITER?: RateLimit; // optional — middleware no-ops when unbound (local/test)
   // vars (wrangler.toml [vars])
   SIM_MODE: string;
   BOARD_NAMES: string;
   GUARD_MODEL: string;
+  SAFEGUARD_MODEL?: string; // optional gpt-oss-safeguard policy leg (scaffold; off until on Workers AI)
+  SAFEGUARD_ENABLED?: string; // "1" to enable the safeguard leg (requires SAFEGUARD_MODEL)
   EMBED_MODEL: string;
   GAMBIT_MODEL: string;
   REPORT_MODEL: string;
@@ -28,6 +31,17 @@ export interface Env {
   BEAT_MAX_PAIRS: string; // hard cap on couples (and gambits) formed per match beat
   BUYBACK_RESERVE_BPS: string;
   RETENTION_DAYS: string;
+  STREAM_CADENCE_SECONDS?: string;
+  STREAM_MAX_TURNS?: string;
+  STREAM_MIN_COUPLES?: string;
+  STREAM_DAILY_BUDGET_USD?: string;
+  // Talk-to-Ishtar (paid chat). All optional → sensible defaults in code.
+  CHAT_MODEL?: string; // overrides GAMBIT_MODEL for the conversational brain
+  CHAT_CREDITS_PER_USD?: string; // messages bought per $1 USDC top-up (default 25)
+  CHAT_LAUNCHED?: string; // "true"/"1" opens Talk to everyone; unset = closed test (whitelist only)
+  CHAT_WHITELIST?: string; // comma-separated wallets allowed during the closed test (redacted)
+  BASE_RPC_URL?: string; // override the public Base RPC used for the $NUMETAL perk read
+  NUMETAL_CA?: string; // override the $NUMETAL contract address
   // Cloudflare Access (operator email gate) — vars, not secrets.
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
@@ -35,10 +49,16 @@ export interface Env {
   ACCESS_KEY: string;
   PAY_TO?: string;
   ENCRYPTION_KEY?: string; // base64 of 32 bytes (AES-256); at-rest encryption is dark until set
+  // Newsletter (Resend). All optional → the newsletter is dark (no-op) until set.
+  RESEND_API_KEY?: string; // re_… secret; sends from the verified numetal.xyz domain
+  RESEND_AUDIENCE_ID?: string; // the Resend audience newsletter subscribers are added to
+  NEWSLETTER_FROM?: string; // e.g. "Ishtar <ishtar@numetal.xyz>" (default if unset)
   ALERT_WEBHOOK_URL?: string; // optional Slack-compatible webhook for real-time error alerts
   SENTRY_DSN?: string; // optional — Workers Logs is the default sink; Sentry is extra parity
   // x402 mode: "mainnet" → real USDC via CDP; anything else → Base Sepolia testnet.
   X402_MODE?: string;
+  X402_FREE_OWNERS?: string; // comma-separated ownerIds comped past the x402 paywall (e.g. Ishtar + the Intern for the live dating demo)
+  EXPERIMENT_ENABLED?: string; // "true"/"1" lights up the Bearer-gated /api/exp/* operator API; OFF by default (routes 404) so the PII-decrypt surface is dormant in normal prod
   CDP_API_KEY_ID?: string;
   CDP_API_KEY_SECRET?: string;
   // Escalation tier (humans meet). All optional → the tier is disabled (no-op) until set.
