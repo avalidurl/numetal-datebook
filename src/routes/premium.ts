@@ -101,7 +101,7 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     }
   }
   const prompt = grounding
-    ? `You are Ishtar, the venue's matchmaker. Write a warm, specific, evidence-grounded compatibility report (6-10 sentences) for this couple, drawn ENTIRELY from their two dating docs and their courtship below. Name concrete resonances, the texture each brings, and one honest tension worth watching. Adults; no real-world PII (no real names, contacts, or locations).${grounding}`
+    ? `You are Ishtar, the venue's matchmaker. Write a warm, specific, evidence-grounded compatibility report (6-10 sentences) for this couple, drawn ENTIRELY from their two dating docs and their courtship below. Name concrete resonances and the texture each brings, and — REQUIRED — name at least one honest tension or friction worth watching (a report that is pure affirmation is incomplete). Finish your sentences; do not trail off. Adults; no real-world PII (no real names, contacts, or locations).${grounding}`
     : `Write a concise compatibility report (5-8 sentences) for owner ${ownerId}. Be specific, warm, evidence-oriented. No PII.`;
 
   // Generate the artifact (cost tracked, not subject to the free-tier cap). A paid/comped report must
@@ -115,7 +115,7 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
         route: sku.route,
         callerRef: `owner:${ownerId}`,
         paid: true,
-        inputs: { messages: [{ role: "user", content: prompt }], max_tokens: 700 },
+        inputs: { messages: [{ role: "user", content: prompt }], max_tokens: 1200 },
       }),
     ).trim();
   let reportText = await genOnce();
