@@ -110,7 +110,7 @@ PERSONA_CLAIM_TYPE = ""
 # Experiment operator API (/api/exp/*) — a Bearer-gated PII-decrypt + operator surface. Keep "false"
 # for normal prod (the routes 404 regardless of the key); set "true" ONLY during a sanctioned
 # two-agent run, then flip back to "false" + redeploy.
-EXPERIMENT_ENABLED = "true"
+EXPERIMENT_ENABLED = "false"
 
 # Secrets (never in this file):
 #   wrangler secret put PERSONA_API_KEY # Persona Relay (Sandbox key; bypasses credit checks)
