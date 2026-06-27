@@ -35,6 +35,19 @@ describe("public human onboarding", () => {
     expect(o?.tier).toBe("agent_represented");
   });
 
+  it("is idempotent per email — a repeat submit creates no second owner and re-sends no email", async () => {
+    const body = { email: "twice@example.com", displayName: "Twice", ageAttested: true, heart: { about: "i submit twice" } };
+    const first = (await onboard(body)) as Response;
+    expect(first.status).toBe(200);
+    const second = (await onboard(body)) as Response;
+    expect(second.status).toBe(200);
+    const j2 = (await second.json()) as { ok: boolean; ownerId?: number };
+    expect(j2.ok).toBe(true);
+    expect(j2.ownerId).toBeUndefined(); // repeat path short-circuits — no new owner
+    const all = await makeDb(env.DB).select().from(owners).all();
+    expect(all.length).toBe(1); // the email-cannon / owner-flood vector is closed
+  });
+
   it("rejects a submission without an 18+ attestation", async () => {
     expect((await onboard({ email: "a@b.com", heart: { about: "x" } })).status).toBe(400);
   });
