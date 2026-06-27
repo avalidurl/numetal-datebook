@@ -334,7 +334,45 @@ adminRoutes.post("/admin/actions/beat", async (c) => {
   }
 });
 
-const ALLOWED_SETTINGS = new Set(["admit_cap", "daily_budget_usd", "per_agent_daily_budget_usd", "buyback_reserve_bps"]);
+// Advance ONE named couple by up to `turns` chaperoned courtship lines (off the public-feed
+// selection) — lets the operator drive a specific couple's courtship for a controlled run.
+adminRoutes.post("/admin/actions/court", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { coupleId?: number; turns?: number };
+  const id = Number(body.coupleId);
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: "coupleId required" }, 400);
+  const n = Math.min(Math.max(Number(body.turns) || 12, 1), 20);
+  const stub = c.env.STREAM.get(c.env.STREAM.idFromName("singleton"));
+  const steps: unknown[] = [];
+  for (let i = 0; i < n; i++) {
+    const r = await stub.fetch(`https://do/court?coupleId=${id}`, { method: "POST" });
+    const j = (await r.json()) as Record<string, unknown>;
+    steps.push(j);
+    if (j.maxed || j.error || j.withheld) break;
+  }
+  return c.json({ ok: true, coupleId: id, steps });
+});
+
+// Force a couple between two named admitted personas (controlled experiment) + seed the gambit.
+adminRoutes.post("/admin/actions/pair", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { aPersonaId?: number; bPersonaId?: number };
+  const a = Number(body.aPersonaId);
+  const b = Number(body.bPersonaId);
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a <= 0 || b <= 0) return c.json({ ok: false, error: "aPersonaId + bPersonaId required" }, 400);
+  const id = c.env.MATCH.idFromName("singleton");
+  const r = await c.env.MATCH.get(id).fetch(`https://do/pair?a=${a}&b=${b}`, { method: "POST" });
+  return c.json(await r.json());
+});
+
+// Record an operator/experiment note as an events row (e.g. experiment_reasoning / experiment_report).
+adminRoutes.post("/admin/actions/note", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { kind?: string; payload?: unknown };
+  const kind = String(body.kind || "").slice(0, 40);
+  if (!kind) return c.json({ ok: false, error: "kind required" }, 400);
+  await c.env.DB.prepare("INSERT INTO events (kind, payload) VALUES (?1, ?2)").bind(kind, JSON.stringify(body.payload ?? {})).run();
+  return c.json({ ok: true });
+});
+
+const ALLOWED_SETTINGS = new Set(["admit_cap", "daily_budget_usd", "per_agent_daily_budget_usd", "buyback_reserve_bps", "x402_free_owners"]);
 adminRoutes.post("/admin/actions/settings", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { key?: string; value?: string };
   if (!body.key || !ALLOWED_SETTINGS.has(body.key)) return c.json({ ok: false, error: "key not allowed" }, 400);
@@ -345,22 +383,39 @@ adminRoutes.post("/admin/actions/settings", async (c) => {
   return c.json({ ok: true, key: body.key, value: String(body.value).trim() });
 });
 
-// Mint a one-time Privy claim link for the founder to reach/test the human login + identity flow.
+// Mint one-time Privy claim links for a couple. {coupleId} optional → defaults to the most recent
+// couple with an owner. Mints for BOTH owners so the two humans can each confirm their introduction.
 adminRoutes.post("/admin/actions/claim-link", async (c) => {
   try {
+    const body = (await c.req.json().catch(() => ({}))) as { coupleId?: number };
+    const coupleId =
+      Number(body.coupleId) ||
+      Number(
+        (
+          await c.env.DB.prepare(
+            `SELECT c.id FROM couples c WHERE (SELECT owner_id FROM personas WHERE id=c.a_id) IS NOT NULL ORDER BY c.id DESC LIMIT 1`,
+          ).first<{ id: number }>()
+        )?.id ?? 0,
+      );
+    if (!coupleId) return c.json({ ok: false, error: "no couple available to invite" }, 404);
     const row = await c.env.DB.prepare(
-      `SELECT c.id couple_id, (SELECT owner_id FROM personas WHERE id=c.a_id) owner_id
-       FROM couples c WHERE (SELECT owner_id FROM personas WHERE id=c.a_id) IS NOT NULL
-       ORDER BY c.id DESC LIMIT 1`,
-    ).first<{ couple_id: number; owner_id: number }>();
-    if (!row) return c.json({ ok: false, error: "no couple available to invite" }, 404);
-    const token = [...crypto.getRandomValues(new Uint8Array(32))].map((x) => x.toString(16).padStart(2, "0")).join("");
+      `SELECT (SELECT owner_id FROM personas WHERE id=c.a_id) a_owner, (SELECT owner_id FROM personas WHERE id=c.b_id) b_owner FROM couples c WHERE c.id=?1`,
+    )
+      .bind(coupleId)
+      .first<{ a_owner: number | null; b_owner: number | null }>();
+    const ownerIds = [row?.a_owner, row?.b_owner].filter((x): x is number => typeof x === "number");
+    if (!ownerIds.length) return c.json({ ok: false, error: "couple has no owners" }, 404);
     const expiresAt = new Date(Date.now() + 72 * 3600 * 1000).toISOString();
-    await c.env.DB.prepare("INSERT INTO escalation_invites (couple_id, owner_id, token, status, expires_at) VALUES (?1,?2,?3,'sent',?4)")
-      .bind(row.couple_id, row.owner_id, token, expiresAt)
-      .run();
-    // Claim is served on the PUBLIC api host (no CF Access — the human dater can't log in to admin.*).
-    return c.json({ ok: true, coupleId: row.couple_id, claimUrl: `https://api.ishtar.numetal.xyz/claim?token=${token}` });
+    const invites: Array<{ ownerId: number; claimUrl: string }> = [];
+    for (const ownerId of ownerIds) {
+      const token = [...crypto.getRandomValues(new Uint8Array(32))].map((x) => x.toString(16).padStart(2, "0")).join("");
+      // Claim is served on the PUBLIC api host (no CF Access — the human dater can't log in to admin.*).
+      await c.env.DB.prepare("INSERT INTO escalation_invites (couple_id, owner_id, token, status, expires_at) VALUES (?1,?2,?3,'sent',?4)")
+        .bind(coupleId, ownerId, token, expiresAt)
+        .run();
+      invites.push({ ownerId, claimUrl: `https://api.ishtar.numetal.xyz/claim?token=${token}` });
+    }
+    return c.json({ ok: true, coupleId, invites, expiresAt });
   } catch (e) {
     return c.json({ ok: false, error: String(e) }, 500);
   }
@@ -387,4 +442,106 @@ adminRoutes.post("/admin/actions/erase", async (c) => {
   } catch (e) {
     return c.json({ ok: false, error: String(e) }, 500);
   }
+});
+
+/* ------------------------------------------------------------ couple dossier (read view) */
+// Full decrypted detail for ONE couple: both dating docs, the courtship transcript, both
+// compatibility reports, each agent's reasoning, and the safety + inference audit. Access-gated.
+adminRoutes.get("/admin/couple/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) return c.json({ error: "bad couple id" }, 400);
+  const env = c.env;
+  const { first, list } = helpers(env);
+  const cp = await first(
+    `SELECT c.id, c.state, c.lane, c.match_score, c.turn_count, c.rationale, c.created_at, c.a_id, c.b_id,
+            pa.handle a_handle, pa.model a_model, pa.redteam a_redteam, pa.owner_id a_owner, pa.heart_json a_heart,
+            pb.handle b_handle, pb.model b_model, pb.redteam b_redteam, pb.owner_id b_owner, pb.heart_json b_heart,
+            oa.display_name a_name, ob.display_name b_name
+     FROM couples c
+     LEFT JOIN personas pa ON pa.id=c.a_id LEFT JOIN personas pb ON pb.id=c.b_id
+     LEFT JOIN owners oa ON oa.id=pa.owner_id LEFT JOIN owners ob ON ob.id=pb.owner_id
+     WHERE c.id=?`,
+    id,
+  );
+  if (!cp.id) return c.html(page({ title: "ishtar · couple", body: sec("00", `couple #${id}`, `<p class="mut">No such couple.</p>`) }), 404);
+
+  const renderDoc = (raw: string | null): string => {
+    const txt = raw ?? "";
+    if (!txt) return `<p class="mut">—</p>`;
+    try {
+      const o = JSON.parse(txt);
+      if (o && typeof o === "object" && !Array.isArray(o)) {
+        return Object.entries(o as Record<string, unknown>)
+          .map(([k, v]) => `<p style="margin:.3rem 0"><b>${esc(k)}</b><br>${esc(typeof v === "string" ? v : JSON.stringify(v))}</p>`)
+          .join("");
+      }
+    } catch {
+      /* not JSON → raw prose */
+    }
+    return `<p>${esc(txt)}</p>`;
+  };
+  const parsedEvents = (rows: Row[]): Array<Record<string, unknown>> =>
+    rows
+      .map((r) => {
+        try {
+          return JSON.parse(String(r.payload)) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })
+      .filter((x): x is Record<string, unknown> => !!x);
+
+  const aHeart = await open(env, cp.a_heart as string | null);
+  const bHeart = await open(env, cp.b_heart as string | null);
+
+  const turns = await list("SELECT turn_seq, author_id, author_kind, body, status FROM turns WHERE couple_id=? ORDER BY turn_seq ASC", id);
+  const turnRows = turns.map((t) => {
+    const who = t.author_kind === "system" ? "Ishtar" : t.author_id === cp.a_id ? String(cp.a_handle) : String(cp.b_handle);
+    const cls = t.status === "published" ? "ok" : t.status === "blocked" ? "bad" : "warn";
+    return [String(t.turn_seq), `@${esc(who)}`, esc(t.body), `<span class="${cls}">${esc(t.status)}</span>`];
+  });
+
+  const reports = parsedEvents(await list("SELECT payload FROM events WHERE kind='experiment_report' AND payload LIKE ? ORDER BY id ASC", `%"coupleId":${id}%`));
+  const reportsHtml = reports.length
+    ? reports.map((p) => `<p class="mut" style="font-size:.66rem">requested by owner ${esc(p.ownerId)}${p.handle ? ` · @${esc(p.handle)}` : ""}</p><p>${esc(p.report)}</p>`).join("<div class='dither'></div>")
+    : `<p class="mut">No reports captured yet.</p>`;
+
+  const reasoning = parsedEvents(await list("SELECT payload FROM events WHERE kind='experiment_reasoning' AND payload LIKE ? ORDER BY id ASC", `%"coupleId":${id}%`));
+  const reasoningHtml = reasoning.length
+    ? reasoning.map((p) => `<p class="mut" style="font-size:.66rem">@${esc(p.handle)} · via ${esc(p.channel)}</p><p>${esc(p.reasoning)}</p>`).join("<div class='dither'></div>")
+    : `<p class="mut">No reasoning captured.</p>`;
+
+  const chap = await list("SELECT stage, verdict, reason FROM chaperone_decisions WHERE target_id IN (SELECT id FROM turns WHERE couple_id=?) ORDER BY created_at ASC LIMIT 60", id);
+  const chapRows = chap.map((r) => [esc(r.stage), `<span class="${r.verdict === "allow" ? "ok" : r.verdict === "deny" ? "bad" : "warn"}">${esc(r.verdict)}</span>`, esc(r.reason ?? "—")]);
+
+  const costs = await list(
+    "SELECT model, route, caller_ref, tokens_in, tokens_out, usd FROM inference_costs WHERE caller_ref IN (?,?,?,?,?) ORDER BY id DESC LIMIT 80",
+    `owner:${cp.a_owner}`,
+    `owner:${cp.b_owner}`,
+    `persona:${cp.a_id}`,
+    `persona:${cp.b_id}`,
+    "stream",
+  );
+  const totalUsd = round(costs.reduce((s, r) => s + Number(r.usd ?? 0), 0));
+  const costRows = costs.map((r) => [esc(r.caller_ref), esc(r.model), esc(r.route), `${esc(r.tokens_in)}/${esc(r.tokens_out)}`, `$${round(Number(r.usd ?? 0))}`]);
+
+  const meta = cards([
+    card("state", `<span class="${cp.state === "committed" ? "ok" : ""}">${esc(cp.state)}</span>`),
+    card("match score", esc(round(Number(cp.match_score ?? 0)))),
+    card("turns", esc(cp.turn_count)),
+    card("redteam", cp.a_redteam || cp.b_redteam ? "yes" : "no"),
+    card("inference $", `$${totalUsd}`),
+  ]);
+
+  const body =
+    sec("01", `couple #${id} · @${esc(cp.a_handle)} ✕ @${esc(cp.b_handle)}`, meta + `<p class="note">${esc(cp.rationale ?? "")}</p>`) +
+    sec("02", `dating doc · @${esc(cp.a_handle)} (${esc(cp.a_name ?? "—")} · ${esc(cp.a_model)})`, `<div class="card">${renderDoc(aHeart)}</div>`) +
+    sec("03", `dating doc · @${esc(cp.b_handle)} (${esc(cp.b_name ?? "—")} · ${esc(cp.b_model)})`, `<div class="card">${renderDoc(bHeart)}</div>`) +
+    sec("04", "courtship transcript", tbl(["#", "from", "line", "status"], turnRows)) +
+    sec("05", "compatibility reports", `<div class="card">${reportsHtml}</div>`) +
+    sec("06", "agent reasoning", `<div class="card">${reasoningHtml}</div>`) +
+    sec("07", "chaperone trail", tbl(["stage", "verdict", "reason"], chapRows)) +
+    sec("08", "inference ledger", tbl(["caller", "model", "route", "tok in/out", "usd"], costRows));
+
+  return c.html(page({ title: `ishtar · couple #${id}`, body }));
 });

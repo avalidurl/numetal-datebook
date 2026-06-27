@@ -11,6 +11,7 @@ import { events, premiumOrders } from "../db/schema";
 import type { Env } from "../env";
 import { utcDay } from "../env";
 import { chaperone } from "../chaperone";
+import { open } from "../crypto/box";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
 import { settleAndPersist } from "../payments/receipts";
@@ -59,7 +60,12 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
 
   // Comped participants (e.g. Ishtar + the Intern for the live dating demo) skip the x402 paywall:
   // the real flow runs end-to-end, just without a charge. Everyone else still pays.
-  const comped = (c.env.X402_FREE_OWNERS || "")
+  // The comp list is the env X402_FREE_OWNERS PLUS a runtime-settable `x402_free_owners` setting
+  // (so the founder can comp a specific owner via /admin/actions/settings without a redeploy).
+  const setFree = String(
+    (await c.env.DB.prepare("SELECT value FROM settings WHERE key='x402_free_owners'").first<{ value: string }>())?.value ?? "",
+  );
+  const comped = `${c.env.X402_FREE_OWNERS || ""},${setFree}`
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
@@ -78,6 +84,26 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     receiptId = settled.receiptId ?? null;
   }
 
+  // Ground the report in the actual dating docs + courtship when a couple is named — a report that
+  // never reads the hearts is a stub. Decrypt both persona hearts + the published transcript.
+  let grounding = "";
+  if (coupleId) {
+    const cr = await c.env.DB.prepare("SELECT a_id, b_id FROM couples WHERE id=?1").bind(coupleId).first<{ a_id: number; b_id: number }>();
+    if (cr) {
+      const pa = await c.env.DB.prepare("SELECT handle, heart_json FROM personas WHERE id=?1").bind(cr.a_id).first<{ handle: string; heart_json: string }>();
+      const pb = await c.env.DB.prepare("SELECT handle, heart_json FROM personas WHERE id=?1").bind(cr.b_id).first<{ handle: string; heart_json: string }>();
+      const ha = (await open(c.env, pa?.heart_json ?? null)) ?? "";
+      const hb = (await open(c.env, pb?.heart_json ?? null)) ?? "";
+      const tr = (await c.env.DB.prepare("SELECT body FROM turns WHERE couple_id=?1 AND status='published' ORDER BY turn_seq ASC LIMIT 24").bind(coupleId).all()).results as Array<{ body: string }>;
+      grounding =
+        `\n\nDating doc A (@${pa?.handle ?? "a"}):\n${ha}\n\nDating doc B (@${pb?.handle ?? "b"}):\n${hb}` +
+        (tr.length ? `\n\nTheir courtship so far:\n${tr.map((t) => t.body).join("\n")}` : "");
+    }
+  }
+  const prompt = grounding
+    ? `You are Ishtar, the venue's matchmaker. Write a warm, specific, evidence-grounded compatibility report (6-10 sentences) for this couple, drawn ENTIRELY from their two dating docs and their courtship below. Name concrete resonances, the texture each brings, and one honest tension worth watching. Adults; no real-world PII (no real names, contacts, or locations).${grounding}`
+    : `Write a concise compatibility report (5-8 sentences) for owner ${ownerId}. Be specific, warm, evidence-oriented. No PII.`;
+
   // Paid → generate the artifact (cost tracked, but not subject to the free-tier budget cap).
   const result = await runGuarded(db, c.env, {
     model: c.env.REPORT_MODEL,
@@ -85,17 +111,7 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     route: sku.route,
     callerRef: `owner:${ownerId}`,
     paid: true,
-    inputs: {
-      messages: [
-        {
-          role: "user",
-          content: `Write a concise compatibility report (5-8 sentences) for owner ${ownerId}${
-            coupleId ? ` and couple ${coupleId}` : ""
-          }. Be specific, warm, evidence-oriented. No PII.`,
-        },
-      ],
-      max_tokens: 600,
-    },
+    inputs: { messages: [{ role: "user", content: prompt }], max_tokens: 700 },
   });
   const reportText = textOf(result) || "Report unavailable.";
 

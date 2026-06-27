@@ -55,6 +55,13 @@ export class StreamCoordinator implements DurableObject {
       const r = await this.advance().catch((e) => ({ error: String(e) }));
       return Response.json(r);
     }
+    if (p.endsWith("/court")) {
+      // Advance ONE named couple by a line (founder action) — bypasses the public-feed selection,
+      // so an off-feed (private) couple can still be courted for a controlled experiment.
+      const coupleId = Number(new URL(req.url).searchParams.get("coupleId"));
+      const r = await this.courtOne(coupleId).catch((e) => ({ error: String(e) }));
+      return Response.json(r);
+    }
     const enabled = (await this.state.storage.get<boolean>("enabled")) ?? false;
     const spent = await this.spentToday(makeDb(this.env.DB));
     return Response.json({ enabled, spentTodayUsd: spent, dailyBudgetUsd: dailyBudgetUsd(this.env) });
@@ -103,6 +110,14 @@ export class StreamCoordinator implements DurableObject {
     const couple = active.find((c) => c.turn_count < maxTurns(this.env));
     if (!couple) return await this.spawnCouple(db); // all maxed → fresh blood
 
+    return await this.advanceCouple(db, couple);
+  }
+
+  /** Generate + publish the next courtship line for a specific couple row (shared by the feed + courtOne). */
+  private async advanceCouple(
+    db: DB,
+    couple: { id: number; a_id: number; b_id: number },
+  ): Promise<Record<string, unknown>> {
     const ha = await this.handle(db, couple.a_id);
     const hb = await this.handle(db, couple.b_id);
     const recent = (
@@ -146,6 +161,19 @@ export class StreamCoordinator implements DurableObject {
       .where(eq(couples.id, couple.id))
       .run();
     return { coupleId: couple.id, seq, author: nextHandle };
+  }
+
+  /** Founder action: advance ONE named couple by a line, regardless of public-feed eligibility. */
+  async courtOne(coupleId: number): Promise<Record<string, unknown>> {
+    if (!Number.isInteger(coupleId) || coupleId <= 0) return { error: "coupleId required" };
+    const db = makeDb(this.env.DB);
+    const c = (await this.env.DB.prepare("SELECT id, a_id, b_id, turn_count, state FROM couples WHERE id=?1")
+      .bind(coupleId)
+      .first()) as { id: number; a_id: number; b_id: number; turn_count: number; state: string } | null;
+    if (!c) return { error: "no such couple" };
+    if (c.state !== "courting") return { error: `couple not courting (state=${c.state})` };
+    if (c.turn_count >= maxTurns(this.env)) return { maxed: true, turns: c.turn_count };
+    return await this.advanceCouple(db, c);
   }
 
   private async handle(db: DB, id: number): Promise<string> {
