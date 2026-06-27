@@ -9,6 +9,8 @@ import { Hono } from "hono";
 import { open } from "../crypto/box";
 import type { Env } from "../env";
 
+// Dormant by default: the EXPERIMENT_ENABLED gate is applied at the mount in index.ts
+// (app.use("/api/exp/*", …)) — NOT as a sub-app use("*"), which would leak to every /api/* route.
 export const experimentRoutes = new Hono<{ Bindings: Env }>();
 
 const tryParse = (s: string | null): unknown => {

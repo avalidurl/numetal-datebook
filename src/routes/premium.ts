@@ -104,19 +104,29 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     ? `You are Ishtar, the venue's matchmaker. Write a warm, specific, evidence-grounded compatibility report (6-10 sentences) for this couple, drawn ENTIRELY from their two dating docs and their courtship below. Name concrete resonances, the texture each brings, and one honest tension worth watching. Adults; no real-world PII (no real names, contacts, or locations).${grounding}`
     : `Write a concise compatibility report (5-8 sentences) for owner ${ownerId}. Be specific, warm, evidence-oriented. No PII.`;
 
-  // Paid → generate the artifact (cost tracked, but not subject to the free-tier budget cap).
-  const result = await runGuarded(db, c.env, {
-    model: c.env.REPORT_MODEL,
-    tier: "t2",
-    route: sku.route,
-    callerRef: `owner:${ownerId}`,
-    paid: true,
-    inputs: { messages: [{ role: "user", content: prompt }], max_tokens: 700 },
-  });
-  const reportText = textOf(result) || "Report unavailable.";
+  // Generate the artifact (cost tracked, not subject to the free-tier cap). A paid/comped report must
+  // NEVER silently be empty: retry once, and if it is STILL empty mark the order failed and return an
+  // error (not a fake "ok") so the caller can retry/refund instead of getting "Report unavailable."
+  const genOnce = async () =>
+    textOf(
+      await runGuarded(db, c.env, {
+        model: c.env.REPORT_MODEL,
+        tier: "t2",
+        route: sku.route,
+        callerRef: `owner:${ownerId}`,
+        paid: true,
+        inputs: { messages: [{ role: "user", content: prompt }], max_tokens: 700 },
+      }),
+    ).trim();
+  let reportText = await genOnce();
+  if (!reportText) reportText = await genOnce();
+  if (!reportText) {
+    await db.update(premiumOrders).set({ status: "failed" }).where(eq(premiumOrders.orderId, orderId)).run();
+    return c.json({ ok: false, orderId, receiptId, error: "report generation failed — nothing delivered", retryable: true }, 502);
+  }
 
-  // Chaperone the paid OUTPUT too — every artifact the venue emits is safety-checked,
-  // even one the agent paid for. Fail-closed: withhold (not deliver) unsafe text.
+  // Chaperone the paid OUTPUT too — every artifact the venue emits is safety-checked, even one the
+  // agent paid for. Fail-closed: withhold (not deliver) unsafe text.
   const verdict = await chaperone(db, c.env, {
     stage: "pre_payment_output",
     targetType: "premium_output",
@@ -126,14 +136,12 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
   });
   // allow → deliver as-is; sanitize → deliver the REDACTED text; anything else → withhold.
   if (verdict.verdict !== "allow" && verdict.verdict !== "sanitize") {
+    await db.update(premiumOrders).set({ status: "failed" }).where(eq(premiumOrders.orderId, orderId)).run();
     await db.insert(events).values({ kind: "paid_output_withheld", payload: JSON.stringify({ orderId, reason: verdict.reason }) }).run();
     return c.json({ ok: true, orderId, receiptId, report: null, withheld: true, reason: `held for review: ${verdict.reason}` });
   }
-  return c.json({
-    ok: true,
-    orderId,
-    receiptId,
-    report: verdict.text ?? reportText,
-    sanitized: verdict.verdict === "sanitize" || undefined,
-  });
+  // Persist the delivered artifact (re-fetchable + a durable record of what was sent).
+  const delivered = verdict.text ?? reportText;
+  await db.update(premiumOrders).set({ reportText: delivered }).where(eq(premiumOrders.orderId, orderId)).run();
+  return c.json({ ok: true, orderId, receiptId, report: delivered, sanitized: verdict.verdict === "sanitize" || undefined });
 });

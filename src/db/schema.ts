@@ -295,6 +295,7 @@ export const premiumOrders = sqliteTable(
     requestHash: text("request_hash"),
     createdAt: text("created_at").notNull().default(now),
     updatedAt: text("updated_at").notNull().default(now),
+    reportText: text("report_text"), // the delivered compatibility report (re-fetchable; null until fulfilled)
   },
   (t) => ({
     byStatus: index("idx_premium_orders_status").on(t.status, t.createdAt),
