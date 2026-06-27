@@ -5,12 +5,13 @@
  * when BOTH owners are identity_verified AND both consented → reveal_ready. Privy/Didit are
  * no-op until configured (routes return 503), so this ships safely before the accounts exist.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { db as makeDb, type DB } from "../db/client";
 import { couples, escalationInvites, events, identityVerifications, introConsents, owners, personas } from "../db/schema";
 import type { Env } from "../env";
+import { open } from "../crypto/box";
 import { createDiditSession, verifyDiditWebhook } from "../identity/didit";
 import { verifyPrivyToken } from "../identity/privy";
 import { claimShell } from "../ui/system-pages";
@@ -125,6 +126,45 @@ export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Respo
     diditUrl: didit.ok ? (didit.url ?? null) : null,
     diditReason: didit.ok ? undefined : didit.reason,
   });
+}
+
+const revealSchema = z.object({ privyToken: z.string().min(8) });
+
+/**
+ * PUBLIC automated bilateral reveal (registered pre-access-gate). The Privy identity that CLAIMED an
+ * invite is the ONLY one who can reveal, and ONLY its own couple's OTHER contact, and ONLY after every
+ * gate (both identity_verified + both ageOver18 + both consented — `revealReady`). Every reveal/decrypt
+ * is audited. Until Didit verifies BOTH (e.g. while Didit is unfunded), `revealReady` is false → the
+ * human is told the introduction opens soon (the soft-launch hold).
+ */
+export async function revealHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const parsed = revealSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "privyToken required" }, 400);
+  const privy = await verifyPrivyToken(c.env, parsed.data.privyToken);
+  if (!privy.ok || !privy.userId)
+    return c.json({ error: "privy verification failed", reason: privy.reason }, privy.reason === "privy not configured" ? 503 : 401);
+  const db = makeDb(c.env.DB);
+  // Bind the reveal to the Privy identity that consumed the invite — its couple only (no IDOR).
+  const inv = await db
+    .select({ ownerId: escalationInvites.ownerId, coupleId: escalationInvites.coupleId })
+    .from(escalationInvites)
+    .where(and(eq(escalationInvites.claimedBy, privy.userId), eq(escalationInvites.status, "claimed")))
+    .orderBy(desc(escalationInvites.id))
+    .get();
+  if (!inv) return c.json({ error: "no claimed introduction for this identity" }, 404);
+  if (!(await revealReady(db, inv.coupleId)))
+    return c.json({ ok: true, ready: false, status: "Your 18+ check is still pending — we'll open the introduction the moment it clears." });
+  const ids = await coupleOwnerIds(db, inv.coupleId);
+  const otherId = ids.find((id) => id !== inv.ownerId);
+  if (otherId == null) return c.json({ error: "introduction incomplete" }, 404);
+  const other = await db.select({ displayName: owners.displayName, contactRef: owners.contactRef }).from(owners).where(eq(owners.id, otherId)).get();
+  const contact = (await open(c.env, other?.contactRef ?? null)) ?? null;
+  // Audit every reveal + decrypt (accountability + stalking deterrent).
+  await db
+    .insert(events)
+    .values({ kind: "contact_revealed", payload: JSON.stringify({ coupleId: inv.coupleId, toOwner: inv.ownerId, otherOwner: otherId, at: new Date().toISOString() }) })
+    .run();
+  return c.json({ ok: true, ready: true, match: { name: other?.displayName ?? "your match", contact } });
 }
 
 /** PUBLIC claim page (GET /claim?token=…) — minimal Privy login, then POST to /api/escalations/claim
