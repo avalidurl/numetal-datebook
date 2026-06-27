@@ -55,7 +55,6 @@ export interface Env {
   RESEND_AUDIENCE_ID?: string; // the Resend audience newsletter subscribers are added to
   NEWSLETTER_FROM?: string; // e.g. "Ishtar <ishtar@numetal.xyz>" (default if unset)
   ALERT_WEBHOOK_URL?: string; // optional Slack-compatible webhook for real-time error alerts
-  TURNSTILE_SECRET?: string; // Cloudflare Turnstile secret — bot gate on the PUBLIC human onboarding (dark until set)
   SENTRY_DSN?: string; // optional — Workers Logs is the default sink; Sentry is extra parity
   // x402 mode: "mainnet" → real USDC via CDP; anything else → Base Sepolia testnet.
   X402_MODE?: string;

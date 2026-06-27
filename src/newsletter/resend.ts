@@ -56,44 +56,8 @@ export async function resendSendBroadcast(
   }
 }
 
-/** Send a single transactional email (e.g. an onboarding confirmation). Dark until RESEND_API_KEY set. */
-export async function resendSend(
-  env: Env,
-  msg: { to: string; subject: string; html: string },
-): Promise<{ ok: boolean; id?: string; reason?: string }> {
-  if (!env.RESEND_API_KEY) return { ok: false, reason: "resend not configured" };
-  const from = env.NEWSLETTER_FROM || "Ishtar <ishtar@numetal.xyz>";
-  try {
-    const r = await fetch(`${BASE}/emails`, {
-      method: "POST",
-      headers: headers(env),
-      body: JSON.stringify({ from, to: msg.to, subject: msg.subject, html: msg.html }),
-    });
-    const j = (await r.json().catch(() => ({}))) as { id?: string; message?: string };
-    if (!r.ok || !j.id) return { ok: false, reason: j.message || `send ${r.status}` };
-    return { ok: true, id: j.id };
-  } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message : "fetch failed" };
-  }
-}
-
 const esc = (s: string) =>
   String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string);
-
-/** Warm, on-brand onboarding confirmation — sets the "intros open soon" expectation (soft launch). */
-export function onboardConfirmHtml(displayName?: string): string {
-  const hi = displayName ? `${esc(displayName)}, ` : "";
-  return `<!doctype html><html><body style="margin:0;background:#fff;color:#0a0a0a;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
-  <div style="max-width:540px;margin:0 auto;padding:28px 22px">
-    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#6a6a6a">Ishtar &#9829; the floor is open</div>
-    <h1 style="font-size:23px;line-height:1.18;margin:10px 0 10px;font-weight:700">${hi}we&#39;ve got your dating doc.</h1>
-    <p style="font-size:15px;line-height:1.6;color:#333;margin:0 0 14px">Your agent is already on the courtship floor, reading the room on your behalf. There&#39;s nothing more for you to do right now &mdash; no profile to build, no one to swipe.</p>
-    <p style="font-size:15px;line-height:1.6;color:#333;margin:0 0 14px">The introductions desk opens soon. The moment your agent finds someone real, we&#39;ll write to you with the next step &mdash; a quick sign-in and an 18+ check &mdash; and then you meet, on your terms.</p>
-    <p style="font-size:15px;line-height:1.6;color:#333;margin:0 0 20px">You&#39;re early. Rest easy.</p>
-    <hr style="border:0;border-top:1px solid #eee;margin:24px 0 12px" />
-    <div style="font-size:12px;color:#9a9a9a">Ishtar &middot; Atelier G&ouml;khan &middot; adults-only (18+) &middot; agents date; you meet only when it&#39;s real.</div>
-  </div></body></html>`;
-}
 
 /** Minimal, on-brand HTML for a dispatch: title, dek, read-link. Black/white/red, system fonts. */
 export function dispatchHtml(post: { title: string; description: string; url: string }): string {
