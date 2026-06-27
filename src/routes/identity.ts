@@ -13,6 +13,7 @@ import { couples, escalationInvites, events, identityVerifications, introConsent
 import type { Env } from "../env";
 import { createDiditSession, verifyDiditWebhook } from "../identity/didit";
 import { verifyPrivyToken } from "../identity/privy";
+import { claimShell } from "../ui/system-pages";
 
 export const identityRoutes = new Hono<{ Bindings: Env }>();
 
@@ -33,6 +34,15 @@ async function revealReady(db: DB, coupleId: number): Promise<boolean> {
   if (ids.length < 2) return false;
   const verified = await db.select({ id: owners.id }).from(owners).where(and(inArray(owners.id, ids), eq(owners.tier, "identity_verified"))).all();
   if (verified.length < ids.length) return false;
+  // H1: tier alone is not enough — require a recorded 18+ result for BOTH owners. A provider that
+  // reported verified-but-not-adult must NEVER reach contact reveal. The age flag is the gate.
+  const adult = await db
+    .select({ ownerId: identityVerifications.ownerId })
+    .from(identityVerifications)
+    .where(and(inArray(identityVerifications.ownerId, ids), eq(identityVerifications.ageOver18, 1)))
+    .all();
+  const adultSet = new Set(adult.map((a) => a.ownerId));
+  if (!ids.every((i) => adultSet.has(i))) return false;
   const consents = await db
     .select({ ownerId: introConsents.ownerId })
     .from(introConsents)
@@ -94,12 +104,27 @@ export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Respo
   // Bind the consumed token to the Privy identity that redeemed it (one-time + identity-bound).
   await db.update(escalationInvites).set({ status: "claimed", claimedAt: new Date().toISOString(), claimedBy: privy.userId ?? null }).where(eq(escalationInvites.id, invite.id)).run();
 
-  // Kick off the identity check immediately; degrade gracefully if Didit isn't configured.
-  const s = await createDiditSession(c.env, { ownerId: invite.ownerId, callbackUrl: `${new URL(c.req.url).origin}/api/identity/webhook/didit` });
-  if (s.ok && s.sessionId) {
-    await db.insert(identityVerifications).values({ ownerId: invite.ownerId, provider: "didit", sessionId: s.sessionId, status: "pending" }).run();
+  // Start the binding 18+/ID check (Didit) bound to this owner+couple, and return the hosted URL so
+  // the human is redirected straight into it. Didit's signed webhook promotes the owner on approval.
+  // If Didit isn't configured, the claim still succeeds (profile_claimed) — never a dead end.
+  const didit = await createDiditSession(c.env, {
+    ownerId: invite.ownerId,
+    coupleId: invite.coupleId,
+    callbackUrl: `${new URL(c.req.url).origin}/api/identity/webhook/didit`,
+  });
+  if (didit.ok && didit.sessionId) {
+    await db
+      .insert(identityVerifications)
+      .values({ ownerId: invite.ownerId, provider: "didit", sessionId: didit.sessionId, status: "pending" })
+      .run();
   }
-  return c.json({ ok: true, ownerId: invite.ownerId, tier: "profile_claimed", diditUrl: s.ok ? s.url ?? null : null, identityNote: s.ok ? undefined : s.reason });
+  return c.json({
+    ok: true,
+    ownerId: invite.ownerId,
+    tier: "profile_claimed",
+    diditUrl: didit.ok ? (didit.url ?? null) : null,
+    diditReason: didit.ok ? undefined : didit.reason,
+  });
 }
 
 /** PUBLIC claim page (GET /claim?token=…) — minimal Privy login, then POST to /api/escalations/claim
@@ -107,46 +132,44 @@ export async function claimHandler(c: Context<{ Bindings: Env }>): Promise<Respo
  *  NOTE: the Privy client calls need a browser smoke test against the live app before go-live. */
 export function claimPage(c: Context<{ Bindings: Env }>): Response {
   if (!c.env.PRIVY_APP_ID) {
-    return c.html("<!doctype html><meta charset=utf-8><title>Ishtar</title><body style='font-family:ui-monospace,monospace;max-width:520px;margin:3rem auto'><h1>Ishtar</h1><p>Sign-in isn't configured yet — check back soon.</p></body>", 503);
+    return c.html(
+      claimShell({
+        title: "Ishtar · confirm your intro",
+        docline: "Doc · ISH-00 · Confirm intro · Rev 0.1",
+        partno: "Part No. ISH-101 — introduction claim",
+        tagline: "Sign-in isn't open yet.",
+        subHtml:
+          "The introduction desk isn't configured on this venue yet. Check back shortly — your invite link stays valid until it expires.",
+        bodyHtml: `<div class="actions"><a class="btn" href="https://ishtar.numetal.xyz/docs/humans/getting-an-intro">How intros work &#8599;</a></div>`,
+      }),
+      503,
+    );
   }
   const appId = c.env.PRIVY_APP_ID.replace(/[^A-Za-z0-9_-]/g, ""); // sanitize before HTML injection
-  const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ishtar · confirm your intro</title>
-<body style="font-family:ui-monospace,monospace;max-width:520px;margin:3rem auto;padding:0 1rem">
-<h1 style="font-weight:600">Ishtar</h1>
-<p>Your agent found someone. Sign in to confirm you'd like the introduction.</p>
-<div id="app"><p>Loading…</p></div>
-<p id="msg" style="opacity:.7;margin-top:1rem"></p>
-<script type="module">
-import React from "https://esm.sh/react@18.3.1";
-import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
-import { PrivyProvider, usePrivy } from "https://esm.sh/@privy-io/react-auth@2?deps=react@18.3.1,react-dom@18.3.1";
-import htm from "https://esm.sh/htm@3.1.1";
-const html = htm.bind(React.createElement);
-const APP_ID = "${appId}";
-const TOKEN = new URLSearchParams(location.search).get("token") || "";
-const setMsg = (t) => { document.getElementById("msg").textContent = t; };
-function Claim() {
-  const { ready, authenticated, login, getAccessToken } = usePrivy();
-  React.useEffect(() => { (async () => {
-    if (!ready || !authenticated) return;
-    setMsg("Confirming…");
-    try {
-      const privyToken = await getAccessToken();
-      const r = await fetch("/api/escalations/claim", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: TOKEN, privyToken }) });
-      const j = await r.json();
-      if (j.ok) { setMsg("Confirmed. Next: a quick identity check…"); if (j.diditUrl) location.href = j.diditUrl; else setMsg("Confirmed — identity step will follow shortly."); }
-      else setMsg("Could not confirm: " + (j.reason || j.error || r.status));
-    } catch (e) { setMsg("Error: " + e.message); }
-  })(); }, [ready, authenticated]);
-  if (!ready) return html\`<p>Loading…</p>\`;
-  if (!authenticated) return html\`<button onClick=\${login} style="padding:.7rem 1.2rem;font:inherit;cursor:pointer">Sign in to confirm</button>\`;
-  return html\`<p>Signed in ✓</p>\`;
-}
-createRoot(document.getElementById("app")).render(html\`<\${PrivyProvider} appId=\${APP_ID}><\${Claim} /></\${PrivyProvider}>\`);
-</script>
-</body>`;
-  return c.html(html);
+  // The "Sign in to confirm" button lives in STATIC HTML and is ALWAYS visible (disabled until
+  // Privy is ready). Privy mounts into a hidden 1px node purely to drive its hook; if Privy never
+  // readies (origin not allow-listed) or esm.sh fails, the button flips to a Reload action — never
+  // a blank, button-less page (the original bug). The confirm flow is unchanged.
+  const bodyHtml = `<div class="actions" style="margin-top:1.6rem">
+      <button id="signin" class="btn primary" disabled>&#9670; Sign in to confirm</button>
+    </div>
+    <p id="msg" class="sub" style="min-height:1.3em;margin-top:.9rem">Initialising sign-in&hellip;</p>
+    <div id="relay-container" style="margin-top:1.2rem"></div>
+    <div id="app" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden"></div>`;
+  const headHtml = `<script>window.__PRIVY_APP_ID__=${JSON.stringify(appId)};</script>
+<script src="/claim.js" defer></script>`;
+  return c.html(
+    claimShell({
+      title: "Ishtar · confirm your intro",
+      docline: "Doc · ISH-00 · Confirm intro · Rev 0.1",
+      partno: "Part No. ISH-101 — introduction claim",
+      tagline: "Your agent found someone.",
+      subHtml:
+        "Sign in to confirm you'd like the introduction. After you confirm, there's a quick binding 18+ identity check; contact is revealed only when both sides have confirmed.",
+      bodyHtml,
+      headHtml,
+    }),
+  );
 }
 
 const sessionSchema = z.object({ ownerId: z.number().int().positive(), coupleId: z.number().int().positive().optional() });

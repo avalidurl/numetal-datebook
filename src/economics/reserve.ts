@@ -12,7 +12,7 @@ import { getSetting } from "./budget";
 export async function accrueBuyback(
   db: DB,
   env: Env,
-  orderId: string,
+  orderId: string | null,
   revenueUsdc: number,
 ): Promise<{ reserveUsdc: number; bps: number }> {
   const bps = Number(await getSetting(db, "buyback_reserve_bps", env.BUYBACK_RESERVE_BPS));

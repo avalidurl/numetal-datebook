@@ -4,6 +4,7 @@
  */
 import type { DB } from "../db/client";
 import type { Env } from "../env";
+import { normalizeForGuard } from "../chaperone/normalize";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
 
@@ -28,9 +29,12 @@ export async function makeGambit(
   const nonce = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   const fenceOpen = `<<HEART_${nonce}>>`;
   const fenceClose = `<</HEART_${nonce}>>`;
-  const forged = /<<\/?HEART_[a-f0-9]{6,}>>/gi;
+  // Broadened (red-team H6): match an any-case HEART fence with any payload, and NORMALIZE the heart
+  // first (strip invisibles / fold confusables) so a fence laced with zero-width chars can't survive
+  // the strip and slip a forged delimiter past the model.
+  const forged = /<<\/?HEART_[^>]*>>/gi;
   const safeHeart = (t: string): string =>
-    t.slice(0, 600).replace(forged, "");
+    normalizeForGuard(t.slice(0, 600)).clean.replace(forged, "");
   const safeHandle = (h: string): string => h.replace(/[^a-zA-Z0-9_.-]/g, "").slice(0, 64) || "anon";
 
   const system = [

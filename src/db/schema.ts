@@ -295,6 +295,7 @@ export const premiumOrders = sqliteTable(
     requestHash: text("request_hash"),
     createdAt: text("created_at").notNull().default(now),
     updatedAt: text("updated_at").notNull().default(now),
+    reportText: text("report_text"), // the delivered compatibility report (re-fetchable; null until fulfilled)
   },
   (t) => ({
     byStatus: index("idx_premium_orders_status").on(t.status, t.createdAt),
@@ -308,6 +309,7 @@ export const paymentReceipts = sqliteTable(
     orderId: text("order_id").notNull().references(() => premiumOrders.orderId),
     paymentProtocol: text("payment_protocol").notNull().default("x402"),
     network: text("network").notNull(),
+    nonce: text("nonce"), // anti-replay key (red-team C4); UNIQUE(network, nonce) via migration 0010
     facilitator: text("facilitator").notNull(),
     payer: text("payer"),
     payTo: text("pay_to").notNull(),
@@ -420,3 +422,129 @@ export const events = sqliteTable("events", {
   payload: text("payload"),
   createdAt: text("created_at").notNull().default(now),
 });
+
+/* ----------------------------------------------------------------- talk-to-Ishtar (paid chat) */
+// A chat account is keyed by wallet address (lowercased). `credits` are paid messages bought via
+// x402 top-up; freeUsedDay/freeUsedCount meter the daily $NUMETAL-holder free allowance.
+export const chatAccounts = sqliteTable("chat_accounts", {
+  address: text("address").primaryKey(), // lowercased 0x…
+  credits: integer("credits").notNull().default(0),
+  perkLevel: text("perk_level").notNull().default("none"), // none|badge|priority|discount|founder (USD-pegged)
+  usdHeld: real("usd_held").notNull().default(0), // USD value of $NUMETAL held at last check → free-msg quota
+  freeUsedDay: text("free_used_day"), // YYYY-MM-DD the free counter applies to
+  freeUsedCount: integer("free_used_count").notNull().default(0),
+  perkCheckedAt: text("perk_checked_at"), // last on-chain balance+price read (cached ~1 day)
+  ageAttested: integer("age_attested").notNull().default(0), // 18+ attested at session mint
+  ageAttestedAt: text("age_attested_at"),
+  createdAt: text("created_at").notNull().default(now),
+  updatedAt: text("updated_at").notNull().default(now),
+});
+
+// Bearer chat sessions — only the SHA-256 hash of the token is stored. Issued on a verified wallet
+// signature (free path), an x402 top-up (paid path), or a founder grant. Expire; revocable.
+export const chatSessions = sqliteTable(
+  "chat_sessions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    tokenHash: text("token_hash").notNull().unique(),
+    address: text("address").notNull(),
+    source: text("source").notNull().default("signature"), // signature|topup|admin
+    createdAt: text("created_at").notNull().default(now),
+    expiresAt: text("expires_at").notNull(),
+    revoked: integer("revoked").notNull().default(0),
+  },
+  (t) => ({ byAddr: index("idx_chat_sessions_addr").on(t.address) }),
+);
+
+// Conversation log — bounded multi-turn context + audit. Text-only; chaperoned both ways.
+export const chatMessages = sqliteTable(
+  "chat_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    address: text("address").notNull(),
+    role: text("role").notNull(), // user|assistant
+    body: text("body").notNull(),
+    mode: text("mode").notNull().default("chat"), // chat|coach
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({ byAddr: index("idx_chat_messages_addr").on(t.address, t.createdAt) }),
+);
+
+// Single-use server nonces for wallet sign-in (anti-replay). Minted by GET /api/chat/nonce,
+// embedded in the signed message, consumed once at /api/chat/session.
+export const chatNonces = sqliteTable("chat_nonces", {
+  nonce: text("nonce").primaryKey(),
+  createdAt: text("created_at").notNull().default(now),
+  used: integer("used").notNull().default(0),
+});
+
+// x402 credit top-ups for the chat — own table (chat has no owner row, so it can't reuse
+// premium_orders). UNIQUE(order_id) makes settle idempotent: a replay credits nothing twice.
+export const chatTopups = sqliteTable("chat_topups", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  orderId: text("order_id").notNull().unique(),
+  payer: text("payer"),
+  amountUsdc: text("amount_usdc").notNull(),
+  credits: integer("credits").notNull(),
+  network: text("network").notNull(),
+  nonce: text("nonce"), // anti-replay key (red-team C4); UNIQUE(network, nonce) via migration 0010
+  settlementTx: text("settlement_tx"),
+  createdAt: text("created_at").notNull().default(now),
+});
+
+/* ----------------------------------------------------------------- coach memory (Phase 0) */
+// "Capture before you coach" — the human-side episodic substrate for Ishtar Talk. Keyed by the
+// chat wallet `subject` (lowercased address). HUMANS ONLY. The compounding data asset behind the moat.
+export const episodes = sqliteTable(
+  "episodes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    subject: text("subject").notNull(), // lowercased wallet address
+    kind: text("kind").notNull(), // advice | debrief | feedback | match | note
+    content: text("content").notNull(),
+    importance: real("importance").notNull().default(0.5), // 0..1 for scored retrieval
+    source: text("source").notNull().default("coach"),
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({ bySubject: index("idx_episodes_subject").on(t.subject, t.id) }),
+);
+
+export const userFacts = sqliteTable(
+  "user_facts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    subject: text("subject").notNull(),
+    fact: text("fact").notNull(),
+    weight: real("weight").notNull().default(0.5),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => ({ uniq: uniqueIndex("idx_user_facts_unique").on(t.subject, t.fact) }),
+);
+
+export const reflections = sqliteTable(
+  "reflections",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    subject: text("subject").notNull(),
+    summary: text("summary").notNull(),
+    cites: text("cites"), // JSON array of episode ids
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({ bySubject: index("idx_reflections_subject").on(t.subject, t.id) }),
+);
+
+// Feedback → credit (discount) ledger. The discount buys the moat data; per-day cap is enforced in code.
+export const coachFeedback = sqliteTable(
+  "coach_feedback",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    subject: text("subject").notNull(),
+    kind: text("kind").notNull(), // rating | debrief
+    rating: integer("rating"), // 1..5
+    body: text("body"),
+    creditsAwarded: integer("credits_awarded").notNull().default(0),
+    day: text("day").notNull(), // UTC YYYY-MM-DD
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({ bySubjectDay: index("idx_coach_feedback_subject_day").on(t.subject, t.day) }),
+);

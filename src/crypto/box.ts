@@ -35,6 +35,26 @@ export async function seal(env: Env, plaintext: string | null | undefined): Prom
   return `${PREFIX}${b64(iv)}.${b64(ct)}`;
 }
 
+/**
+ * Deterministic KEYED hash (HMAC-SHA256, hex) for opaque dedup keys that must not be offline-
+ * precomputable from a DB-only leak (audit: an unsalted SHA-256(email) lets a leaker confirm which
+ * emails are on a list via a rainbow table, even when the email itself is sealed). The pepper is the
+ * Worker's ENCRYPTION_KEY. Falls back to unkeyed SHA-256 when the key is unset (dev/dark), so local
+ * behaviour is unchanged.
+ */
+export async function hmacHex(env: Env, message: string): Promise<string> {
+  const raw = env.ENCRYPTION_KEY;
+  const data = encoder.encode(message);
+  let digest: ArrayBuffer;
+  if (raw) {
+    const k = await crypto.subtle.importKey("raw", ub64(raw.trim()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    digest = await crypto.subtle.sign("HMAC", k, data);
+  } else {
+    digest = await crypto.subtle.digest("SHA-256", data); // dark/dev: unkeyed, unchanged behaviour
+  }
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Decrypt an at-rest value. Legacy plaintext (no `enc:v1:` prefix) is returned unchanged. */
 export async function open(env: Env, sealed: string | null | undefined): Promise<string | null> {
   if (sealed == null) return null;

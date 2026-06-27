@@ -16,6 +16,7 @@ export const SKUS: Record<string, Sku> = {
   compatibility_report: { id: "compatibility_report", priceUsd: "$5.00", route: "/api/premium/compatibility-report" },
   date_brief: { id: "date_brief", priceUsd: "$10.00", route: "/api/premium/date-brief" },
   priority_cycle: { id: "priority_cycle", priceUsd: "$1.00", route: "/api/premium/priority-cycle" },
+  chat_topup: { id: "chat_topup", priceUsd: "$1.00", route: "/api/chat/topup" },
 };
 
 // Staging defaults (testnet only, no key). eip155:84532 = Base Sepolia.
@@ -35,7 +36,36 @@ export interface VerifiedPayment {
   payer?: string;
   tx?: string;
   amountUsdc?: string;
+  nonce?: string; // EIP-3009 authorization nonce — the anti-replay key (red-team C4)
+  network?: string;
+  payTo?: string;
   raw?: string;
+}
+
+/**
+ * Decode the signed x402 payment authorization — the SOURCE OF TRUTH for amount / recipient /
+ * network / nonce. The facilitator only attests that the signature is valid; the resource server
+ * MUST independently confirm the signed TERMS match what it requires (red-team C3/H8). Best-effort
+ * across x402 payload shapes; returns null if it can't extract value + to (→ fail-closed).
+ */
+function parsePaymentHeader(header: string): { to?: string; value?: string; nonce?: string; network?: string } | null {
+  let obj: Record<string, unknown> | null = null;
+  for (const decode of [() => atob(header), () => header]) {
+    try {
+      obj = JSON.parse(decode()) as Record<string, unknown>;
+      break;
+    } catch {
+      /* try the next form */
+    }
+  }
+  if (!obj) return null;
+  const payload = (obj.payload ?? {}) as Record<string, unknown>;
+  const auth = (payload.authorization ?? obj.authorization ?? payload ?? {}) as Record<string, unknown>;
+  const network = (obj.network ?? payload.network) as string | undefined;
+  const to = auth.to as string | undefined;
+  const value = auth.value != null ? String(auth.value) : undefined;
+  const nonce = (auth.nonce ?? obj.nonce) as string | undefined;
+  return { to, value, nonce, network };
 }
 
 export interface PaymentProvider {
@@ -85,8 +115,29 @@ export function makeX402Provider(env: Env): PaymentProvider {
         });
         if (!res.ok) return { verified: false, raw: `facilitator ${res.status}` };
         const j = (await res.json()) as VerifiedPayment & { isValid?: boolean };
-        const verified = j.verified ?? j.isValid ?? false;
-        return { ...j, verified };
+        if (!(j.verified ?? j.isValid ?? false)) return { verified: false, raw: j.raw ?? "facilitator rejected" };
+        // Facilitator confirmed the SIGNATURE — now confirm the signed TERMS (C3/C4/H8). Never trust
+        // the facilitator's word on amount/recipient; read them from the signed authorization.
+        const terms = parsePaymentHeader(paymentHeader);
+        if (!terms || !terms.value || !terms.to) return { verified: false, raw: "payment terms unreadable" };
+        let value: bigint;
+        try {
+          value = BigInt(terms.value);
+        } catch {
+          return { verified: false, raw: "bad amount" };
+        }
+        const required = BigInt(Math.round(Number(sku.priceUsd.replace("$", "")) * 1e6)); // USDC 6dp
+        if (value < required) return { verified: false, raw: "underpayment" };
+        if (terms.to.toLowerCase() !== payTo.toLowerCase()) return { verified: false, raw: "payTo mismatch" };
+        if (terms.network && terms.network !== STAGING_NETWORK) return { verified: false, raw: "network mismatch" };
+        return {
+          ...j,
+          verified: true,
+          nonce: terms.nonce,
+          payTo: terms.to,
+          network: terms.network ?? STAGING_NETWORK,
+          amountUsdc: (Number(value) / 1e6).toFixed(6),
+        };
       } catch (err) {
         return { verified: false, raw: `verify_error: ${(err as Error).message}` };
       }

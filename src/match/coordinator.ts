@@ -5,11 +5,13 @@
  * the real beats. Couple/turn writes are idempotent (UNIQUE cycle+pair, couple+seq),
  * so even a re-entered beat cannot duplicate. Budget/guard failures degrade gracefully.
  */
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db as makeDb, type DB } from "../db/client";
 import { couples, events, personas, turns } from "../db/schema";
 import type { Env } from "../env";
 import { chaperone } from "../chaperone";
+import { looksLikeSystemLeak } from "../chat/ishtar";
+import { egressFilter } from "../xmtp/egress";
 import { open } from "../crypto/box";
 import { getSetting } from "../economics/budget";
 import { captureError } from "../observability";
@@ -30,6 +32,11 @@ export class MatchCoordinator implements DurableObject {
     const url = new URL(req.url);
     if (url.pathname.endsWith("/run")) {
       return Response.json(await this.runBeat());
+    }
+    if (url.pathname.endsWith("/pair")) {
+      // Force a couple between two named admitted personas (controlled experiment) — bypasses the
+      // similarity matcher but still seeds Ishtar's gambit grounded in both decrypted hearts.
+      return Response.json(await this.forcePair(Number(url.searchParams.get("a")), Number(url.searchParams.get("b"))));
     }
     const cur = await this.state.storage.getAlarm();
     if (cur == null) await this.state.storage.setAlarm(Date.now() + 1000);
@@ -119,6 +126,39 @@ export class MatchCoordinator implements DurableObject {
       .run();
     await this.state.storage.put("last_cycle", cycleId);
     return { cycleId, pairs: pairs.length, created };
+  }
+
+  /** Force a couple between two named admitted personas + seed Ishtar's grounded gambit. */
+  async forcePair(aId: number, bId: number): Promise<Record<string, unknown>> {
+    if (!Number.isInteger(aId) || !Number.isInteger(bId) || aId <= 0 || bId <= 0 || aId === bId)
+      return { error: "two distinct admitted persona ids required" };
+    const db = makeDb(this.env.DB);
+    const lo = Math.min(aId, bId);
+    const hi = Math.max(aId, bId);
+    const rows = (await db
+      .select({ id: personas.id, handle: personas.handle, heart: personas.heartJson, activeMarket: personas.activeMarket, homeMarket: personas.homeMarket })
+      .from(personas)
+      .where(inArray(personas.id, [lo, hi]))
+      .all()) as Persona[];
+    if (rows.length < 2) return { error: "both personas must exist (and be admitted)" };
+    const view = await this.buildView(rows);
+    const va = view.get(lo)!;
+    const vb = view.get(hi)!;
+    const score = compatible(va, vb).ok ? coldScore(va, vb) : 0.5;
+    const ins = await db
+      .insert(couples)
+      .values({ cycleId: `exp${Date.now()}`, aId: lo, bId: hi, state: "met", matchScore: score })
+      .onConflictDoNothing()
+      .returning({ id: couples.id })
+      .get();
+    if (!ins) return { error: "couple already exists for this pair" };
+    try {
+      await this.seedGambit(db, ins.id, { aId: lo, bId: hi, score }, rows);
+    } catch (e) {
+      await captureError(this.env, e, { where: "forcePair:seedGambit", coupleId: ins.id });
+      await db.update(couples).set({ state: "courting", lastAppend: new Date().toISOString() }).where(eq(couples.id, ins.id)).run().catch(() => {});
+    }
+    return { coupleId: ins.id, aId: lo, bId: hi, score };
   }
 
   /** Decrypt each heart once and build the eligibility view used by both edge strategies. */
@@ -247,17 +287,29 @@ export class MatchCoordinator implements DurableObject {
       await captureError(this.env, e, { where: "seedGambit:chaperone", coupleId });
       /* keep held */
     }
+    // H5 parity + secret egress: a published gambit must not leak the system prompt OR any secret
+    // shape (a prompt-injected heart-file could otherwise make the model emit one through the gambit).
+    if (status === "published" && (looksLikeSystemLeak(body) || !egressFilter(body).safe)) {
+      status = "blocked";
+      reason = "blocked: instruction/secret disclosure";
+    }
     await db
       .insert(turns)
       .values({ coupleId, turnSeq: 1, authorId: p.aId, authorKind: "system", body, status, moderation: reason })
       .onConflictDoNothing()
       .run()
       .catch(() => {});
-    // ALWAYS advance out of 'met' so a couple can never freeze (committee liveness blocker fix).
-    await db
-      .update(couples)
-      .set({ rationale: body, turnCount: 1, lastAppend: new Date().toISOString(), state: "courting" })
-      .where(eq(couples.id, coupleId))
-      .run();
+    // Only advance to 'courting' when the gambit is actually PUBLISHED (allow/sanitize). A blocked
+    // (deny) or held (chaperone unavailable/error) gambit must NOT carry the couple forward with
+    // unreviewed content — it stays in 'met' for review/retry on a later beat (red-team H4: the old
+    // unconditional advance let a fail-closed verdict still progress, and an operator approving the
+    // held turn would publish unguarded content).
+    if (status === "published") {
+      await db
+        .update(couples)
+        .set({ rationale: body, turnCount: 1, lastAppend: new Date().toISOString(), state: "courting" })
+        .where(eq(couples.id, coupleId))
+        .run();
+    }
   }
 }
