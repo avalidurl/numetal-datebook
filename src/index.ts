@@ -24,7 +24,6 @@ import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
 import { intakeRoutes } from "./routes/intake";
 import { newsletterRoutes } from "./routes/newsletter";
-import { onboardRoutes } from "./routes/onboard";
 import { resendAddContact } from "./newsletter/resend";
 import { publicRoutes } from "./routes/public";
 import { premiumRoutes } from "./routes/premium";
@@ -143,12 +142,6 @@ app.post("/api/waitlist", rateLimit("intake"), async (c) => {
     return c.json({ ok: false, error: "could not join the waitlist" }, 500);
   }
 });
-
-// Public human onboarding (Phase 1) — the first ungated dating-doc submission. Same CORS + rate-limit
-// posture as the waitlist; Turnstile bot-gated in the handler; chaperoned by admission. Before the gate.
-app.use("/api/onboard", siteCors);
-app.use("/api/onboard", rateLimit("intake"));
-app.route("/api", onboardRoutes);
 
 // Remote MCP server (stateless Streamable HTTP at /mcp) — public, read-only tools. Before the gate.
 app.use("/mcp", rateLimit("mcp"));
