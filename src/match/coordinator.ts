@@ -15,7 +15,7 @@ import { egressFilter } from "../xmtp/egress";
 import { open } from "../crypto/box";
 import { getSetting } from "../economics/budget";
 import { captureError } from "../observability";
-import { ageGapFlag, compatible, coldScore, type EligPersona, parseHeart } from "./eligibility";
+import { compatible, coldScore, type EligPersona, parseHeart } from "./eligibility";
 import { greedyPair, pairKey, type Candidate } from "./pairing";
 import { embedHeart, shortlist, upsertHeartVector } from "./shortlist";
 import { makeGambit } from "./gambit";
@@ -96,9 +96,6 @@ export class MatchCoordinator implements DurableObject {
     const maxPairs = Number(await getSetting(db, "beat_max_pairs", this.env.BEAT_MAX_PAIRS)) || 50;
     const pairs = allPairs.slice(0, maxPairs);
 
-    // P7 age-gap flag needs parsed ages; build a view for just the paired personas (one decrypt pass).
-    const pairedIds = new Set(pairs.flatMap((p) => [p.aId, p.bId]));
-    const ageView = await this.buildView(free.filter((x) => pairedIds.has(x.id)));
     let created = 0;
     for (const p of pairs) {
       const ins = await db
@@ -109,16 +106,6 @@ export class MatchCoordinator implements DurableObject {
         .get();
       if (!ins) continue; // already formed this cycle → idempotent skip
       created++;
-      // Age-gap safety flag (P7): log for operator review on couple formation, never a hard block.
-      {
-        const g = ageGapFlag(ageView.get(p.aId)?.parsed.prefs?.age, ageView.get(p.bId)?.parsed.prefs?.age);
-        if (g.flagged)
-          await db
-            .insert(events)
-            .values({ kind: "age_gap_flag", payload: JSON.stringify({ coupleId: ins.id, aId: p.aId, bId: p.bId, gap: g.gap, reason: g.reason }) })
-            .run()
-            .catch(() => {});
-      }
       // A single couple's gambit failure must not abort the beat or leave it stuck in 'met'.
       try {
         await this.seedGambit(db, ins.id, p, free);
@@ -165,15 +152,6 @@ export class MatchCoordinator implements DurableObject {
       .returning({ id: couples.id })
       .get();
     if (!ins) return { error: "couple already exists for this pair" };
-    {
-      const g = ageGapFlag(va.parsed.prefs?.age, vb.parsed.prefs?.age);
-      if (g.flagged)
-        await db
-          .insert(events)
-          .values({ kind: "age_gap_flag", payload: JSON.stringify({ coupleId: ins.id, aId: lo, bId: hi, gap: g.gap, reason: g.reason }) })
-          .run()
-          .catch(() => {});
-    }
     try {
       await this.seedGambit(db, ins.id, { aId: lo, bId: hi, score }, rows);
     } catch (e) {

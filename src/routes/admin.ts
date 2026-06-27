@@ -376,7 +376,6 @@ adminRoutes.post("/admin/actions/note", async (c) => {
 adminRoutes.get("/admin/reports", async (c) => {
   const { list } = helpers(c.env);
   const reps = await list("SELECT id, target_type, target_id, reason, status, created_at FROM reports ORDER BY (status='open') DESC, id DESC LIMIT 100");
-  const flags = await list("SELECT payload, created_at FROM events WHERE kind='age_gap_flag' ORDER BY id DESC LIMIT 50");
   const btn = (id: number, a: string, label: string) => `<button onclick="act(${id},'${a}')" style="margin-right:.3rem;cursor:pointer">${esc(label)}</button>`;
   const repRows = reps.map((r): string[] => {
     const id = Number(r.id);
@@ -384,18 +383,12 @@ adminRoutes.get("/admin/reports", async (c) => {
     const actions = open ? btn(id, "warn", "warn") + btn(id, "freeze", "freeze") + btn(id, "end-couple", "end couple") + btn(id, "dismiss", "dismiss") : "—";
     return [String(id), `${esc(String(r.target_type))} #${esc(String(r.target_id))}`, esc(String(r.reason ?? "")), esc(String(r.status)), esc(String(r.created_at ?? "")), actions];
   });
-  const flagRows = flags.map((f): string[] => {
-    let p: Record<string, unknown> = {};
-    try { p = JSON.parse(String(f.payload ?? "{}")) as Record<string, unknown>; } catch { /* skip */ }
-    return [esc(String(p.coupleId ?? "")), esc(String(p.reason ?? "")), esc(String(f.created_at ?? ""))];
-  });
   const script =
     `<script>var Q=location.search||'';` +
     `async function post(p,b){const r=await fetch(p+Q,{method:'POST',headers:{'content-type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json();}` +
     `async function act(id,a){if(!confirm(a+' report #'+id+'?'))return;var j=await post('/admin/actions/report',{reportId:id,action:a});alert(JSON.stringify(j));location.reload();}</script>`;
   const body =
     sec("R1", "reports queue", tbl(["id", "target", "reason", "status", "when", "actions"], repRows)) +
-    sec("R2", "age-gap flags (on couple formation)", tbl(["couple", "reason", "when"], flagRows)) +
     script;
   return c.html(page({ title: "reports — Ishtar ops", body }));
 });
