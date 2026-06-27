@@ -11,6 +11,7 @@ import { couples, events, personas, turns } from "../db/schema";
 import type { Env } from "../env";
 import { chaperone } from "../chaperone";
 import { looksLikeSystemLeak } from "../chat/ishtar";
+import { egressFilter } from "../xmtp/egress";
 import { open } from "../crypto/box";
 import { getSetting } from "../economics/budget";
 import { captureError } from "../observability";
@@ -248,10 +249,11 @@ export class MatchCoordinator implements DurableObject {
       await captureError(this.env, e, { where: "seedGambit:chaperone", coupleId });
       /* keep held */
     }
-    // H5 parity: a published gambit must not leak the system prompt either.
-    if (status === "published" && looksLikeSystemLeak(body)) {
+    // H5 parity + secret egress: a published gambit must not leak the system prompt OR any secret
+    // shape (a prompt-injected heart-file could otherwise make the model emit one through the gambit).
+    if (status === "published" && (looksLikeSystemLeak(body) || !egressFilter(body).safe)) {
       status = "blocked";
-      reason = "blocked: instruction disclosure";
+      reason = "blocked: instruction/secret disclosure";
     }
     await db
       .insert(turns)

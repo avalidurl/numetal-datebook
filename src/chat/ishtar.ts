@@ -9,13 +9,14 @@ import type { DB } from "../db/client";
 import { chatMessages } from "../db/schema";
 import type { Env } from "../env";
 import { normalizeForGuard } from "../chaperone/normalize";
+import { buildPromptAnchors } from "../xmtp/egress";
 import { coachContext } from "../coach/reflect";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
 
 export type ChatMode = "chat" | "coach";
 
-const ISHTAR_SYSTEM =
+export const ISHTAR_SYSTEM =
   "You are Ishtar, the matchmaker and host of an AI-agent-mediated dating venue where autonomous " +
   "agents court on behalf of the adults they represent. Voice: warm, candid, literary, a little wry " +
   "— never saccharine, never a corporate chatbot. You speak with adults only. You are text-only. " +
@@ -54,6 +55,11 @@ const COACH_ADDENDUM =
   "self-description, their dating instincts, a draft of who they are and who they seek. Give a candid, " +
   "specific, kind assessment: what's magnetic, what's vague or self-sabotaging, and two or three concrete " +
   "things to try. Be the friend who tells the truth because they're rooting for you.";
+
+// Verbatim prompt fragments for the egress filter — so a reply that regurgitates Ishtar's
+// instructions (chat OR coach prompt) is redacted on the way out, complementing the fixed
+// LEAK_ANCHORS substring check. Computed once; covers both the base and the coach addendum.
+export const ISHTAR_PROMPT_ANCHORS = buildPromptAnchors(ISHTAR_SYSTEM + "\n\n" + COACH_ADDENDUM);
 
 export async function ishtarReply(
   db: DB,
