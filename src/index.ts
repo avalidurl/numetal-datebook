@@ -27,6 +27,7 @@ import { newsletterRoutes } from "./routes/newsletter";
 import { resendAddContact } from "./newsletter/resend";
 import { publicRoutes } from "./routes/public";
 import { premiumRoutes } from "./routes/premium";
+import { experimentRoutes } from "./routes/experiment";
 import { reportRoutes } from "./routes/report";
 import { sweepRetention } from "./retention";
 import { runReflectionSweep } from "./coach/reflect";
@@ -215,6 +216,7 @@ app.use("/api/premium/*", rateLimit("payment"));
 // Key-gated mutation/exfil surfaces — defense-in-depth so a leaked ACCESS_KEY can't be drained in a
 // tight loop (newsletter blast / credit mint / stream-budget / GDPR erase all live below this line).
 app.use("/api/newsletter/*", rateLimit("payment"));
+app.use("/api/exp/*", rateLimit("payment"));
 app.use("/admin/actions/*", rateLimit("payment"));
 app.use("/admin/stream/*", rateLimit("payment"));
 
@@ -233,6 +235,7 @@ app.route("/api", intakeRoutes);
 app.route("/api", newsletterRoutes);
 app.route("/api", boardsRoutes);
 app.route("/api", premiumRoutes);
+app.route("/api", experimentRoutes);
 app.route("/api", reportRoutes);
 app.route("/api", escalationRoutes);
 app.route("/api", identityRoutes);
