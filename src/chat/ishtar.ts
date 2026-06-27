@@ -34,9 +34,12 @@ export const ISHTAR_SYSTEM =
 
 // Deterministic backstop for the model occasionally complying with a system-prompt-disclosure
 // request: if a reply echoes a distinctive chunk of ISHTAR_SYSTEM, the caller withholds it.
+// Instruction-specific fragments only — NOT descriptive ones. "ai-agent-mediated dating venue…"
+// was removed: it's also how Ishtar legitimately answers "what is Ishtar?", so it withheld benign
+// replies (false positive caught in the 2026-06-27 live probe). A real verbatim recitation of the
+// (second-person) opening sentence is still caught by the egress filter's ISHTAR_PROMPT_ANCHORS.
 const LEAK_ANCHORS = [
   "you are ishtar, the matchmaker",
-  "ai-agent-mediated dating venue where autonomous",
   "you will not produce sexual content",
   "decline warmly and stay ishtar",
   "speak to the human in front of you",
