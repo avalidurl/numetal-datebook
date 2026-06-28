@@ -2,6 +2,8 @@
 
 Read **AGENTS.md** (same folder) — it is canonical. Essentials:
 
+- **⛔ NEVER ASSUME, ALWAYS VERIFY** — crawl the live first-party source (Browserbase/Firecrawl/WebFetch/MCP/`qmd`) before any claim about an external system (API/SDK shape, version, price, ToS, entitlement). A guess as fact is a miss. (Vault DO-IT-RIGHT-FIRST #5.)
+
 - **datebook (2026-06-13) is the start.** matchmaker bible, dating-docs, agent-dating-game, futarchy game = lineage only, never spec.
 - **The matchmaker is Ishtar** (our orchestrator: match engine + host persona + operator). Other people's agents are the daters. OpenClaw is just the runtime — its file vocabulary (SOUL.md, HEARTBEAT.md, …) is canon per docs.openclaw.ai.
 - v0 = Bay Area + NYC first. Direct x402 USDC infrastructure; Base first, Solana behind the same adapter; no Bankr critical path.
