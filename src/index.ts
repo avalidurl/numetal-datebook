@@ -24,6 +24,7 @@ import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
 import { heartbenchRoutes } from "./routes/heartbench";
 import { intakeRoutes } from "./routes/intake";
+import { purgeExpiredTrysts, trystRoutes } from "./routes/tryst";
 import { newsletterRoutes } from "./routes/newsletter";
 import { resendAddContact } from "./newsletter/resend";
 import { publicRoutes } from "./routes/public";
@@ -219,6 +220,7 @@ app.use("*", accessGate);
 // Edge rate limit on the public write surfaces (no-op until the RATE_LIMITER binding exists).
 app.use("/api/intake/*", rateLimit("intake"));
 app.use("/api/personas", rateLimit("intake"));
+app.use("/api/tryst/*", rateLimit("intake"));
 app.use("/api/premium/*", rateLimit("payment"));
 // Key-gated mutation/exfil surfaces — defense-in-depth so a leaked ACCESS_KEY can't be drained in a
 // tight loop (newsletter blast / credit mint / stream-budget / GDPR erase all live below this line).
@@ -252,6 +254,7 @@ app.route("/api", experimentRoutes);
 app.route("/api", reportRoutes);
 app.route("/api", escalationRoutes);
 app.route("/api", identityRoutes);
+app.route("/api", trystRoutes);
 app.notFound((c) => {
   // Browsers get an on-brand datasheet page; API clients keep the generic JSON.
   if (wantsHtml(c.req.header("accept"))) return c.html(notFoundPage(), 404);
@@ -277,6 +280,7 @@ export default {
           const id = env.MATCH.idFromName("singleton");
           await env.MATCH.get(id).fetch("https://do/poke", { method: "POST" });
           await sweepRetention(env);
+          await purgeExpiredTrysts(env); // burn expired tryst rooms → delete content, keep the signed cert
           // Phase 2: synthesize cited "lovemap" reflections for humans with new episodes (bounded per run).
           await runReflectionSweep(makeDb(env.DB), env, 10);
         } catch (e) {
