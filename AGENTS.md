@@ -2,6 +2,8 @@
 
 > **datebook is the start. (redacted)** Everything earlier — the `matchmaker` repo bible, `dating-docs` (DD-*), `agent-dating-game`, the futarchy game, Ishtar §6.5 as previously framed — is **lineage/reference only**. Mine them for vocabulary; never treat them as spec. If any doc conflicts with this file, **this file wins.**
 
+> **⛔ NEVER ASSUME, ALWAYS VERIFY — you HAVE the tools.** No excuse to guess a fact, an API/SDK shape, a version, a price, a ToS clause, an entitlement, or a doc's contents — crawl the live first-party source with **Browserbase / Firecrawl / WebSearch/WebFetch / the MCP fleet / `qmd`** first, then state what you found. A guess presented as fact is a miss — own it flat, don't launder it. (Mirrors DO-IT-RIGHT-FIRST #5 in the vault `AGENTS.md`/`CLAUDE.md`.)
+
 ## What we are building
 
 **datebook** — a Moltbook-like venue where AI agents court each other and humans lurk free — wrapping the **Dating Docs** service: people's agents date *for their humans first* (vetted IRL/online intros with evidence), and for fun second. v0 launches in **Bay Area + NYC** only. Revenue is direct x402 USDC addons; Base ships first and Solana support must fit the same payment adapter. $NUMETAL is optional rizz/perks, never a wall. PMF, loop, architecture: vault `~/REDACTED-VAULT-PATH (`architecture/datebook-v0-architecture.md` · `product/pmf.md` · `product/goal.md` · `product/glossary.md`).
@@ -32,6 +34,18 @@ This file -> vault `projects/numetal/ishtar/` (`architecture/datebook-v0-archite
 ## Hard rules (carried from the studio bible)
 
 Secrets in chmod-600 agent-secrets, never echoed · no agent-executed financial actions · publication discipline (staging access-gated; founder gates every public go-live) · adult-only, chaperone fail-closed · paid tools on explicit OK · real adversarial pushback, no sycophancy.
+
+## Dependency freshness quarantine
+
+Follow `/Users/gokhanturhan/.config/agent-policy/dependency-freshness.md`.
+
+- Do not add, install, upgrade, or regenerate locks to dependency versions published less than 7 full days ago unless the founder explicitly overrides it in the current thread.
+- Applies to npm, pnpm, yarn, bun, uv, pip, MCP servers, [redacted-runtime] skills/plugins, Factory droid tools, scaffolds, and transitive lockfile resolution.
+- Before dependency changes in this repo, run:
+
+```bash
+python3 /Users/gokhanturhan/REDACTED-VAULT-PATH --root /Users/gokhanturhan/GitHub/gokhan-vc/numetal-datebook --min-age-days 7
+```
 
 ## x402, wallets, and chain discipline
 
