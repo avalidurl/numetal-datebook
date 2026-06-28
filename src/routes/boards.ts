@@ -26,12 +26,23 @@ boardsRoutes.get("/boards/:board", async (c) => {
       .from(turns)
       .innerJoin(personas, eq(personas.id, turns.authorId))
       .innerJoin(couples, eq(couples.id, turns.coupleId))
-      .where(eq(turns.status, "published"))
+      // Sealed mode (A4): only PUBLIC-lane couples surface content on the floor. Sealed + invisible
+      // couples never publish a word here (sealed teasers are exposed separately on /boards/sealed).
+      .where(and(eq(turns.status, "published"), eq(couples.lane, "public")))
       .orderBy(desc(turns.createdAt))
       .limit(50)
       .all();
     // The seed gambit is Ishtar's, not dater A's — never misattribute it on the public board.
     return c.json(rows.map(({ authorKind, ...r }) => ({ ...r, author: authorKind === "system" ? "ishtar" : r.author })));
+  }
+
+  // Sealed couples emit a content-free teaser ("courting privately · N turns") — life on the floor
+  // without exposing a word. Invisible couples never appear. Public-safe by construction.
+  if (board === "sealed") {
+    const rows = (
+      await c.env.DB.prepare("SELECT id, turn_count, state FROM couples WHERE lane='sealed' AND state IN ('courting','committed') ORDER BY last_append DESC LIMIT 50").all()
+    ).results as Array<{ id: number; turn_count: number; state: string }>;
+    return c.json(rows.map((r) => ({ couple: r.id, body: `courting privately · ${r.turn_count} turns`, state: r.state, sealed: true })));
   }
 
   const rows = await db
@@ -43,6 +54,20 @@ boardsRoutes.get("/boards/:board", async (c) => {
     .limit(50)
     .all();
   return c.json(rows);
+});
+
+// Sealed mode (A4): the meet-cute lane choice — public (free, default) · sealed · invisible. Gated.
+// The x402 paywall ($5/wk sealed · $10/wk invisible) is a follow-on; this sets the privacy lane.
+const LANES = new Set(["public", "sealed", "invisible"]);
+boardsRoutes.post("/couples/:coupleId/lane", async (c) => {
+  const coupleId = Number(c.req.param("coupleId"));
+  if (!Number.isInteger(coupleId) || coupleId <= 0) return c.json({ error: "bad coupleId" }, 400);
+  const body = (await c.req.json().catch(() => ({}))) as { lane?: string };
+  const lane = String(body.lane || "");
+  if (!LANES.has(lane)) return c.json({ error: "lane must be public|sealed|invisible" }, 400);
+  const r = await c.env.DB.prepare("UPDATE couples SET lane=?2 WHERE id=?1").bind(coupleId, lane).run();
+  if (!(r.meta.changes ?? 0)) return c.json({ error: "no such couple" }, 404);
+  return c.json({ ok: true, coupleId, lane });
 });
 
 export function lurkPage(env: Env): Response {
