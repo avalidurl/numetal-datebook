@@ -14,6 +14,7 @@ import { crisisResponse, detectCrisis, recordCrisisEvent } from "../safety/crisi
 import { MINOR_REDIRECT, detectMinor, recordMinorEvent } from "../safety/age";
 import { db as makeDb } from "../db/client";
 import { chatMessages, chatTopups } from "../db/schema";
+import { seal } from "../crypto/box";
 import type { Env } from "../env";
 import {
   addCredits,
@@ -171,8 +172,10 @@ chatRoutes.post("/chat", async (c) => {
   if (crisis.hit) {
     const care = crisisResponse(c.req.header("cf-ipcountry") || undefined);
     await recordCrisisEvent(db, `chat:${address}`, crisis);
-    await db.insert(chatMessages).values({ address, role: "user", body: message, mode }).run();
-    await db.insert(chatMessages).values({ address, role: "assistant", body: care, mode }).run();
+    // Sealed at rest (AES-GCM, dark until ENCRYPTION_KEY set) — a fat-fingered SSN/address in a crisis
+    // message must not sit in D1 in the clear. Decrypted only on the history read in ishtarReply().
+    await db.insert(chatMessages).values({ address, role: "user", body: (await seal(c.env, message)) ?? message, mode }).run();
+    await db.insert(chatMessages).values({ address, role: "assistant", body: (await seal(c.env, care)) ?? care, mode }).run();
     return c.json({ ok: true, reply: care, mode, via: "crisis", safety: "crisis_support", ...(await getBalance(db, c.env, address)) });
   }
 
@@ -225,14 +228,16 @@ chatRoutes.post("/chat", async (c) => {
       ? "withheld: instruction disclosure"
       : outV.reason;
 
-  await db.insert(chatMessages).values({ address, role: "user", body: message, mode }).run();
-  if (safeReply) await db.insert(chatMessages).values({ address, role: "assistant", body: safeReply, mode }).run();
+  // Sealed at rest (AES-GCM, dark until ENCRYPTION_KEY set). The body column is opaque in D1; the only
+  // reader (ishtarReply history) decrypts via open(). Backward-compatible: legacy plaintext rows read as-is.
+  await db.insert(chatMessages).values({ address, role: "user", body: (await seal(c.env, message)) ?? message, mode }).run();
+  if (safeReply) await db.insert(chatMessages).values({ address, role: "assistant", body: (await seal(c.env, safeReply)) ?? safeReply, mode }).run();
 
   // Phase 0 — capture the coaching exchange as an episode (the compounding moat data).
   // Best-effort: never break the reply over a capture write.
   if (safeReply) {
     try {
-      await recordEpisode(db, { subject: address, kind: "advice", content: `Q: ${message}\nA: ${safeReply}`, importance: mode === "coach" ? 0.6 : 0.4 });
+      await recordEpisode(db, c.env, { subject: address, kind: "advice", content: `Q: ${message}\nA: ${safeReply}`, importance: mode === "coach" ? 0.6 : 0.4 });
     } catch {
       /* capture is best-effort */
     }
@@ -299,7 +304,7 @@ chatRoutes.post("/chat/feedback", async (c) => {
     if (v.verdict !== "allow" && v.verdict !== "sanitize") return c.json({ error: "feedback held by the chaperone", reason: v.reason }, 422);
   }
 
-  const { awarded } = await recordFeedback(db, { subject: address, kind, rating, body });
+  const { awarded } = await recordFeedback(db, c.env, { subject: address, kind, rating, body });
   return c.json({ ok: true, kind, creditsAwarded: awarded, ...(await getBalance(db, c.env, address)) });
 });
 

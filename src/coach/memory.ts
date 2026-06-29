@@ -9,7 +9,8 @@
  */
 import type { DB } from "../db/client";
 import { coachFeedback, episodes } from "../db/schema";
-import { utcDay } from "../env";
+import { utcDay, type Env } from "../env";
+import { seal } from "../crypto/box";
 import { addCredits } from "../economics/chatcredits";
 
 export type EpisodeKind = "advice" | "debrief" | "feedback" | "match" | "note";
@@ -19,16 +20,21 @@ const lc = (a: string) => a.trim().toLowerCase();
 /** Append one typed, importance-scored episode for a human (the compounding moat data). */
 export async function recordEpisode(
   db: DB,
+  env: Env,
   e: { subject: string; kind: EpisodeKind; content: string; importance?: number; source?: string },
 ): Promise<void> {
   const content = (e.content ?? "").slice(0, 8000);
   if (!content) return;
+  // Sealed at rest (AES-GCM, dark until ENCRYPTION_KEY set). Episodes are the durable, NON-TTL'd record,
+  // so any PII a human fat-fingers into chat persists here the longest — encrypt it. Decrypted only in
+  // reflectForSubject() to synthesize the lovemap. Legacy plaintext rows read back unchanged via open().
+  const sealed = (await seal(env, content)) ?? content;
   await db
     .insert(episodes)
     .values({
       subject: lc(e.subject),
       kind: e.kind,
-      content,
+      content: sealed,
       importance: Math.max(0, Math.min(1, e.importance ?? 0.5)),
       source: e.source ?? "coach",
     })
@@ -53,15 +59,17 @@ export interface FeedbackInput {
  * insert actually created the row — the same idempotent pattern as chat top-ups. This closes the
  * TOCTOU race the old read-then-write had. Feedback is always stored (data is the point); credits 0.
  */
-export async function recordFeedback(db: DB, e: FeedbackInput): Promise<{ awarded: number }> {
+export async function recordFeedback(db: DB, env: Env, e: FeedbackInput): Promise<{ awarded: number }> {
   const subject = lc(e.subject);
   const day = utcDay();
   const award = AWARD[e.kind];
+  // The debrief free-text is user PII ("met them at <address>…") and is NON-TTL'd — seal it at rest.
+  // coach_feedback.body is write-only (read nowhere; dropped only on GDPR erasure), so no decrypt site.
   const row = {
     subject,
     kind: e.kind,
     rating: e.kind === "rating" ? (e.rating ?? null) : null,
-    body: e.body?.slice(0, 4000) ?? null,
+    body: e.body ? await seal(env, e.body.slice(0, 4000)) : null,
   };
 
   // Atomically CLAIM the once-per-(subject,kind,day) credit: a racing second credited insert hits the
@@ -83,7 +91,7 @@ export async function recordFeedback(db: DB, e: FeedbackInput): Promise<{ awarde
   }
 
   // Mint the episode — a debrief is the high-signal "what actually landed" record.
-  await recordEpisode(db, {
+  await recordEpisode(db, env, {
     subject,
     kind: e.kind === "debrief" ? "debrief" : "feedback",
     content: e.kind === "rating" ? `rating:${e.rating}${e.body ? ` — ${e.body}` : ""}` : (e.body ?? ""),
