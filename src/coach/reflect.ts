@@ -15,6 +15,7 @@ import { desc, eq } from "drizzle-orm";
 import type { DB } from "../db/client";
 import { episodes, reflections } from "../db/schema";
 import type { Env } from "../env";
+import { open } from "../crypto/box";
 import { looksLikeSystemLeak } from "../chat/ishtar";
 import { egressFilter } from "../xmtp/egress";
 import { runGuarded } from "../economics/gateway";
@@ -56,9 +57,13 @@ export async function reflectForSubject(db: DB, env: Env, subject: string): Prom
   const eps = await loadEpisodesForReflection(db, subj);
   if (eps.length < MIN_TO_REFLECT) return { ok: false, reason: "too few episodes" };
 
-  const log = eps.map((e) => `#${e.id} [${e.kind}] ${e.content.slice(0, 600)}`).join("\n");
   let summary = "";
   try {
+    // Episode bodies are sealed at rest → decrypt to build the synthesis log (open() throws only if a
+    // sealed row is read with no key; kept inside the try so a bad key degrades to skip, never crashes).
+    const log = (
+      await Promise.all(eps.map(async (e) => `#${e.id} [${e.kind}] ${((await open(env, e.content)) ?? "").slice(0, 600)}`))
+    ).join("\n");
     const result = await runGuarded(db, env, {
       model: env.CHAT_MODEL || env.GAMBIT_MODEL,
       tier: "t1",

@@ -7,6 +7,7 @@
 import { desc, eq } from "drizzle-orm";
 import type { DB } from "../db/client";
 import { chatMessages } from "../db/schema";
+import { open } from "../crypto/box";
 import type { Env } from "../env";
 import { normalizeForGuard } from "../chaperone/normalize";
 import { buildPromptAnchors } from "../xmtp/egress";
@@ -77,7 +78,10 @@ export async function ishtarReply(
     .orderBy(desc(chatMessages.createdAt))
     .limit(6)
     .all();
-  const history = recent.reverse().map((m) => ({ role: m.role, content: m.body }));
+  // Bodies are sealed at rest → decrypt for context (open() returns legacy plaintext rows unchanged).
+  const history = await Promise.all(
+    recent.reverse().map(async (m) => ({ role: m.role, content: (await open(env, m.body)) ?? "" })),
+  );
 
   // In coach mode, inject what Ishtar has learned about THIS person (their cited lovemap) — the
   // evidence-grounded self-knowledge a stateless LLM can't have. Empty until the reflection job runs.
