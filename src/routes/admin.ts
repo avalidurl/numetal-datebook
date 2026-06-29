@@ -231,9 +231,32 @@ adminRoutes.get("/admin", async (c) => {
     `<div class="card"><div class="k">${key}</div><div class="bar" style="margin-top:.35rem"><input id="set_${key}" value="${esc(setVal(d.settings, key, fallback))}" style="width:${width}"><button onclick="saveSetting('${key}','set_${key}')">save</button></div></div>`;
 
   const head = `<div class="bar" style="justify-content:space-between;align-items:baseline">
-<h1>ISHTAR<span class="hrt">♥</span> · OPS</h1><span class="reg">doc ish-ops-001 · ${esc(s.sim_mode)} · health ${st(s.health)}</span></div>
+<h1>ISHTAR<span class="hrt">♥</span> · OPS</h1><span class="reg">doc ish-ops-001 · ${esc(s.sim_mode)} · health ${st(s.health)} &nbsp; <button onclick="document.getElementById('projmap').showModal()">▦ project map</button></span></div>
 <div class="dither"></div>
 <div id="toast"></div>`;
+
+  // §map — static reference: which Ishtar parts map to which gokhan-vc repos + Cloudflare workers (+ URLs).
+  const repoLink = (n: string): string => `<a href="https://github.com/gokhan-vc/${n}" target="_blank" rel="noopener"><code>${n}</code></a>`;
+  const projectMap =
+    `<dialog id="projmap" style="background:var(--paper);color:var(--ink);border:1.5px solid var(--ink);border-radius:0;box-shadow:4px 4px 0 rgba(0,0,0,.5);max-width:860px;width:92%;padding:1.1rem 1.3rem">
+<div class="bar" style="justify-content:space-between;align-items:baseline;margin-bottom:.15rem"><b>ISHTAR<span class="hrt">♥</span> · PROJECT MAP</b><button onclick="document.getElementById('projmap').close()">✕ close</button></div>
+<div class="reg">canonical name = Ishtar · "Datebook" = retired codename · under Numetal studio / $NUMETAL</div>
+<div class="card" style="margin-top:.8rem"><div class="k">parts → repos (github.com/gokhan-vc)</div>` +
+    tbl(["part", "repo", "runtime", "live url"], [
+      ["The Floor + Talk to Ishtar", repoLink("numetal-datebook"), "CF Worker · datebook-staging", `<a href="https://api.ishtar.numetal.xyz/" target="_blank" rel="noopener">api.ishtar.numetal.xyz</a>`],
+      ["Operator console (this page)", repoLink("numetal-datebook"), "CF Worker · datebook-staging", `<a href="https://admin.ishtar.numetal.xyz/admin" target="_blank" rel="noopener">admin.ishtar.numetal.xyz</a>`],
+      ["The Heartbench + site", repoLink("ishtar-website"), "CF Worker · ishtar-site", `<a href="https://ishtar.numetal.xyz/" target="_blank" rel="noopener">ishtar.numetal.xyz</a>`],
+      ["operator (founder Slack brain)", repoLink("ishtar-operator"), "OpenClaw · Hetzner (tailnet)", `<span class="mut">Slack only — no public URL</span>`],
+      ['intern · "Pica" (Moltbook bot)', repoLink("ishtar-intern"), "OpenClaw · Hetzner (tailnet)", `<span class="mut">Slack only — no public URL</span>`],
+    ]) +
+    `</div><div class="card" style="margin-top:.7rem"><div class="k">cloudflare workers (Ishtar) · no Pages</div>` +
+    tbl(["worker", "what it does", "url"], [
+      [`<code>datebook-staging</code>`, "venue API + this operator console (D1 · Vectorize · AI Gateway)", `<span class="mut">api.ishtar.numetal.xyz · admin.ishtar.numetal.xyz</span>`],
+      [`<code>ishtar-site</code>`, "public site + The Heartbench leaderboard", `<span class="mut">ishtar.numetal.xyz</span>`],
+    ]) +
+    `<p class="note" style="margin-top:.5rem">Cloudflare <b>Pages: none</b> — Ishtar is all Workers. Other CF workers/pages on the account belong to Numetal studio, AgentBounty, Reef, etc.</p></div>
+<p class="note">⚠ The agent repos (<code>ishtar-operator</code>, <code>ishtar-intern</code>) hold the <b>superseded Cloudflare/Project-Think code</b> — the live brains run as <b>OpenClaw on Tailscale-only Hetzner boxes</b> (on-box <code>openclaw.json</code>, un-versioned). A <code>git clone</code> gives you the old worker, not the running agent.</p>
+</dialog>`;
 
   const economics = sec("§01", "capacity & economics", cards([
     card("admitted / cap", `<b>${s.admitted}</b> / ${s.cap} <small>(${s.cap_used_pct}%)</small>`),
@@ -321,7 +344,7 @@ async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!
 
   return c.html(page({
     title: "ishtar · ops",
-    body: head + launchpad + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + errors + footer + script,
+    body: head + projectMap + launchpad + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + errors + footer + script,
   }));
 });
 
