@@ -70,10 +70,10 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
   if (comped) {
     await db.update(premiumOrders).set({ status: "comped" }).where(eq(premiumOrders.orderId, orderId)).run();
   } else {
-    const paymentHeader = c.req.header("x-payment");
+    const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
     if (!paymentHeader) {
       await db.update(premiumOrders).set({ status: "challenged" }).where(eq(premiumOrders.orderId, orderId)).run();
-      return x402Challenge({ sku, network: provider.network, payTo: c.env.PAY_TO, orderId });
+      return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
     }
     const settled = await settleAndPersist(db, c.env, provider, { orderId, sku, payTo: c.env.PAY_TO }, paymentHeader);
     if (!settled.ok) return c.json({ error: "payment not verified", reason: settled.reason }, 402);
