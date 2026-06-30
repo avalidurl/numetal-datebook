@@ -14,9 +14,9 @@ describe("reflection job (Phase 2)", () => {
 
   it("loadEpisodesForReflection orders by importance, then recency", async () => {
     const db = makeDb(env.DB);
-    await recordEpisode(db, { subject: A, kind: "advice", content: "low-1", importance: 0.2 });
-    await recordEpisode(db, { subject: A, kind: "advice", content: "low-2", importance: 0.2 });
-    await recordEpisode(db, { subject: A, kind: "debrief", content: "high", importance: 0.9 });
+    await recordEpisode(db, env, { subject: A, kind: "advice", content: "low-1", importance: 0.2 });
+    await recordEpisode(db, env, { subject: A, kind: "advice", content: "low-2", importance: 0.2 });
+    await recordEpisode(db, env, { subject: A, kind: "debrief", content: "high", importance: 0.9 });
     const eps = await loadEpisodesForReflection(db, A, 10);
     expect(eps[0]!.content).toBe("high"); // highest importance first
     expect(eps.length).toBe(3);
@@ -33,7 +33,7 @@ describe("reflection job (Phase 2)", () => {
 
   it("runReflectionSweep flags subjects with >=3 episodes and no fresh reflection as due", async () => {
     const db = makeDb(env.DB);
-    for (let i = 0; i < 3; i++) await recordEpisode(db, { subject: A, kind: "advice", content: `e${i}`, importance: 0.5 });
+    for (let i = 0; i < 3; i++) await recordEpisode(db, env, { subject: A, kind: "advice", content: `e${i}`, importance: 0.5 });
     // model is unavailable in the test runtime, so processing fails-soft; `due` must still detect the subject.
     const r = await runReflectionSweep(db, env, 10);
     expect(r.due).toBe(1);
