@@ -1,7 +1,7 @@
 // Founder-run mainnet x402 acceptance test for Ishtar `/api/chat/topup` — the canonical x402 **v2** client.
 //
 // WHAT IT PROVES: a real $1 USDC payment on Base settles through Ishtar's CDP verify→settle adapter to the
-// live PAY_TO (AgentCash treasury). This is the only true end-to-end proof; it MOVES $1 of real USDC, so it
+// configured PAY_TO (a wallet you control). This is the only true end-to-end proof; it MOVES $1 of real USDC, so it
 // is run by you (the operator cannot move funds). It was money-safely pre-verified: a v2 client signs a valid
 // EIP-3009 authorization our server + CDP accept, and an eth_call simulation of the transfer succeeds.
 //
@@ -13,7 +13,7 @@
 //   pnpm add @x402/fetch @x402/evm viem    # already installed in this repo
 // RUN (defaults to the funded based-bot wallet we control; override with TEST_PRIVATE_KEY for another wallet):
 //   node scripts/founder-x402-test.mjs
-//   # the payer must hold >= ~$1 USDC on Base and MUST differ from PAY_TO (AgentCash 0x3eee...).
+//   # the payer must hold >= ~$1 USDC on Base and MUST differ from the configured PAY_TO.
 import { privateKeyToAccount } from "viem/accounts";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
@@ -33,7 +33,7 @@ if (!PK) {
   PK = m ? m[1].trim().replace(/^"|"$/g, "") : null;
 }
 if (!PK || !/^0x[0-9a-fA-F]{64}$/.test(PK)) {
-  console.error("No key. Set TEST_PRIVATE_KEY=0x<64hex> (a funded Base wallet, NOT the AgentCash treasury).");
+  console.error("No key. Set TEST_PRIVATE_KEY=0x<64hex> (a funded Base wallet, NOT the PAY_TO address).");
   process.exit(1);
 }
 
@@ -59,7 +59,17 @@ if (bal < NEED) {
 
 const url = "https://api.ishtar.numetal.xyz/api/chat/topup";
 const ref = "founder-mainnet-test-" + Date.now();
-console.log(`Paying $1 USDC from ${signer.address} → PAY_TO (AgentCash treasury)  ref: ${ref}`);
+
+// Read the configured PAY_TO from the live challenge so we report exactly where the $1 lands.
+let payTo = "(the configured PAY_TO)";
+try {
+  const chal = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ref, over18: true }) });
+  const pr = JSON.parse(Buffer.from(chal.headers.get("payment-required") || "", "base64").toString("utf8"));
+  payTo = pr?.accepts?.[0]?.payTo || payTo;
+} catch {
+  /* fall back to the generic label */
+}
+console.log(`Paying $1 USDC from ${signer.address} → PAY_TO ${payTo}  ref: ${ref}`);
 
 try {
   const res = await fetchWithPay(url, {
@@ -72,7 +82,7 @@ try {
   console.log(JSON.stringify(body, null, 2));
   if (res.status === 200 && body.ok) {
     console.log(`\n✅ SETTLED — mainnet x402 v2 PROVEN.  credited=${body.credited}  creditsBalance=${body.creditsBalance ?? body.balance ?? "?"}`);
-    console.log("On-chain: a 1.000000 USDC transfer from your wallet → 0x3eee...33eE on Base.");
+    console.log(`On-chain: a 1.000000 USDC transfer from your wallet → ${payTo} on Base.`);
   } else {
     console.log("\n⚠️ Not settled — status/body above.");
   }
