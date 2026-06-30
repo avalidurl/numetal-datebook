@@ -6,6 +6,9 @@
  */
 import { createPublicClient, http, erc20Abi, getAddress } from "viem";
 import { base } from "viem/chains";
+import type { DB } from "../db/client";
+import type { Env } from "../env";
+import { getSetting, setSetting } from "./budget";
 
 // $NUMETAL on Base (Doppler) — verified on-chain 2026-06-21: name/symbol NUMETAL, 18 decimals.
 const NUMETAL_CA = "0x57EDb7FC54ADa9Ef4E113DC05A168449e63cFbA3" as const;
@@ -52,7 +55,8 @@ export function perkForUsd(usdHeld: number): PerkLevel {
   return "none";
 }
 
-/** $NUMETAL price in USD via DexScreener. Best-effort: any failure → 0 (→ no free messages). */
+/** $NUMETAL price in USD via DexScreener (single source). Legacy/fallback — production reads go through
+ *  getNumetalPriceUsd (cached + cross-checked + manipulation-smoothed). Best-effort: any failure → 0. */
 export async function fetchNumetalPriceUsd(opts?: { pair?: string }): Promise<number> {
   try {
     const pair = opts?.pair ?? DEFAULT_PAIR;
@@ -69,6 +73,109 @@ export async function fetchNumetalPriceUsd(opts?: { pair?: string }): Promise<nu
   }
 }
 
+// ── Production $NUMETAL/USD oracle ────────────────────────────────────────────────────────────────
+// $NUMETAL's price IS its on-chain pool (no CEX lists it), so every quote is pool-derived and a thin
+// Doppler pool is cheap to pump. A second aggregator does NOT fix that (both read the same pool), so the
+// real defenses are: (1) a LIQUIDITY FLOOR (ignore junk-thin quotes), (2) a hourly SNAPSHOT cache in
+// `settings` (the gate never reads raw spot), and (3) ONE-SIDED SMOOTHING — the stored price may fall
+// immediately but may only RISE a little per refresh, so a momentary (or even hour-long) pump can't
+// inflate a wallet's "USD held" to clear the $50 gate. Cross-checking DexScreener + GeckoTerminal still
+// helps against one source being stale/down.
+const PRICE_KEY = "numetal_price_usd";
+const PRICE_TTL_MS = 60 * 60_000; // refresh the snapshot at most hourly
+const PRICE_MAX_UP = 0.15; // stored price may rise ≤15% per refresh (anti pump-to-pass); falls freely
+const MIN_LIQ_USD = 500; // a pool thinner than this gives a junk price → drop that quote
+const GECKOTERMINAL = (ca: string) => `https://api.geckoterminal.com/api/v2/networks/base/tokens/${ca}`;
+
+export interface PriceQuote {
+  source: string;
+  price: number;
+  liquidityUsd?: number;
+}
+
+/** Pure: pick a USD price from cross-source quotes. Drops non-positive prices and sub-floor-liquidity
+ *  pools, then takes the MEDIAN of what remains (a single bad pool can't swing it). 0 if nothing trusted. */
+export function selectPriceUsd(quotes: PriceQuote[], opts?: { minLiquidityUsd?: number }): number {
+  const floor = opts?.minLiquidityUsd ?? MIN_LIQ_USD;
+  const ok = quotes
+    .filter((q) => Number.isFinite(q.price) && q.price > 0 && (q.liquidityUsd == null || q.liquidityUsd >= floor))
+    .map((q) => q.price)
+    .sort((a, b) => a - b);
+  if (ok.length === 0) return 0;
+  const mid = Math.floor(ok.length / 2);
+  return ok.length % 2 ? ok[mid]! : (ok[mid - 1]! + ok[mid]!) / 2;
+}
+
+/** Pure: one-sided smoothing. A new price may FALL immediately (conservative for a gate) but may RISE at
+ *  most `maxUp` per refresh, so a momentary pool pump cannot quickly inflate held-USD to clear a gate. */
+export function smoothPrice(prev: number, fresh: number, maxUp = PRICE_MAX_UP): number {
+  if (!(fresh > 0)) return prev > 0 ? prev : 0; // all sources failed → keep last good (or 0 → fail closed)
+  if (!(prev > 0)) return fresh; // first observation, nothing to smooth against
+  return fresh <= prev ? fresh : Math.min(fresh, prev * (1 + maxUp));
+}
+
+/** Fetch raw cross-source quotes (DexScreener + GeckoTerminal). Never throws (allSettled). */
+async function fetchPriceQuotes(opts?: { pair?: string; contract?: string }): Promise<PriceQuote[]> {
+  const pair = opts?.pair ?? DEFAULT_PAIR;
+  const ca = opts?.contract ?? NUMETAL_CA;
+  const [ds, gt] = await Promise.allSettled([
+    fetch(`https://api.dexscreener.com/latest/dex/pairs/base/${pair}`, { headers: { accept: "application/json" } }),
+    fetch(GECKOTERMINAL(ca), { headers: { accept: "application/json" } }),
+  ]);
+  const quotes: PriceQuote[] = [];
+  if (ds.status === "fulfilled" && ds.value.ok) {
+    try {
+      const j = (await ds.value.json()) as { pair?: Record<string, unknown>; pairs?: Record<string, unknown>[] };
+      const pr = (j.pair ?? j.pairs?.[0]) as { priceUsd?: string; liquidity?: { usd?: number } } | undefined;
+      const price = pr?.priceUsd ? Number(pr.priceUsd) : 0;
+      const liq = pr?.liquidity?.usd != null ? Number(pr.liquidity.usd) : undefined;
+      if (price > 0) quotes.push({ source: "dexscreener", price, liquidityUsd: liq });
+    } catch {
+      /* ignore a bad body */
+    }
+  }
+  if (gt.status === "fulfilled" && gt.value.ok) {
+    try {
+      const j = (await gt.value.json()) as { data?: { attributes?: { price_usd?: string } } };
+      const price = j.data?.attributes?.price_usd ? Number(j.data.attributes.price_usd) : 0;
+      if (price > 0) quotes.push({ source: "geckoterminal", price });
+    } catch {
+      /* ignore a bad body */
+    }
+  }
+  return quotes;
+}
+
+/**
+ * Production $NUMETAL/USD price. Reads the hourly snapshot from `settings`; if stale, cross-checks
+ * DexScreener + GeckoTerminal, drops thin-pool quotes (median of the rest), applies one-sided smoothing
+ * vs the last snapshot, and writes it back. Best-effort + fail-closed: total source failure keeps the
+ * last good snapshot; with no snapshot at all → 0 (so a gate denies rather than admitting on a junk price).
+ */
+export async function getNumetalPriceUsd(db: DB, env: Env): Promise<number> {
+  const ttl = Number(env.NUMETAL_PRICE_TTL_MIN ?? "") * 60_000 || PRICE_TTL_MS;
+  let prev = 0;
+  try {
+    const raw = await getSetting(db, PRICE_KEY, "");
+    if (raw) {
+      const snap = JSON.parse(raw) as { price?: number; ts?: number };
+      prev = Number(snap.price) || 0;
+      if (snap.ts && Date.now() - snap.ts < ttl && prev > 0) return prev; // fresh snapshot → use it
+    }
+  } catch {
+    /* missing/corrupt snapshot → refresh below */
+  }
+  const quotes = await fetchPriceQuotes({ contract: env.NUMETAL_CA });
+  const fresh = selectPriceUsd(quotes, { minLiquidityUsd: Number(env.NUMETAL_MIN_LIQ_USD ?? "") || MIN_LIQ_USD });
+  const price = smoothPrice(prev, fresh);
+  try {
+    if (price > 0) await setSetting(db, PRICE_KEY, JSON.stringify({ price, ts: Date.now(), raw: fresh, sources: quotes.map((q) => q.source) }));
+  } catch {
+    /* snapshot write is best-effort */
+  }
+  return price;
+}
+
 /** Read the on-chain $NUMETAL balance (wei). Throws on RPC failure (caller catches → 0 USD). */
 async function readBalanceWei(address: string, opts?: { rpcUrl?: string; contract?: string }): Promise<bigint> {
   const contract = opts?.contract ?? NUMETAL_CA;
@@ -82,13 +189,17 @@ async function readBalanceWei(address: string, opts?: { rpcUrl?: string; contrac
   })) as bigint;
 }
 
-/** balance × price → USD held. Best-effort: any failure → { usdHeld: 0, … "none" }. */
+/** balance × price → USD held. Pass `priceUsd` from getNumetalPriceUsd (the production oracle); without
+ *  it, falls back to the single-source live fetch. Best-effort: any failure → { usdHeld: 0, … "none" }. */
 export async function readNumetalUsd(
   address: string,
-  opts?: { rpcUrl?: string; contract?: string; pair?: string },
+  opts?: { rpcUrl?: string; contract?: string; pair?: string; priceUsd?: number },
 ): Promise<{ usdHeld: number; balance: string; perkLevel: PerkLevel }> {
   try {
-    const [bal, price] = await Promise.all([readBalanceWei(address, opts), fetchNumetalPriceUsd({ pair: opts?.pair })]);
+    const [bal, price] = await Promise.all([
+      readBalanceWei(address, opts),
+      opts?.priceUsd != null ? Promise.resolve(opts.priceUsd) : fetchNumetalPriceUsd({ pair: opts?.pair }),
+    ]);
     const tokens = Number(bal / 10n ** 14n) / 1e4; // whole tokens to 4dp — avoids bigint→float overflow
     const usdHeld = tokens * price;
     return { usdHeld, balance: bal.toString(), perkLevel: perkForUsd(usdHeld) };

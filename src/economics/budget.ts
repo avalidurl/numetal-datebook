@@ -25,6 +25,15 @@ export async function getSetting(db: DB, key: string, fallback: string): Promise
   return row?.value ?? fallback;
 }
 
+/** Upsert a runtime setting (used for the cached $NUMETAL price snapshot, etc.). */
+export async function setSetting(db: DB, key: string, value: string): Promise<void> {
+  await db
+    .insert(settings)
+    .values({ key, value })
+    .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date().toISOString() } })
+    .run();
+}
+
 async function spend(db: DB, day: string, callerRef?: string, tier?: string): Promise<number> {
   const conds = [eq(inferenceCosts.day, day)];
   if (callerRef) conds.push(eq(inferenceCosts.callerRef, callerRef));
