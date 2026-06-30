@@ -15,10 +15,15 @@
 //   node scripts/founder-x402-test.mjs
 //   # the payer must hold >= ~$1 USDC on Base and MUST differ from PAY_TO (AgentCash 0x3eee...).
 import { privateKeyToAccount } from "viem/accounts";
+import { createPublicClient, http } from "viem";
+import { base } from "viem/chains";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import fs from "node:fs";
 import os from "node:os";
+
+const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const NEED = 1_000_000n; // $1.00 at 6dp (chat_topup price)
 
 let PK = process.env.TEST_PRIVATE_KEY;
 if (!PK) {
@@ -36,6 +41,21 @@ const signer = privateKeyToAccount(PK);
 const client = new x402Client();
 client.register("eip155:*", new ExactEvmScheme(signer));
 const fetchWithPay = wrapFetchWithPayment(fetch, client);
+
+// Pre-check the payer's USDC balance — a shortfall reverts on-chain as "exceeds balance" and surfaces
+// only as an opaque "cdp verify 400", so fail fast with a clear message instead.
+const pub = createPublicClient({ chain: base, transport: http("https://mainnet.base.org") });
+const bal = await pub.readContract({
+  address: USDC_BASE,
+  abi: [{ inputs: [{ name: "a", type: "address" }], name: "balanceOf", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" }],
+  functionName: "balanceOf",
+  args: [signer.address],
+});
+console.log(`Payer ${signer.address}  USDC: ${(Number(bal) / 1e6).toFixed(6)}  (need ≥ 1.000000)`);
+if (bal < NEED) {
+  console.error(`❌ Insufficient USDC. Send ≥ $1 USDC (Base) to ${signer.address}, then re-run. No request sent.`);
+  process.exit(1);
+}
 
 const url = "https://api.ishtar.numetal.xyz/api/chat/topup";
 const ref = "founder-mainnet-test-" + Date.now();
