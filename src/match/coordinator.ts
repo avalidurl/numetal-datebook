@@ -19,6 +19,7 @@ import { compatible, coldScore, type EligPersona, parseHeart } from "./eligibili
 import { greedyPair, pairKey, type Candidate } from "./pairing";
 import { embedHeart, shortlist, upsertHeartVector } from "./shortlist";
 import { makeGambit } from "./gambit";
+import { notifyMatchForCouple } from "../notify/match-hook";
 
 const intervalMs = (env: Env): number => (env.SIM_MODE === "day0" ? 5 * 60_000 : 60 * 60_000);
 
@@ -118,6 +119,11 @@ export class MatchCoordinator implements DurableObject {
           .run()
           .catch(() => {});
       }
+      // Notify any enrolled human in this new couple ("come look"). Best-effort + idempotent (keyed on
+      // the couple id) — NEVER let a notify failure break the beat. The hook self-guards too.
+      await notifyMatchForCouple(this.env, ins.id).catch((e) =>
+        captureError(this.env, e, { where: "notifyMatchForCouple", coupleId: ins.id }),
+      );
     }
 
     await db
@@ -158,6 +164,10 @@ export class MatchCoordinator implements DurableObject {
       await captureError(this.env, e, { where: "forcePair:seedGambit", coupleId: ins.id });
       await db.update(couples).set({ state: "courting", lastAppend: new Date().toISOString() }).where(eq(couples.id, ins.id)).run().catch(() => {});
     }
+    // Notify any enrolled human in this forced couple ("come look") — best-effort, idempotent, fail-soft.
+    await notifyMatchForCouple(this.env, ins.id).catch((e) =>
+      captureError(this.env, e, { where: "forcePair:notifyMatchForCouple", coupleId: ins.id }),
+    );
     return { coupleId: ins.id, aId: lo, bId: hi, score };
   }
 

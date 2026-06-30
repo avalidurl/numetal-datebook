@@ -48,6 +48,9 @@ export const owners = sqliteTable(
     availableFor: text("available_for"), // irl_bay_area|irl_nyc|online|travel (csv) — audit fix
     researchOptin: text("research_optin").notNull().default("none"), // none|aggregate|full — audit fix
     publicChatter: integer("public_chatter").notNull().default(0), // opt-in: surface this owner's couples on the public courtship feed
+    // Enabled notify channels (CSV, migration 0023). Default 'email'; future branches add 'telegram', etc.
+    // notifyOwner() falls back to ['email'] when empty, so the column needs no backfill.
+    alertChannels: text("alert_channels").notNull().default("email"),
     ageAttested: integer("age_attested").notNull().default(0),
     erasedAt: text("erased_at"), // GDPR Art.17 tombstone — set when personal data is cascade-erased
     // Model C reputation/longevity flywheel:
@@ -422,6 +425,29 @@ export const events = sqliteTable("events", {
   payload: text("payload"),
   createdAt: text("created_at").notNull().default(now),
 });
+
+/* ----------------------------------------------------------------- notifications (match-notify layer) */
+// One row PER (owner, kind, ref, channel) delivery attempt — the idempotency ledger behind notifyOwner().
+// The UNIQUE index makes a replayed/re-entered match beat unable to double-send the same alert. `ref` is
+// the opaque event reference (e.g. a couple id as text for kind='match'). status ∈ sent|failed|skipped.
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    ownerId: integer("owner_id").notNull(), // not FK-constrained: keep dispatch decoupled from owner-row lifecycle
+    kind: text("kind").notNull(), // match | (extensible: reveal_ready, ...)
+    ref: text("ref").notNull(), // opaque event ref — e.g. couple id as text
+    channel: text("channel").notNull(), // email | xmtp | telegram | imessage | whatsapp | signal
+    status: text("status").notNull().default("sent"), // sent | failed | skipped
+    reason: text("reason"), // failure/skip reason from the channel adapter
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({
+    // idempotency: at most one delivery row per (owner, kind, ref, channel) — replay/retry never double-sends.
+    uniq: uniqueIndex("uniq_notifications_owner_kind_ref_channel").on(t.ownerId, t.kind, t.ref, t.channel),
+    byOwner: index("idx_notifications_owner").on(t.ownerId, t.createdAt),
+  }),
+);
 
 /* ----------------------------------------------------------------- talk-to-Ishtar (paid chat) */
 // A chat account is keyed by wallet address (lowercased). `credits` are paid messages bought via
