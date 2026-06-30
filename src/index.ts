@@ -122,7 +122,7 @@ const siteCors = cors({
   maxAge: 86400,
 });
 app.use("/api/waitlist", siteCors);
-app.post("/api/waitlist", rateLimit("intake"), async (c) => {
+app.post("/api/waitlist", rateLimit("intake"), async (c) => { // REDACTED-ID: public signup — capped
   const body = (await c.req.json().catch(() => ({}))) as { email?: string; handle?: string; kind?: string };
   const email = String(body.email ?? "").trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 200) return c.json({ ok: false, error: "valid email required" }, 400);
@@ -162,9 +162,9 @@ const chatCors = cors({
 });
 app.use("/api/chat", chatCors);
 app.use("/api/chat/*", chatCors);
-app.use("/api/chat/topup", rateLimit("payment"));
-app.use("/api/chat/nonce", rateLimit("intake"));
-app.use("/api/chat/session", rateLimit("intake"));
+app.use("/api/chat/topup", rateLimit("payment")); // REDACTED-ID: 402-challenge gen — capped
+app.use("/api/chat/nonce", rateLimit("intake")); // REDACTED-ID: SIWE nonce mint — capped
+app.use("/api/chat/session", rateLimit("intake")); // REDACTED-ID: wallet sign-in — capped
 app.use("/api/chat/balance", rateLimit("intake"));
 app.use("/api/chat/feedback", rateLimit("intake")); // feedback→credit faucet must be throttled (audit)
 app.use("/api/chat/admin/grant", rateLimit("payment")); // founder grant (ACCESS_KEY) — throttle so a leaked key can't be looped
