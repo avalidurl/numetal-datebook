@@ -25,6 +25,7 @@ import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } 
 import { heartbenchRoutes } from "./routes/heartbench";
 import { intakeRoutes } from "./routes/intake";
 import { purgeExpiredTrysts, trystRoutes } from "./routes/tryst";
+import { featuredRoutes, purgeExpiredFeatured } from "./routes/featured";
 import { newsletterRoutes } from "./routes/newsletter";
 import { resendAddContact } from "./newsletter/resend";
 import { publicRoutes } from "./routes/public";
@@ -218,6 +219,24 @@ app.use("/api/heartbench", siteCors);
 app.use("/api/heartbench", rateLimit("public"));
 app.route("/api", heartbenchRoutes);
 
+// The Window (REDACTED-ID) — PUBLIC pay-to-be-seen featured board. Mounted ABOVE the access gate:
+// the public GET /api/featured is geo-only (anyone can lurk the board), and the POST is self-gated
+// by 18+ attest + x402 payment + chaperone (a poster is a public payer, like the chat surface —
+// it can't hold the founder ACCESS_KEY). The POST is a money path → rate-limited as a payment.
+// CORS for the GET so the first-party site can fetch the board cross-origin; the POST carries the
+// X-PAYMENT header, allowed below.
+const featuredCors = cors({
+  origin: ["https://ishtar.numetal.xyz", "https://datebook-staging.cloudflare-ooc0z.workers.dev"],
+  allowMethods: ["GET", "POST", "OPTIONS"],
+  allowHeaders: ["content-type", "x-payment"],
+  maxAge: 86400,
+});
+app.use("/api/featured", featuredCors);
+app.use("/api/featured/*", featuredCors);
+app.use("/api/featured", rateLimit("public")); // the GET board read — origin-cheap, lightly throttled
+app.use("/api/featured/post", rateLimit("payment")); // the money path — throttle so a leaked flow can't be looped
+app.route("/api", featuredRoutes);
+
 // Everything below requires the staging key.
 app.use("*", accessGate);
 
@@ -285,6 +304,7 @@ export default {
           await env.MATCH.get(id).fetch("https://do/poke", { method: "POST" });
           await sweepRetention(env);
           await purgeExpiredTrysts(env); // burn expired tryst rooms → delete content, keep the signed cert
+          await purgeExpiredFeatured(env); // drop expired featured posts off the public board (REDACTED-ID)
           // Phase 2: synthesize cited "lovemap" reflections for humans with new episodes (bounded per run).
           await runReflectionSweep(makeDb(env.DB), env, 10);
         } catch (e) {
