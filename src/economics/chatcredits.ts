@@ -10,7 +10,7 @@ import type { DB } from "../db/client";
 import { chatAccounts, chatNonces, chatSessions } from "../db/schema";
 import type { Env } from "../env";
 import { utcDay } from "../env";
-import { freeQuotaForUsd, readNumetalUsd, type PerkLevel } from "./numetal";
+import { freeQuotaForUsd, getNumetalPriceUsd, readNumetalUsd, type PerkLevel } from "./numetal";
 
 // Free messages are sized by the USD value of $NUMETAL held (floor $30, doubling every $30) — the
 // model + rationale live in economics/numetal.ts (`freeQuotaForUsd`). Below $30 held → 0 free, pay
@@ -69,7 +69,8 @@ export async function refreshPerk(db: DB, env: Env, address: string): Promise<{ 
   const fresh =
     acct?.perkCheckedAt && Date.now() - new Date(acct.perkCheckedAt).getTime() < PERK_CACHE_HOURS * 3600_000;
   if (fresh) return { perk: (acct!.perkLevel as PerkLevel) ?? "none", usdHeld: acct!.usdHeld ?? 0 };
-  const { perkLevel, usdHeld } = await readNumetalUsd(addr, { rpcUrl: env.BASE_RPC_URL, contract: env.NUMETAL_CA });
+  const priceUsd = await getNumetalPriceUsd(db, env); // cached, cross-checked, manipulation-smoothed
+  const { perkLevel, usdHeld } = await readNumetalUsd(addr, { rpcUrl: env.BASE_RPC_URL, contract: env.NUMETAL_CA, priceUsd });
   await db
     .update(chatAccounts)
     .set({ perkLevel, usdHeld, perkCheckedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
