@@ -11,4 +11,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+      # Use the gitleaks CLI directly: the gitleaks-ACTION requires a paid GITLEAKS_LICENSE for
+      # organizations, but the CLI is free. Scans the working tree (current committed files).
+      - name: gitleaks (CLI — free, no org license)
+        run: |
+          set -euo pipefail
+          VERSION=8.30.1
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" | tar -xz gitleaks
+          ./gitleaks dir . --redact --no-banner --exit-code 1
