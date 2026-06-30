@@ -129,8 +129,19 @@ export async function chaperone(
   const guard = deps?.guard ?? llamaGuard;
   const g = await guard(db, env, text, `chaperone:${a.stage}`, a.callerRef);
   if (!g.safe) {
+    const cat = (g.category ?? "").toUpperCase();
     const isErr = g.category === "error" || g.category === "unparseable";
-    const isChild = (g.category ?? "").toUpperCase() === "S4"; // child sexual exploitation
+    const isChild = cat === "S4"; // child sexual exploitation
+    // Domain fit (dating + love-coaching, adults only): Llama-Guard flags ALL sexual content as S12,
+    // but a human stating a romantic/sexual PREFERENCE to the coach ("I'm vanilla", "looking for a
+    // woman") is the on-topic use of the PRIVATE Talk input — not a violation. Permit a lone S12 on
+    // the human's chat_input ONLY. Child (S4) and sex-CRIMES (S3) + every other category STILL block;
+    // chat_output and all publish/courtship stages are unaffected (S12 still blocks → boards stay clean,
+    // Ishtar stays non-explicit). Without this, normal dating talk is hard-denied (the live S12 holds).
+    if (!isErr && cat === "S12" && a.stage === "chat_input") {
+      await record(db, a, "allow", "s12 sexual-preference permitted (dating domain, chat_input)", env.GUARD_MODEL, g.raw);
+      return { verdict: "allow", reason: "passed", text };
+    }
     // S4 is ALWAYS a hard deny — never the recoverable hold, even if signal is otherwise
     // ambiguous. Classifier could not run → HOLD (fail-closed). Other confirmed unsafe → DENY.
     const verdict: Verdict = isChild ? "deny" : isErr ? "hold" : "deny";
