@@ -54,6 +54,7 @@ export interface Env {
   // secrets (wrangler secret put)
   ACCESS_KEY: string;
   PAY_TO?: string;
+  PUBLIC_API_URL?: string; // public origin for x402 `resource` (full URL). Defaults to https://api.ishtar.numetal.xyz
   ENCRYPTION_KEY?: string; // base64 of 32 bytes (AES-256); at-rest encryption is dark until set
   // Newsletter (Resend). All optional → the newsletter is dark (no-op) until set.
   RESEND_API_KEY?: string; // re_… secret; sends from the verified numetal.xyz domain
