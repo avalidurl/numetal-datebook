@@ -111,7 +111,8 @@ chatRoutes.post("/chat/topup", async (c) => {
   if (!parsed.success) return c.json({ error: "ref (client idempotency key, 8-100 chars) required" }, 400);
   if (!parsed.data.over18) return c.json({ error: "over18:true required — you must confirm you are 18 or older" }, 400);
   if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
-  if (c.env.X402_MODE === "mainnet") return c.json({ error: "mainnet x402 not yet wired — see DEPLOY.md" }, 503);
+  // mainnet (real USDC via the CDP facilitator) is wired in src/payments/x402.ts; go-live is gated by
+  // X402_MODE=mainnet + the CDP_API_KEY_* secrets + a mainnet PAY_TO (redacted), not by a code guard.
 
   const sku = SKUS.chat_topup!;
   const provider = makeX402Provider(c.env);
