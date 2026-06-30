@@ -511,11 +511,46 @@ export const featuredPosts = sqliteTable(
     status: text("status").notNull().default("reserving"), // reserving | live | expired | blocked
     createdAt: text("created_at").notNull().default(now),
     expiresAt: text("expires_at"), // now + 24h, set when the post flips to live
+    // Human (LlamaPay) path (migration 0020). The agent x402 path leaves these null.
+    chargeHostedUrl: text("charge_hosted_url"), // LlamaPay hosted-checkout URL handed to the human
+    emailSealed: text("email_sealed"), // receipt-recipient email, sealed at rest (never plaintext PII)
+    paymentRef: text("payment_ref"), // "llamapay:<id>" (human) | "x402:<tx>" (agent) | null
+    paidAt: text("paid_at"), // ISO timestamp the payment confirmed (receipt paid-at)
+    // status may also be 'orphaned' (migration 0021): paid but unfeaturable (board full at webhook time).
+    emailed: integer("emailed").notNull().default(0), // 1 once the TR-100 receipt email actually sent
+    reserverIp: text("reserver_ip"), // cf-connecting-ip of an unpaid reservation (anti-squatting only)
   },
   (t) => ({
     // Public-read + cron-purge driver: live rows by expiry. Also the per-UTC-day count source.
     byStatusExpiry: index("idx_featured_status_expiry").on(t.status, t.expiresAt),
     byDay: index("idx_featured_created").on(t.createdAt),
+  }),
+);
+
+// LlamaPay webhook-event dedup (migration 0020). LlamaPay retries a webhook for up to 3 days with
+// backoff, so the handler persists each verified event.id and treats a replay as a 200 no-op.
+export const llamapayWebhookEvents = sqliteTable("llamapay_webhook_events", {
+  eventId: text("event_id").primaryKey(), // LlamaPay event.id — the dedup key
+  eventType: text("event_type"), // charge:pending | charge:confirmed | ...
+  orderId: text("order_id"), // echoed metadata.orderId (audit join to featured_posts)
+  seenAt: text("seen_at").notNull().default(now),
+});
+
+// Paid-but-unfeatured ledger (migration 0021). A verified LlamaPay charge that arrives for an order
+// whose slot can't be (re-)claimed because the board is full → recorded here for refund/comp so a paid
+// event is NEVER silently dropped. email_sealed is the sealed refund-contact email (never plaintext).
+export const featuredOrphanedPayments = sqliteTable(
+  "featured_orphaned_payments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    orderId: text("order_id").notNull(), // the server order id (featured:human:<uuid>)
+    llamapayPaymentId: text("llamapay_payment_id").notNull(), // LlamaPay payment id (data.id)
+    emailSealed: text("email_sealed"), // sealed receipt/refund email — never plaintext PII
+    amount: text("amount"), // USD amount paid ("50.00")
+    receivedAt: text("received_at").notNull().default(now),
+  },
+  (t) => ({
+    byOrderPayment: uniqueIndex("idx_orphaned_order_payment").on(t.orderId, t.llamapayPaymentId),
   }),
 );
 
