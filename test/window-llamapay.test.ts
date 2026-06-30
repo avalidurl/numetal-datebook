@@ -31,14 +31,16 @@ function chargeStub() {
   return { fn, calls };
 }
 
+// The client no longer sends `ref`; the server generates the order id. A unique IP per poster (unless a
+// test deliberately reuses one to exercise the anti-squatting control).
 const reserveInput = (over: Record<string, unknown> = {}) => ({
   authorKind: "human" as const,
   publicSummary: "loves arguing with citations; seeks the same",
   email: `poster_${rnd()}@example.com`,
   over18: true as const,
-  ref: "ref_" + rnd(),
   ...over,
 });
+const freshIp = () => `203.0.113.${Math.floor(Math.random() * 254) + 1}`;
 
 // Build a correctly-signed LlamaPay webhook { rawBody, signature } for an event.
 async function signedWebhook(event: LlamapayEvent, secret = WEBHOOK_SECRET): Promise<{ rawBody: string; signature: string }> {
@@ -57,29 +59,46 @@ const confirmEvent = (orderId: string, paymentId = "pay_" + rnd(), eventId = "ev
 
 describe("The Window — LlamaPay human path", () => {
   beforeEach(async () => {
-    for (const t of ["featured_posts", "settings", "buyback_reserve", "chat_accounts", "chaperone_decisions", "llamapay_webhook_events", "events"])
+    for (const t of ["featured_posts", "featured_orphaned_payments", "settings", "buyback_reserve", "chat_accounts", "chaperone_decisions", "llamapay_webhook_events", "events"])
       await env.DB.prepare(`DELETE FROM ${t}`).run().catch(() => {});
   });
   afterEach(() => vi.restoreAllMocks());
 
   describe("reserve", () => {
-    it("claims a slot, seals the email, returns checkoutUrl + orderId + expiresInMinutes", async () => {
+    it("claims a slot, seals the email, returns a SERVER-GENERATED uuid orderId + checkoutUrl + expiresInMinutes", async () => {
       const db = makeDb(env.DB);
       const charge = chargeStub();
       const inp = reserveInput();
-      const r = await reserveHumanSlot(db, lpEnv(), inp, { guard: okGuard, createCharge: charge.fn });
+      const r = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: charge.fn });
       expect(r.kind).toBe("reserved");
       if (r.kind !== "reserved") return;
-      expect(r.orderId).toBe(`featured:human:${inp.ref}`);
+      // finding #2: the order id is server-side + high-entropy (uuid), NOT a client value.
+      expect(r.orderId).toMatch(/^featured:human:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
       expect(r.checkoutUrl).toMatch(/^https:\/\/checkout\.llamapay\.io\/pay\//);
       expect(r.expiresInMinutes).toBe(10);
-      // redirect_url is exactly the /window page with ?order=<orderId>
+      // redirect_url is exactly the /window page with ?order=<the server orderId>
+      expect(charge.calls[0]!.orderId).toBe(r.orderId);
       expect(charge.calls[0]!.redirectUrl).toBe(`https://ishtar.numetal.xyz/window/?order=${encodeURIComponent(r.orderId)}`);
-      // a reserving row exists, email is sealed (not plaintext) when ENCRYPTION_KEY is set; here dev → plaintext sealed
       const row = await env.DB.prepare("SELECT status, email_sealed, charge_hosted_url FROM featured_posts WHERE order_id=?1").bind(r.orderId).first<{ status: string; email_sealed: string; charge_hosted_url: string }>();
       expect(row?.status).toBe("reserving");
       expect(row?.email_sealed).toBe(inp.email); // dev (no ENCRYPTION_KEY) → seal is a no-op
       expect(row?.charge_hosted_url).toBe(r.checkoutUrl);
+    });
+
+    // finding #1 — reveal is a STRING, not a record. A plain-string reveal must SUCCEED (was a 400).
+    it("FINDING #1: a string reveal ('call me maybe') reserves successfully and is screened verbatim", async () => {
+      const db = makeDb(env.DB);
+      const charge = chargeStub();
+      let screened = "";
+      const captureGuard: GuardFn = async (_db, _env, text) => { screened = text; return { safe: true, raw: "safe" }; };
+      const r = await reserveHumanSlot(db, lpEnv(), reserveInput({ reveal: "call me maybe" }), freshIp(), { guard: captureGuard, createCharge: charge.fn });
+      expect(r.kind).toBe("reserved");
+      // the reveal string is appended to the screen text verbatim (NOT Object.values(...).map(String))
+      expect(screened).toContain("call me maybe");
+      if (r.kind === "reserved") {
+        const row = await env.DB.prepare("SELECT reveal_fields FROM featured_posts WHERE order_id=?1").bind(r.orderId).first<{ reveal_fields: string }>();
+        expect(row?.reveal_fields).toBe("call me maybe"); // persisted as the raw string
+      }
     });
 
     it("the LlamaPay charge POST sends Authorization === the raw key and the right body (metadata.orderId + redirect_url)", async () => {
@@ -107,49 +126,85 @@ describe("The Window — LlamaPay human path", () => {
       const db = makeDb(env.DB);
       await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
       const charge = chargeStub();
-      const a = await reserveHumanSlot(db, lpEnv(), reserveInput(), { guard: okGuard, createCharge: charge.fn });
+      const a = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
       expect(a.kind).toBe("reserved");
-      // The slot is warm-reserving (NOT yet paid). The second reserve must see it and return full.
-      const b = await reserveHumanSlot(db, lpEnv(), reserveInput(), { guard: okGuard, createCharge: charge.fn });
+      // The slot is warm-reserving (NOT yet paid). The second reserve (different IP) must see it → full.
+      const b = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
       expect(b.kind).toBe("full");
       expect(charge.calls).toHaveLength(1); // no charge for the rejected poster
     });
 
-    // ─── THE cap-regression test: a warm reserving row MUST be counted (the created_at format bug) ───
-    it("REGRESSION: cap=1, two DISTINCT refs, NO payment between → the 2nd returns full (warm reservation counted)", async () => {
+    // FINDING #5: a FULL board must reject WITHOUT calling the chaperone (claim precedes chaperone).
+    it("FINDING #5: a full board returns 409 WITHOUT invoking the chaperone guard", async () => {
       const db = makeDb(env.DB);
       await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
       const charge = chargeStub();
-      const first = await reserveHumanSlot(db, lpEnv(), reserveInput({ ref: "first_ref_" + rnd() }), { guard: okGuard, createCharge: charge.fn });
+      // Fill the only slot.
+      const a = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
+      expect(a.kind).toBe("reserved");
+      // The next poster's chaperone guard must NEVER run (the slot claim fails first → no AI spend / DoS).
+      let guardCalls = 0;
+      const trapGuard: GuardFn = async () => { guardCalls++; return { safe: true, raw: "safe" }; };
+      const b = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: trapGuard, createCharge: charge.fn });
+      expect(b.kind).toBe("full");
+      expect(guardCalls).toBe(0); // chaperone was NOT invoked on a full board
+      expect(charge.calls).toHaveLength(1);
+    });
+
+    // FINDING #5 (cont.): a chaperone block AFTER the claim must RELEASE the slot.
+    it("FINDING #5: a chaperone block releases the just-claimed slot (cap freed)", async () => {
+      const db = makeDb(env.DB);
+      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
+      const charge = chargeStub();
+      const blocked = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: s12Guard, createCharge: charge.fn });
+      expect(blocked.kind).toBe("blocked");
+      expect(charge.calls).toHaveLength(0); // never reached checkout
+      // the blocked row must NOT hold the slot — a fresh okGuard post can still claim the only slot.
+      const reservingCount = await env.DB.prepare("SELECT count(*) c FROM featured_posts WHERE status='reserving'").first<{ c: number }>();
+      expect(Number(reservingCount?.c)).toBe(0);
+      const ok = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
+      expect(ok.kind).toBe("reserved");
+    });
+
+    // FINDING #6: anti-squatting — one IP cannot hold two concurrent unpaid reservations.
+    it("FINDING #6: same IP, two unpaid reserves → 2nd rejected (squatting); after the 1st expires a new one succeeds", async () => {
+      const db = makeDb(env.DB);
+      const charge = chargeStub();
+      const ip = freshIp();
+      const a = await reserveHumanSlot(db, lpEnv(), reserveInput(), ip, { guard: okGuard, createCharge: charge.fn });
+      expect(a.kind).toBe("reserved");
+      const b = await reserveHumanSlot(db, lpEnv(), reserveInput(), ip, { guard: okGuard, createCharge: charge.fn });
+      expect(b.kind).toBe("squatting"); // a second concurrent unpaid reservation from the same IP is rejected
+      expect(charge.calls).toHaveLength(1);
+      // Age the first reservation past RESERVE_TTL (10 min) → a new reserve from the same IP succeeds.
+      await env.DB.prepare("UPDATE featured_posts SET created_at=?1 WHERE status='reserving'").bind(new Date(Date.now() - 11 * 60 * 1000).toISOString()).run();
+      const c = await reserveHumanSlot(db, lpEnv(), reserveInput(), ip, { guard: okGuard, createCharge: charge.fn });
+      expect(c.kind).toBe("reserved");
+      expect(charge.calls).toHaveLength(2);
+    });
+
+    // ─── THE cap-regression test: a warm reserving row MUST be counted (the created_at format bug) ───
+    it("REGRESSION: cap=1, two DISTINCT posters, NO payment between → the 2nd returns full (warm reservation counted)", async () => {
+      const db = makeDb(env.DB);
+      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
+      const charge = chargeStub();
+      const first = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
       expect(first.kind).toBe("reserved"); // slot held, unpaid
-      // No webhook/payment in between — the first row is still 'reserving'.
       const reservingCount = await env.DB.prepare("SELECT count(*) c FROM featured_posts WHERE status='reserving'").first<{ c: number }>();
       expect(Number(reservingCount?.c)).toBe(1);
-      const second = await reserveHumanSlot(db, lpEnv(), reserveInput({ ref: "second_ref_" + rnd() }), { guard: okGuard, createCharge: charge.fn });
+      const second = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
       expect(second.kind).toBe("full"); // the warm reservation occupies the only slot → over-cap prevented
-      expect(charge.calls).toHaveLength(1); // only the first poster's charge was created
+      expect(charge.calls).toHaveLength(1);
     });
 
-    it("chaperone blocks an S12 post BEFORE any slot/charge", async () => {
+    it("chaperone blocks an S12 post (slot released, no charge)", async () => {
       const db = makeDb(env.DB);
       const charge = chargeStub();
-      const r = await reserveHumanSlot(db, lpEnv(), reserveInput(), { guard: s12Guard, createCharge: charge.fn });
+      const r = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: s12Guard, createCharge: charge.fn });
       expect(r.kind).toBe("blocked");
       expect(charge.calls).toHaveLength(0);
-      const cnt = await env.DB.prepare("SELECT count(*) c FROM featured_posts").first<{ c: number }>();
-      expect(Number(cnt?.c)).toBe(0); // nothing claimed
-    });
-
-    it("re-reserving the same ref returns the held checkout (no second charge)", async () => {
-      const db = makeDb(env.DB);
-      const charge = chargeStub();
-      const inp = reserveInput();
-      const r1 = await reserveHumanSlot(db, lpEnv(), inp, { guard: okGuard, createCharge: charge.fn });
-      const r2 = await reserveHumanSlot(db, lpEnv(), inp, { guard: okGuard, createCharge: charge.fn });
-      expect(r1.kind).toBe("reserved");
-      expect(r2.kind).toBe("reserved");
-      if (r1.kind === "reserved" && r2.kind === "reserved") expect(r2.checkoutUrl).toBe(r1.checkoutUrl);
-      expect(charge.calls).toHaveLength(1);
+      const live = await env.DB.prepare("SELECT count(*) c FROM featured_posts WHERE status IN ('live','reserving')").first<{ c: number }>();
+      expect(Number(live?.c)).toBe(0); // nothing holds a slot
     });
   });
 
@@ -163,7 +218,6 @@ describe("The Window — LlamaPay human path", () => {
       const bad = await verifyLlamapayWebhook(lpEnv(), rawBody, "deadbeef" + signature.slice(8));
       expect(bad.ok).toBe(false);
       expect(bad.reason).toBe("bad signature");
-      // unconfigured env → fail-closed
       const dark = await verifyLlamapayWebhook({ ...(env as unknown as Env), LLAMAPAY_WEBHOOK_SECRET: undefined }, rawBody, signature);
       expect(dark.ok).toBe(false);
     });
@@ -171,31 +225,32 @@ describe("The Window — LlamaPay human path", () => {
     it("charge:confirmed flips reserving→live and records the LlamaPay payment ref", async () => {
       const db = makeDb(env.DB);
       const inp = reserveInput();
-      const reserved = await reserveHumanSlot(db, lpEnv(), inp, { guard: okGuard, createCharge: chargeStub().fn });
+      const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: chargeStub().fn });
       expect(reserved.kind).toBe("reserved");
-      const orderId = `featured:human:${inp.ref}`;
+      if (reserved.kind !== "reserved") return;
+      const orderId = reserved.orderId;
       let emailed: { to: string; html: string } | null = null;
       const ev = confirmEvent(orderId, "pay_live_1");
       const out = await handleLlamapayEvent(db, lpEnv(), ev, { sendEmail: async (to, _s, html) => { emailed = { to, html }; } });
       expect(out.kind).toBe("live");
       if (out.kind === "live") expect(out.alreadyLive).toBe(false);
-      const row = await env.DB.prepare("SELECT status, payment_ref, paid_at, expires_at FROM featured_posts WHERE order_id=?1").bind(orderId).first<{ status: string; payment_ref: string; paid_at: string; expires_at: string }>();
+      const row = await env.DB.prepare("SELECT status, payment_ref, paid_at, expires_at, emailed FROM featured_posts WHERE order_id=?1").bind(orderId).first<{ status: string; payment_ref: string; paid_at: string; expires_at: string; emailed: number }>();
       expect(row?.status).toBe("live");
       expect(row?.payment_ref).toBe("llamapay:pay_live_1");
       expect(row?.paid_at).toBeTruthy();
       expect(row?.expires_at).toBeTruthy();
-      // emailed the receipt (email present)
+      expect(Number(row?.emailed)).toBe(1); // finding #7: the send outcome is persisted
       expect(emailed).not.toBeNull();
       expect(emailed!.to).toBe(inp.email);
       expect(emailed!.html).toContain("THE WINDOW");
-      expect(emailed!.html).toContain("llamapay:pay_live_1");
     });
 
     it("REPLAY the same event.id is idempotent (no double-feature, dedup short-circuit)", async () => {
       const db = makeDb(env.DB);
       const inp = reserveInput();
-      await reserveHumanSlot(db, lpEnv(), inp, { guard: okGuard, createCharge: chargeStub().fn });
-      const orderId = `featured:human:${inp.ref}`;
+      const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: chargeStub().fn });
+      if (reserved.kind !== "reserved") throw new Error("setup");
+      const orderId = reserved.orderId;
       const ev = confirmEvent(orderId, "pay_idem", "evt_idem_fixed");
       let emails = 0;
       const send = async () => { emails++; };
@@ -203,7 +258,7 @@ describe("The Window — LlamaPay human path", () => {
       const b = await handleLlamapayEvent(db, lpEnv(), ev, { sendEmail: send });
       expect(a.kind).toBe("live");
       expect(b.kind).toBe("replay"); // same event.id → dedup no-op
-      expect(emails).toBe(1); // only the first event emailed/featured
+      expect(emails).toBe(1);
       const liveCount = await env.DB.prepare("SELECT count(*) c FROM featured_posts WHERE status='live'").first<{ c: number }>();
       expect(Number(liveCount?.c)).toBe(1);
     });
@@ -211,18 +266,101 @@ describe("The Window — LlamaPay human path", () => {
     it("pending then confirmed (different event ids) features exactly once", async () => {
       const db = makeDb(env.DB);
       const inp = reserveInput();
-      await reserveHumanSlot(db, lpEnv(), inp, { guard: okGuard, createCharge: chargeStub().fn });
-      const orderId = `featured:human:${inp.ref}`;
+      const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: chargeStub().fn });
+      if (reserved.kind !== "reserved") throw new Error("setup");
+      const orderId = reserved.orderId;
       const pending: LlamapayEvent = { id: "evt_p", type: "charge:pending", data: { id: "pay_x", metadata: { orderId } } };
       const confirmed: LlamapayEvent = { id: "evt_c", type: "charge:confirmed", data: { id: "pay_x", metadata: { orderId } } };
       let emails = 0;
       const p = await handleLlamapayEvent(db, lpEnv(), pending, { sendEmail: async () => { emails++; } });
       const c = await handleLlamapayEvent(db, lpEnv(), confirmed, { sendEmail: async () => { emails++; } });
-      expect(p.kind).toBe("live"); // pending counts as paid (tx on chain)
+      expect(p.kind).toBe("live");
       if (p.kind === "live") expect(p.alreadyLive).toBe(false);
       expect(c.kind).toBe("live");
-      if (c.kind === "live") expect(c.alreadyLive).toBe(true); // already live → no second feature
+      if (c.kind === "live") expect(c.alreadyLive).toBe(true);
       expect(emails).toBe(1);
+    });
+
+    // FINDING #4: a throw AFTER the point the OLD code marked the event seen, but BEFORE the flip, must
+    // NOT permanently drop the paid event. On retry the event still features. A genuine replay is a no-op.
+    it("FINDING #4: a throw mid-handler does NOT mark the event seen → the retry still features", async () => {
+      const db = makeDb(env.DB);
+      const inp = reserveInput();
+      const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: chargeStub().fn });
+      if (reserved.kind !== "reserved") throw new Error("setup");
+      const orderId = reserved.orderId;
+      const ev = confirmEvent(orderId, "pay_throw", "evt_throw_fixed");
+      // First attempt: the email step throws AFTER the (old) dedup-write point. The handler must not have
+      // permanently marked the event seen — i.e. either it features anyway (dedup written only on success)
+      // or it leaves the event un-deduped so a retry re-drives it.
+      let attempt = 0;
+      const flakySend = async () => { attempt++; if (attempt === 1) throw new Error("transient email failure"); };
+      await handleLlamapayEvent(db, lpEnv(), ev, { sendEmail: flakySend }).catch(() => {});
+      // Retry the SAME event id. It must still result in a live, featured slot (no permanent drop).
+      const retry = await handleLlamapayEvent(db, lpEnv(), ev, { sendEmail: flakySend });
+      const row = await env.DB.prepare("SELECT status FROM featured_posts WHERE order_id=?1").bind(orderId).first<{ status: string }>();
+      expect(row?.status).toBe("live"); // the slot is featured despite the first attempt's throw
+      // and a genuine replay AFTER a fully-processed run is idempotent.
+      const replay = await handleLlamapayEvent(db, lpEnv(), ev, { sendEmail: flakySend });
+      expect(replay.kind).toBe("replay");
+      const liveCount = await env.DB.prepare("SELECT count(*) c FROM featured_posts WHERE status='live'").first<{ c: number }>();
+      expect(Number(liveCount?.c)).toBe(1); // never double-featured
+      // retry resolved to live (or replay) — never a dropped paid event
+      expect(["live", "replay"]).toContain(retry.kind);
+    });
+
+    // FINDING #3: a confirmed payment for an EXPIRED order — FULL board → orphaned record + alert; with
+    // ROOM → re-features.
+    it("FINDING #3: confirmed webhook for an EXPIRED order, board FULL → featured_orphaned_payments + status orphaned + alert", async () => {
+      const db = makeDb(env.DB);
+      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
+      // The payer reserved, then their reservation expired (e.g. they paid late).
+      const inp = reserveInput();
+      const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: chargeStub().fn });
+      if (reserved.kind !== "reserved") throw new Error("setup");
+      const orderId = reserved.orderId;
+      await env.DB.prepare("UPDATE featured_posts SET status='expired' WHERE order_id=?1").bind(orderId).run();
+      // Meanwhile the board filled with a different live row (cap=1, now occupied).
+      const future = new Date(Date.now() + 3_600_000).toISOString();
+      await env.DB.prepare("INSERT INTO featured_posts (author_kind, public_summary, order_id, status, expires_at) VALUES ('human','occupant','o_full','live',?1)").bind(future).run();
+      // Mock the alert webhook.
+      const alertFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+      const out = await handleLlamapayEvent(db, lpEnv({ ALERT_WEBHOOK_URL: "https://alerts.example/hook" }), confirmEvent(orderId, "pay_orphan"));
+      expect(out.kind).toBe("orphaned");
+      // a paid-but-unfeatured row was persisted
+      const orphan = await env.DB.prepare("SELECT order_id, llamapay_payment_id, amount FROM featured_orphaned_payments WHERE order_id=?1").bind(orderId).first<{ order_id: string; llamapay_payment_id: string; amount: string }>();
+      expect(orphan?.llamapay_payment_id).toBe("pay_orphan");
+      expect(orphan?.amount).toBe("50.00");
+      // the order row is now 'orphaned'
+      const row = await env.DB.prepare("SELECT status FROM featured_posts WHERE order_id=?1").bind(orderId).first<{ status: string }>();
+      expect(row?.status).toBe("orphaned");
+      // GET /status surfaces paidButUnfeatured
+      const s = await getFeaturedStatus(lpEnv(), orderId);
+      expect(s.status).toBe("orphaned");
+      expect(s.paidButUnfeatured).toBe(true);
+      // the alert fired
+      expect(alertFetch).toHaveBeenCalled();
+      const alertBody = JSON.parse((alertFetch.mock.calls[0]![1] as RequestInit).body as string);
+      expect(alertBody.text).toContain("PAID BUT UNFEATURED");
+      // never silently dropped — a record exists
+      expect(orphan).not.toBeNull();
+    });
+
+    it("FINDING #3: confirmed webhook for an EXPIRED order, board has ROOM → re-features (expired→live)", async () => {
+      const db = makeDb(env.DB);
+      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','5')").run();
+      const inp = reserveInput();
+      const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: chargeStub().fn });
+      if (reserved.kind !== "reserved") throw new Error("setup");
+      const orderId = reserved.orderId;
+      await env.DB.prepare("UPDATE featured_posts SET status='expired' WHERE order_id=?1").bind(orderId).run();
+      const out = await handleLlamapayEvent(db, lpEnv(), confirmEvent(orderId, "pay_reclaim"), { sendEmail: async () => {} });
+      expect(out.kind).toBe("live");
+      const row = await env.DB.prepare("SELECT status, payment_ref FROM featured_posts WHERE order_id=?1").bind(orderId).first<{ status: string; payment_ref: string }>();
+      expect(row?.status).toBe("live"); // re-claimed
+      expect(row?.payment_ref).toBe("llamapay:pay_reclaim");
+      const orphan = await env.DB.prepare("SELECT count(*) c FROM featured_orphaned_payments").first<{ c: number }>();
+      expect(Number(orphan?.c)).toBe(0); // not orphaned — there was room
     });
 
     it("missing metadata.orderId → no_order (no crash)", async () => {
@@ -241,20 +379,39 @@ describe("The Window — LlamaPay human path", () => {
   });
 
   describe("status", () => {
-    it("reserving → live transition; receipt present once live", async () => {
+    it("reserving → live transition; receipt present once live, emailSent reflected", async () => {
       const db = makeDb(env.DB);
       const inp = reserveInput();
-      await reserveHumanSlot(db, lpEnv(), inp, { guard: okGuard, createCharge: chargeStub().fn });
-      const orderId = `featured:human:${inp.ref}`;
+      const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: chargeStub().fn });
+      if (reserved.kind !== "reserved") throw new Error("setup");
+      const orderId = reserved.orderId;
       const s1 = await getFeaturedStatus(lpEnv(), orderId);
       expect(s1.status).toBe("reserving");
       expect(s1.receipt).toBeUndefined();
-      // confirm payment
+      expect(s1.emailSent).toBe(false); // finding #7
       await handleLlamapayEvent(db, lpEnv(), confirmEvent(orderId, "pay_status"), { sendEmail: async () => {} });
       const s2 = await getFeaturedStatus(lpEnv(), orderId);
       expect(s2.status).toBe("live");
       expect(s2.receipt).toBeDefined();
-      expect(s2.receiptHtml).toContain("llamapay:pay_status");
+      expect(s2.emailSent).toBe(true); // finding #7
+    });
+
+    // FINDING #2: the status receipt JSON must NOT leak the internal payment id ("llamapay:<id>").
+    it("FINDING #2: GET /status receipt does NOT expose 'llamapay:' (uses the hosted payment URL)", async () => {
+      const db = makeDb(env.DB);
+      const inp = reserveInput();
+      const charge = chargeStub();
+      const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: charge.fn });
+      if (reserved.kind !== "reserved") throw new Error("setup");
+      const orderId = reserved.orderId;
+      await handleLlamapayEvent(db, lpEnv(), confirmEvent(orderId, "pay_secret_id"), { sendEmail: async () => {} });
+      const s = await getFeaturedStatus(lpEnv(), orderId);
+      expect(s.status).toBe("live");
+      const serialized = JSON.stringify(s);
+      expect(serialized).not.toContain("llamapay:"); // the raw internal id never surfaces
+      expect(serialized).not.toContain("pay_secret_id");
+      // the public-safe hosted payment URL is what the receipt links instead
+      expect(s.receiptHtml).toContain(reserved.checkoutUrl);
     });
 
     it("unknown order → status unknown", async () => {
@@ -277,7 +434,7 @@ describe("The Window — LlamaPay human path", () => {
     };
 
     it("has the TR-100 fields + the U.S. Graphics attribution", () => {
-      const html = renderTR100({ ...base, authorKind: "human", llamapayId: "pay_abc", llamapayHostedUrl: "https://checkout.llamapay.io/pay/abc" });
+      const html = renderTR100({ ...base, authorKind: "human", llamapayHostedUrl: "https://checkout.llamapay.io/pay/abc" });
       expect(html).toContain("THE WINDOW");
       expect(html).toContain("REPORT NO.");
       expect(html).toContain("TR-W-");
@@ -289,9 +446,9 @@ describe("The Window — LlamaPay human path", () => {
       expect(html).toContain("BSD-3-Clause");
     });
 
-    it("HUMAN path shows the llamapay payment ref and NO basescan link", () => {
-      const html = renderTR100({ ...base, authorKind: "human", llamapayId: "pay_human_1", llamapayHostedUrl: "https://checkout.llamapay.io/pay/h1" });
-      expect(html).toContain("llamapay:pay_human_1");
+    it("HUMAN path shows the hosted payment URL (NOT the internal id) and NO basescan link", () => {
+      const html = renderTR100({ ...base, authorKind: "human", llamapayHostedUrl: "https://checkout.llamapay.io/pay/h1" });
+      expect(html).toContain("https://checkout.llamapay.io/pay/h1");
       expect(html).not.toContain("basescan.org");
       expect(html).toContain("LlamaPay"); // processor line
     });
@@ -301,6 +458,39 @@ describe("The Window — LlamaPay human path", () => {
       expect(html).toContain("https://basescan.org/tx/0xdeadbeef");
       expect(html).toContain("Base · USDC"); // processor/network line
       expect(html).not.toContain("llamapay:");
+    });
+
+    // FINDING #8: a long link ref must render with an aligned right border (link cell truncated + padded),
+    // and the FULL ref reprinted in plaintext below the box.
+    it("FINDING #8: a 66-char tx ref renders with an aligned right border + the full ref below the box", () => {
+      const longTx = "0x" + "a".repeat(64); // 66 chars — overflows the value cell
+      const html = renderTR100({ ...base, authorKind: "agent", settlementTx: longTx });
+      // every body line inside the box has the same visible width (right border aligned)
+      const pre = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/)?.[1] ?? "";
+      const lines = pre.replace(/<[^>]+>/g, "").split("\n").filter((l) => l.startsWith("│"));
+      const widths = new Set(lines.map((l) => [...l].length));
+      expect(widths.size).toBe(1); // all body/border lines identical visible width
+      // the truncated cell carries an ellipsis, and the FULL href is preserved in the <a>
+      expect(html).toContain(`https://basescan.org/tx/${longTx}`);
+      // the full ref is reprinted as plaintext below the box
+      const afterPre = html.slice(html.indexOf("</pre>"));
+      expect(afterPre).toContain(longTx);
+    });
+
+    // FINDING #9: a value with &, <, > must be escaped EXACTLY once (no &amp;amp;) and stay aligned.
+    it("FINDING #9: a publicSummary with & < > escapes once (no double-escape) and stays aligned", () => {
+      const summary = "loves A & B < C > D".repeat(6); // long enough to truncate; carries &, <, >
+      const html = renderTR100({ ...base, authorKind: "human", publicSummary: summary, llamapayHostedUrl: "https://checkout.llamapay.io/pay/x" });
+      const pre = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/)?.[1] ?? "";
+      expect(pre).toContain("&amp;"); // single-escaped
+      expect(pre).not.toContain("&amp;amp;"); // never double-escaped
+      expect(pre).not.toContain("&amp;lt;");
+      const lines = pre.split("\n").filter((l) => l.startsWith("│"));
+      // visible width is identical across body lines: strip <a> markup, then entities count as 1 rendered char.
+      const visibleWidth = (l: string) =>
+        [...l.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')].length;
+      const widths = new Set(lines.map(visibleWidth));
+      expect(widths.size).toBe(1);
     });
   });
 

@@ -22,8 +22,8 @@ export interface ReceiptInput {
   slotOf: number; // N — this slot's ordinal today
   slotCap: number; // 10 — daily cap
   // Exactly ONE of these is set, by path:
-  llamapayId?: string; // human path: LlamaPay payment id → "llamapay:<id>"
-  llamapayHostedUrl?: string; // human path: optional link to the hosted payment page
+  llamapayId?: string; // human path: LlamaPay payment id → "llamapay:<id>" (INTERNAL — never in a public/status receipt)
+  llamapayHostedUrl?: string; // human path: link to the hosted payment page (the public-safe payment URL)
   settlementTx?: string; // agent path: on-chain settle tx hash → basescan link
 }
 
@@ -55,10 +55,15 @@ function paymentRef(i: ReceiptInput): { ref: string; href?: string } {
   if (i.authorKind === "agent" && i.settlementTx) {
     return { ref: i.settlementTx, href: `https://basescan.org/tx/${i.settlementTx}` };
   }
+  // Human/LlamaPay path: the webhook has NO chain tx hash → never a basescan link. The PUBLIC/status
+  // receipt must NOT expose the internal payment id (IDOR — finding #2): when we have the LlamaPay
+  // hosted payment URL, show THAT (public-safe) as the ref. The raw "llamapay:<id>" text is only ever
+  // rendered when an internal caller explicitly passes llamapayId WITHOUT a hosted URL.
+  if (i.llamapayHostedUrl) {
+    return { ref: i.llamapayHostedUrl, href: i.llamapayHostedUrl };
+  }
   if (i.llamapayId) {
-    // Human/LlamaPay path: the webhook has NO chain tx hash → never a basescan link. Link to the
-    // hosted payment page if we have it.
-    return { ref: `llamapay:${i.llamapayId}`, href: i.llamapayHostedUrl };
+    return { ref: `llamapay:${i.llamapayId}`, href: undefined };
   }
   return { ref: "—" };
 }
@@ -75,21 +80,23 @@ function processorLine(i: ReceiptInput): string {
 export function renderTR100(i: ReceiptInput): string {
   const reportNo = receiptReportNo(i.orderId);
   const { ref, href } = paymentRef(i);
-  const refCell = href
-    ? `<a href="${esc(href)}" style="color:inherit;text-decoration:underline">${esc(ref)}</a>`
-    : esc(ref);
-  const rows: Array<[string, string]> = [
-    ["REPORT NO.", esc(reportNo)],
-    ["PAYMENT REF", refCell],
-    ["PAID AT (UTC)", esc(utc(i.paidAt))],
-    ["AMOUNT", `$${esc(i.amountUsd)} USD`],
-    ["PROCESSOR/NETWORK", esc(processorLine(i))],
-    ["FEATURE FROM", esc(utc(i.windowFrom))],
-    ["FEATURE TO", esc(utc(i.windowTo))],
-    ["SLOT", `${i.slotOf} of ${i.slotCap} today`],
-    ["AUTHOR KIND", esc(i.authorKind)],
-    ["HANDLE", esc(i.handle ?? "—")],
-    ["PUBLIC SUMMARY", esc(oneLine(i.publicSummary))],
+  // Rows carry RAW (un-escaped) text plus an optional href. The body builder truncates the RAW text
+  // FIRST, then esc()s exactly ONCE (finding #9 — never esc an already-escaped slice), and for a link
+  // cell rebuilds the <a> with the truncated escaped text as inner content while keeping the FULL href
+  // (finding #8). Padding is computed from the truncated VISIBLE length so every body line is W wide.
+  type Row = { label: string; value: string; href?: string };
+  const rows: Row[] = [
+    { label: "REPORT NO.", value: reportNo },
+    { label: "PAYMENT REF", value: ref, href },
+    { label: "PAID AT (UTC)", value: utc(i.paidAt) },
+    { label: "AMOUNT", value: `$${i.amountUsd} USD` },
+    { label: "PROCESSOR/NETWORK", value: processorLine(i) },
+    { label: "FEATURE FROM", value: utc(i.windowFrom) },
+    { label: "FEATURE TO", value: utc(i.windowTo) },
+    { label: "SLOT", value: `${i.slotOf} of ${i.slotCap} today` },
+    { label: "AUTHOR KIND", value: i.authorKind },
+    { label: "HANDLE", value: i.handle ?? "—" },
+    { label: "PUBLIC SUMMARY", value: oneLine(i.publicSummary) },
   ];
   const W = 64; // inner content width (chars), drives the box rules
   const top = "┌" + "─".repeat(W) + "┐";
@@ -101,17 +108,26 @@ export function renderTR100(i: ReceiptInput): string {
   const sub = pad("Ishtar · ishtar.numetal.xyz/window");
   // Field rows: "  LABEL ............ value" feel, but we keep it as label/value columns.
   const labelW = 18;
+  const room = W - 1 - labelW - 1; // visible chars available for the value cell
+  // Any ref that didn't fit in the box is reprinted in full as plaintext below (so a truncated link
+  // never hides the real payment pointer). Collected here, emitted after the box.
+  const overflowNotes: string[] = [];
   const bodyRows = rows
-    .map(([label, value]) => {
+    .map(({ label, value, href: rowHref }) => {
       const lab = (label + ":").padEnd(labelW);
-      // value may contain HTML (the link) — measure on a stripped copy for padding only.
-      const plain = value.replace(/<[^>]+>/g, "");
-      const room = W - 1 - labelW - 1;
-      const shownPlain = plain.length > room ? plain.slice(0, room) : plain;
-      // If we had to truncate a *plain* value (no HTML), re-truncate the real value too.
-      const realValue = plain === value && plain.length > room ? esc(shownPlain) : value;
-      const padCount = Math.max(0, room - shownPlain.length);
-      return `│ ${lab}${realValue}${" ".repeat(padCount)} │`;
+      // 1) Truncate the RAW value to `room` (with an ellipsis when clipped) — measured on visible chars.
+      const clipped = value.length > room;
+      const shown = clipped ? value.slice(0, Math.max(0, room - 1)) + "…" : value;
+      // 2) Escape EXACTLY once.
+      const shownEsc = esc(shown);
+      // 3) For a link cell, rebuild the <a> with the truncated escaped text but the FULL href.
+      const cell = rowHref
+        ? `<a href="${esc(rowHref)}" style="color:inherit;text-decoration:underline">${shownEsc}</a>`
+        : shownEsc;
+      // 4) Pad based on the TRUNCATED visible length so the right border always aligns.
+      const padCount = Math.max(0, room - shown.length);
+      if (clipped && rowHref) overflowNotes.push(`${label}: ${value}`); // full ref reprinted below the box
+      return `│ ${lab}${cell}${" ".repeat(padCount)} │`;
     })
     .join("\n");
   const footer = pad(ATTRIBUTION.length > W - 2 ? ATTRIBUTION.slice(0, W - 3) + "…" : ATTRIBUTION);
@@ -127,10 +143,18 @@ export function renderTR100(i: ReceiptInput): string {
     bot,
   ].join("\n");
 
+  // Any clipped link ref is reprinted IN FULL as plaintext below the box (finding #8) so a truncated
+  // box cell never hides the real payment pointer. esc() once.
+  const overflowBlock = overflowNotes.length
+    ? `\n<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;color:#000;margin-top:6px;word-break:break-all">${overflowNotes
+        .map((n) => esc(n))
+        .join("<br>")}</div>`
+    : "";
+
   // The full attribution always appears as readable text below the box (so a clipped box line never
   // drops the licence credit), plus the boxed report itself.
   return `<div style="background:#fff;color:#000;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.35;padding:0;margin:0">
-<pre style="margin:0;white-space:pre;font:inherit;color:#000">${ascii}</pre>
+<pre style="margin:0;white-space:pre;font:inherit;color:#000">${ascii}</pre>${overflowBlock}
 <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;color:#000;margin-top:6px">${esc(ATTRIBUTION)}</div>
 </div>`;
 }

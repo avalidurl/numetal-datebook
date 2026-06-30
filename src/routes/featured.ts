@@ -199,76 +199,73 @@ export async function claimAndPublishFeatured(
 const reserveSchema = z.object({
   authorKind: z.literal("human"),
   publicSummary: z.string().min(1).max(2000),
-  reveal: z.record(z.string(), z.unknown()).optional(),
+  // reveal is a single free-text blurb (<=400 chars). The client sends a STRING (finding #1: was a
+  // record, which 400'd on a plain string + mis-derived the screen text via Object.values).
+  reveal: z.string().max(400).optional(),
   // email shape: a single @, a dot in the domain, bounded length.
   email: z.string().regex(/^[^@\s]+@[^@\s]+\.[^@\s]+$/).max(200),
   over18: z.literal(true),
-  ref: z.string().min(8).max(100),
+  // NOTE: the client NO LONGER sends `ref`. The server GENERATES the authoritative order id
+  // (crypto.randomUUID) — finding #2 (entropy + IDOR). callerIp scopes the slot-squatting control.
 });
 export type ReserveInput = z.infer<typeof reserveSchema>;
 
 export type ReserveOutcome =
   | { kind: "full" }
   | { kind: "blocked"; reason: string }
-  | { kind: "already"; orderId: string; status: "reserving" | "live" }
+  | { kind: "squatting"; reason: string } // an outstanding unpaid reservation already held by this IP
   | { kind: "charge_failed"; reason: string }
   | { kind: "reserved"; orderId: string; checkoutUrl: string; expiresInMinutes: number };
 
 /**
  * Claim a slot + create the LlamaPay charge for a HUMAN poster. Mirrors the agent claim: an atomic
  * conditional INSERT guarded by the active-slot COUNT (live-by-expiry OR warm reservation), claimed
- * BEFORE any charge so a full board never starts a checkout. `deps.guard` injects the chaperone
- * classifier; `deps.createCharge` lets a test stub the LlamaPay call.
+ * BEFORE the chaperone + charge so a full board never spends compute or starts a checkout (finding #5).
+ * The server GENERATES the order id (crypto.randomUUID) — never derived from a client value (finding
+ * #2). `callerIp` keys the chaperone callerRef per-poster and caps outstanding unpaid reservations
+ * (finding #6). `deps.guard` injects the chaperone classifier; `deps.createCharge` stubs the LlamaPay
+ * call; `deps.orderId` lets a test pin the generated id.
  */
 export async function reserveHumanSlot(
   db: DB,
   env: Env,
   input: ReserveInput,
+  callerIp: string | undefined,
   deps?: {
     guard?: GuardFn;
     createCharge?: (orderId: string, redirectUrl: string, cancelUrl: string) => Promise<{ ok: boolean; hostedUrl?: string; reason?: string }>;
+    orderId?: string;
   },
 ): Promise<ReserveOutcome> {
   const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
-  const orderId = `featured:human:${input.ref}`;
+  // The order id is server-authoritative + high-entropy (finding #2): a uuid the client can't predict
+  // or forge, so it can't enumerate another poster's status (IDOR) or collide order rows.
+  const orderId = deps?.orderId ?? `featured:human:${crypto.randomUUID()}`;
   const now = new Date();
   const nowIso = now.toISOString();
   const reserveFloor = new Date(now.getTime() - RESERVE_TTL_MS).toISOString();
+  const ipKey = callerIp && callerIp.trim() ? callerIp.trim() : null;
 
-  // Idempotency: a ref that already reserved (warm) or went live is recoverable — never double-claim
-  // nor double-charge. The site can re-poll status.
-  const existing = await env.DB
-    .prepare("SELECT id, status FROM featured_posts WHERE order_id=?1")
-    .bind(orderId)
-    .first<{ id: number; status: string }>();
-  if (existing && existing.status === "live") return { kind: "already", orderId, status: "live" };
-  if (existing && existing.status === "blocked") return { kind: "blocked", reason: "post was blocked by the chaperone" };
-  if (existing && existing.status === "reserving") {
-    // A warm reservation for this exact ref — return its held checkout (no new charge).
-    const row = await env.DB.prepare("SELECT charge_hosted_url FROM featured_posts WHERE id=?1").bind(existing.id).first<{ charge_hosted_url: string | null }>();
-    if (row?.charge_hosted_url) return { kind: "reserved", orderId, checkoutUrl: row.charge_hosted_url, expiresInMinutes: Math.round(RESERVE_TTL_MS / 60000) };
-    return { kind: "already", orderId, status: "reserving" };
+  // Anti-squatting (finding #6): cap OUTSTANDING unpaid (still-warm 'reserving') reservations per IP to
+  // 1. A second concurrent unpaid reserve from the same IP is rejected until the first is paid (→ live)
+  // or expires (RESERVE_TTL). Without this, cap+rate-limit alone let one IP hold every slot unpaid.
+  if (ipKey) {
+    const outstanding = await env.DB
+      .prepare("SELECT COUNT(*) c FROM featured_posts WHERE status='reserving' AND created_at > ?1 AND reserver_ip=?2")
+      .bind(reserveFloor, ipKey)
+      .first<{ c: number }>();
+    if (Number(outstanding?.c ?? 0) >= 1)
+      return { kind: "squatting", reason: "you already have an unpaid reservation — pay or wait for it to expire before reserving another" };
   }
 
-  // Chaperone pre_publish on the FULL public payload BEFORE we hold a slot or charge — fail-closed,
-  // no S12 carve-out, so an explicit post never reaches checkout. targetId is unknown pre-insert → 0.
-  const revealText = input.reveal ? Object.values(input.reveal).map(String).join("\n") : "";
-  const screenText = revealText ? `${input.publicSummary}\n${revealText}` : input.publicSummary;
-  const verdict = await chaperone(
-    db,
-    env,
-    { stage: "pre_publish", targetType: "post", targetId: 0, text: screenText, callerRef: "featured:human" },
-    deps?.guard ? { guard: deps.guard } : undefined,
-  );
-  if (verdict.verdict !== "allow" && verdict.verdict !== "sanitize") return { kind: "blocked", reason: verdict.reason };
-  const publishSummary = verdict.text ?? input.publicSummary;
-
-  // Atomic slot claim (cap COUNT incl. warm reservations). created_at = ISO nowIso so the COUNT below
-  // and the purge stay format-consistent with reserveFloor (the cap-regression bug fix).
+  // (b) ATOMIC slot claim FIRST (finding #5) — exactly like claimAndPublishFeatured: the conditional
+  // INSERT guarded by the active-slot COUNT (live-by-expiry OR warm reservation) so a full board NEVER
+  // runs the chaperone (Workers-AI compute) or starts a charge. created_at = ISO nowIso keeps the COUNT
+  // + purge format-consistent with reserveFloor (the cap-regression fix). reserver_ip scopes #6.
   const claim = await env.DB
     .prepare(
-      `INSERT INTO featured_posts (author_kind, author_ref, public_summary, reveal_fields, order_id, status, created_at)
-       SELECT 'human', NULL, ?1, ?2, ?3, 'reserving', ?4
+      `INSERT INTO featured_posts (author_kind, author_ref, public_summary, reveal_fields, order_id, status, created_at, reserver_ip)
+       SELECT 'human', NULL, ?1, ?2, ?3, 'reserving', ?4, ?8
        WHERE (
          SELECT COUNT(*) FROM featured_posts
          WHERE (status='live' AND expires_at > ?5)
@@ -276,13 +273,32 @@ export async function reserveHumanSlot(
        ) < ?7
        RETURNING id`,
     )
-    .bind(publishSummary, input.reveal ? JSON.stringify(input.reveal) : null, orderId, nowIso, nowIso, reserveFloor, cap)
+    .bind(input.publicSummary, input.reveal ?? null, orderId, nowIso, nowIso, reserveFloor, cap, ipKey)
     .first<{ id: number }>();
-  if (!claim) return { kind: "full" }; // board full → 409, NO charge
+  if (!claim) return { kind: "full" }; // board full → 409, NO chaperone, NO charge
 
-  // Seal the email at rest (crypto/box; no-op→plaintext only when ENCRYPTION_KEY is unset/dev).
+  // (d) ONLY AFTER the slot is secured: chaperone pre_publish on the FULL public payload — fail-closed,
+  // no S12 carve-out, so an explicit post never reaches checkout. callerRef is keyed per-poster (the
+  // orderId + IP), NOT the constant "featured:human" (finding #5). If blocked, RELEASE the slot.
+  const revealText = input.reveal ?? "";
+  const screenText = revealText ? `${input.publicSummary}\n${revealText}` : input.publicSummary;
+  const verdict = await chaperone(
+    db,
+    env,
+    { stage: "pre_publish", targetType: "post", targetId: claim.id, text: screenText, callerRef: `featured:human:${ipKey ?? orderId}` },
+    deps?.guard ? { guard: deps.guard } : undefined,
+  );
+  if (verdict.verdict !== "allow" && verdict.verdict !== "sanitize") {
+    // Release the just-claimed slot so a blocked post can't squat it (mark blocked — auditable, frees cap).
+    await env.DB.prepare("UPDATE featured_posts SET status='blocked' WHERE id=?1 AND status='reserving'").bind(claim.id).run();
+    return { kind: "blocked", reason: verdict.reason };
+  }
+  const publishSummary = verdict.text ?? input.publicSummary;
+
+  // Seal the email at rest (crypto/box; no-op→plaintext only when ENCRYPTION_KEY is unset/dev). Persist
+  // the (possibly sanitized) summary alongside it.
   const sealedEmail = (await seal(env, input.email)) ?? input.email;
-  await env.DB.prepare("UPDATE featured_posts SET email_sealed=?2 WHERE id=?1").bind(claim.id, sealedEmail).run();
+  await env.DB.prepare("UPDATE featured_posts SET email_sealed=?2, public_summary=?3 WHERE id=?1").bind(claim.id, sealedEmail, publishSummary).run();
 
   // Create the LlamaPay hosted charge. redirect_url returns to /window?order=<orderId> so the page
   // starts polling status; cancel_url returns to the board.
@@ -333,7 +349,9 @@ async function buildReceiptForRow(
     windowTo,
     slotOf,
     slotCap: cap,
-    ...(isLlama ? { llamapayId: pr.slice("llamapay:".length), llamapayHostedUrl: row.charge_hosted_url ?? undefined } : {}),
+    // Human/LlamaPay path: expose ONLY the public-safe hosted payment URL (charge_hosted_url) — NEVER
+    // the internal "llamapay:<id>" (finding #2: the status receipt JSON must not leak the payment id).
+    ...(isLlama ? { llamapayHostedUrl: row.charge_hosted_url ?? undefined } : {}),
     ...(isX402 ? { settlementTx: pr.slice("x402:".length) } : {}),
   };
   return { receipt, html: renderTR100(receipt), document: renderTR100Document(receipt) };
@@ -345,13 +363,35 @@ export type WebhookOutcome =
   | { kind: "replay"; eventId: string }
   | { kind: "ignored"; reason: string }
   | { kind: "no_order" }
+  | { kind: "orphaned"; orderId: string } // paid but unfeaturable (board full) — recorded for refund/comp
   | { kind: "live"; orderId: string; alreadyLive: boolean };
 
+/** Fire a "paid but unfeatured" page to the alert webhook (best-effort; never throws). */
+async function alertOrphanedPayment(env: Env, orderId: string, paymentId: string): Promise<void> {
+  if (!env.ALERT_WEBHOOK_URL) return;
+  try {
+    await fetch(env.ALERT_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        text: `🚨 The Window: PAID BUT UNFEATURED — needs refund/comp. order=${orderId} llamapay=${paymentId} (board was full when the payment confirmed)`,
+      }),
+    });
+  } catch {
+    /* alerting must never break the webhook 200 */
+  }
+}
+
 /**
- * Process a verified LlamaPay webhook event. IDEMPOTENT: dedups on event.id, and the reserving→live
- * flip is conditional so a duplicate (or a pending-then-confirmed pair) features the slot exactly
- * once. On the first flip it generates + emails the TR-100 receipt. ALWAYS resolves to a terminal
- * outcome the caller maps to 200 (the only non-200 is a bad signature, handled before this runs).
+ * Process a verified LlamaPay webhook event. IDEMPOTENT and crash-safe (findings #3 + #4):
+ *   - The dedup INSERT is written ONLY AFTER the feature/flip (or terminal orphaned-decision) succeeds,
+ *     so a throw mid-handler leaves the event un-deduped → LlamaPay retries it (no permanent drop). A
+ *     truly-processed event replays as a 200 no-op (the row is already live/orphaned + the dedup row exists).
+ *   - A verified charge for an order whose row is NOT reserving/live/blocked (expired or purged) is NOT
+ *     silently dropped: we try to RE-CLAIM a slot (expired→live if the cap has room) and feature+receipt
+ *     as normal; if the board is FULL we persist the paid event to featured_orphaned_payments, fire an
+ *     alert, and set the row to 'orphaned' so GET /status reports paidButUnfeatured.
+ * ALWAYS resolves to a terminal outcome the caller maps to 200 (the only non-200 is a bad signature).
  */
 export async function handleLlamapayEvent(
   db: DB,
@@ -359,46 +399,121 @@ export async function handleLlamapayEvent(
   event: LlamapayEvent,
   deps?: { sendEmail?: (to: string, subject: string, html: string) => Promise<void> },
 ): Promise<WebhookOutcome> {
-  // Dedup: persist the event.id; a replay (PRIMARY KEY conflict) → no-op 200.
-  const ins = await env.DB
-    .prepare("INSERT OR IGNORE INTO llamapay_webhook_events (event_id, event_type, order_id) VALUES (?1, ?2, ?3)")
-    .bind(event.id, event.type, event.data?.metadata?.orderId ?? null)
-    .run();
-  if ((ins.meta.changes ?? 0) === 0) return { kind: "replay", eventId: event.id };
+  // Replay short-circuit: a truly-processed event was recorded in llamapay_webhook_events at the END of
+  // a prior successful run → no-op 200. (We do NOT write the dedup row here — finding #4 moves it to the
+  // end so a mid-handler throw leaves the event retryable.)
+  const seen = await env.DB
+    .prepare("SELECT 1 FROM llamapay_webhook_events WHERE event_id=?1")
+    .bind(event.id)
+    .first<{ 1: number }>();
+  if (seen) return { kind: "replay", eventId: event.id };
 
-  // Only charge:pending (on chain) + charge:confirmed (finalized) mean paid. Anything else → ignore.
-  if (event.type !== "charge:pending" && event.type !== "charge:confirmed") return { kind: "ignored", reason: event.type };
+  // markProcessed records the dedup row; called ONLY on a terminal success so retries can re-drive a
+  // throw. INSERT OR IGNORE keeps it safe even under a concurrent duplicate.
+  const markProcessed = async () => {
+    await env.DB
+      .prepare("INSERT OR IGNORE INTO llamapay_webhook_events (event_id, event_type, order_id) VALUES (?1, ?2, ?3)")
+      .bind(event.id, event.type, event.data?.metadata?.orderId ?? null)
+      .run();
+  };
+
+  // Only charge:pending (on chain) + charge:confirmed (finalized) mean paid. Anything else → ignore (and
+  // mark processed so we don't reprocess a benign non-paying event forever).
+  if (event.type !== "charge:pending" && event.type !== "charge:confirmed") {
+    await markProcessed();
+    return { kind: "ignored", reason: event.type };
+  }
 
   const orderId = event.data?.metadata?.orderId;
-  if (!orderId) return { kind: "no_order" };
+  if (!orderId) {
+    await markProcessed();
+    return { kind: "no_order" };
+  }
 
   const row = await env.DB
     .prepare("SELECT id, status, author_kind, author_ref, public_summary, email_sealed, charge_hosted_url, order_id FROM featured_posts WHERE order_id=?1")
     .bind(orderId)
     .first<{ id: number; status: string; author_kind: string; author_ref: string | null; public_summary: string; email_sealed: string | null; charge_hosted_url: string | null; order_id: string }>();
-  if (!row) return { kind: "no_order" };
-  if (row.status === "live") return { kind: "live", orderId, alreadyLive: true }; // already featured (pending→confirmed, or a retry)
-  if (row.status === "blocked") return { kind: "ignored", reason: "blocked" };
+  if (!row) {
+    await markProcessed();
+    return { kind: "no_order" };
+  }
+  if (row.status === "live") {
+    await markProcessed();
+    return { kind: "live", orderId, alreadyLive: true }; // already featured (pending→confirmed, or a retry)
+  }
+  if (row.status === "blocked") {
+    await markProcessed();
+    return { kind: "ignored", reason: "blocked" };
+  }
+  if (row.status === "orphaned") {
+    await markProcessed();
+    return { kind: "orphaned", orderId }; // already recorded as paid-but-unfeatured
+  }
 
-  // Flip reserving→live (expires +24h). Conditional on still 'reserving' so concurrent events can't
-  // double-flip; the paymentRef records the LlamaPay payment id (the webhook has NO chain tx hash).
-  const paidAt = new Date().toISOString();
+  const nowIso = new Date().toISOString();
+  const paidAt = nowIso;
   const expiresAt = new Date(Date.now() + TTL_MS).toISOString();
   const paymentRef = `llamapay:${event.data.id}`;
+  const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
+  const reserveFloor = new Date(Date.now() - RESERVE_TTL_MS).toISOString();
+
+  // Flip to live. For a still-'reserving' row this is an unconditional-on-status flip. For an 'expired'
+  // (or otherwise-purged) row this is a RE-CLAIM (finding #3): only flip if the cap has room, counted
+  // atomically in the same UPDATE so it can't over-admit. The occupancy COUNT measures CURRENT live rows
+  // (expires_at > now) + warm reservations — NOT against the new +24h expiry. Guarded so a concurrent
+  // event can't double-flip.
   const flip = await env.DB
-    .prepare("UPDATE featured_posts SET status='live', expires_at=?2, paid_at=?3, payment_ref=?4 WHERE id=?1 AND status='reserving'")
-    .bind(row.id, expiresAt, paidAt, paymentRef)
+    .prepare(
+      `UPDATE featured_posts SET status='live', expires_at=?2, paid_at=?3, payment_ref=?4
+       WHERE id=?1
+         AND status IN ('reserving','expired')
+         AND (
+           status='reserving'
+           OR (
+             SELECT COUNT(*) FROM featured_posts
+             WHERE (status='live' AND expires_at > ?5)
+                OR (status='reserving' AND created_at > ?6)
+           ) < ?7
+         )`,
+    )
+    .bind(row.id, expiresAt, paidAt, paymentRef, nowIso, reserveFloor, cap)
     .run();
-  if ((flip.meta.changes ?? 0) !== 1) return { kind: "live", orderId, alreadyLive: true }; // lost the race → already live
+
+  if ((flip.meta.changes ?? 0) !== 1) {
+    // We did NOT feature it. Re-read to disambiguate: a concurrent event may have just made it live, OR
+    // the board is full so this paid event is orphaned. NEVER drop a paid event with no record.
+    const after = await env.DB.prepare("SELECT status FROM featured_posts WHERE id=?1").bind(row.id).first<{ status: string }>();
+    if (after?.status === "live") {
+      await markProcessed();
+      return { kind: "live", orderId, alreadyLive: true }; // lost the race → already live
+    }
+    // Board full → record the paid-but-unfeatured event (idempotent on order_id+payment_id) + alert +
+    // mark the row 'orphaned' so GET /status returns paidButUnfeatured.
+    await env.DB
+      .prepare(
+        "INSERT OR IGNORE INTO featured_orphaned_payments (order_id, llamapay_payment_id, email_sealed, amount, received_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+      )
+      .bind(orderId, event.data.id, row.email_sealed ?? null, "50.00", paidAt)
+      .run();
+    await env.DB
+      .prepare("UPDATE featured_posts SET status='orphaned', paid_at=?2, payment_ref=?3 WHERE id=?1 AND status IN ('expired','reserving')")
+      .bind(row.id, paidAt, paymentRef)
+      .run();
+    await alertOrphanedPayment(env, orderId, event.data.id);
+    await markProcessed(); // terminal decision recorded → safe to dedup
+    return { kind: "orphaned", orderId };
+  }
 
   // First (winning) flip only: accrue buyback once. (No 18+ wallet to attest — the human attested
   // over18:true at reserve; the slot is bound to the LlamaPay payment, not a wallet.)
   await accrueBuyback(db, env, orderId, 50).catch(() => {});
 
-  // Mint + email the TR-100 receipt (best-effort; never fails the 200).
+  // Mint + email the TR-100 receipt (best-effort; never fails the 200). Record the send outcome on the
+  // row (finding #7) so GET /status can report emailSent.
+  let emailed = false;
   if (row.email_sealed) {
     try {
-      const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
       const built = await buildReceiptForRow(
         env,
         { ...row, payment_ref: paymentRef, paid_at: paidAt, expires_at: expiresAt },
@@ -409,16 +524,24 @@ export async function handleLlamapayEvent(
         const subject = "Your Window slot is live — receipt (Ishtar)";
         if (deps?.sendEmail) await deps.sendEmail(email, subject, built.document);
         else await resendSend(env, { to: email, subject, html: built.document });
+        emailed = true;
       }
     } catch {
       /* receipt/email is best-effort — the slot is already live + the site shows the receipt via status */
     }
   }
+  await env.DB.prepare("UPDATE featured_posts SET emailed=?2 WHERE id=?1").bind(row.id, emailed ? 1 : 0).run().catch(() => {});
+
+  // Record the dedup row LAST (finding #4): if anything above threw, the event was never marked seen, so
+  // LlamaPay's retry re-drives it (no permanent drop). A genuine replay short-circuits at the top.
+  await markProcessed();
   return { kind: "live", orderId, alreadyLive: false };
 }
 
 export interface FeaturedStatus {
-  status: "reserving" | "live" | "expired" | "blocked" | "unknown";
+  status: "reserving" | "live" | "expired" | "orphaned" | "blocked" | "unknown";
+  paidButUnfeatured?: boolean; // true on 'orphaned' — paid but the board was full (refund/comp pending)
+  emailSent?: boolean; // whether the TR-100 receipt email actually sent (finding #7)
   receipt?: ReceiptInput;
   receiptHtml?: string;
 }
@@ -426,16 +549,20 @@ export interface FeaturedStatus {
 /** Read a poster's order status (the site polls this). Receipt present once the row is live. */
 export async function getFeaturedStatus(env: Env, orderId: string): Promise<FeaturedStatus> {
   const row = await env.DB
-    .prepare("SELECT id, status, author_kind, author_ref, public_summary, payment_ref, paid_at, expires_at, charge_hosted_url, order_id FROM featured_posts WHERE order_id=?1")
+    .prepare("SELECT id, status, author_kind, author_ref, public_summary, payment_ref, paid_at, expires_at, charge_hosted_url, order_id, emailed FROM featured_posts WHERE order_id=?1")
     .bind(orderId)
-    .first<{ id: number; status: string; author_kind: string; author_ref: string | null; public_summary: string; payment_ref: string | null; paid_at: string | null; expires_at: string | null; charge_hosted_url: string | null; order_id: string }>();
+    .first<{ id: number; status: string; author_kind: string; author_ref: string | null; public_summary: string; payment_ref: string | null; paid_at: string | null; expires_at: string | null; charge_hosted_url: string | null; order_id: string; emailed: number | null }>();
   if (!row) return { status: "unknown" };
-  const status = (["reserving", "live", "expired", "blocked"].includes(row.status) ? row.status : "unknown") as FeaturedStatus["status"];
-  if (status !== "live") return { status };
+  const status = (["reserving", "live", "expired", "orphaned", "blocked"].includes(row.status) ? row.status : "unknown") as FeaturedStatus["status"];
+  const emailSent = Number(row.emailed ?? 0) === 1;
+  // Orphaned = paid but unfeaturable (board full at webhook time) — surface paidButUnfeatured so the
+  // site can show "paid, slot pending refund/comp" instead of a misleading "expired". No public receipt.
+  if (status === "orphaned") return { status, paidButUnfeatured: true, emailSent };
+  if (status !== "live") return { status, emailSent };
   const db = makeDb(env.DB);
   const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
   const built = await buildReceiptForRow(env, row, cap);
-  return { status, receipt: built.receipt, receiptHtml: built.html };
+  return { status, emailSent, receipt: built.receipt, receiptHtml: built.html };
 }
 
 /* ─────────────────────────────── HUMAN path routes (PUBLIC — above the access gate) ───────────── */
@@ -443,22 +570,26 @@ export async function getFeaturedStatus(env: Env, orderId: string): Promise<Feat
 featuredRoutes.post("/featured/reserve", async (c) => {
   const parsed = reserveSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) {
-    return c.json({ error: "authorKind:'human', publicSummary, email, over18:true, and ref (8-100 char) required", details: parsed.error.flatten() }, 400);
+    return c.json({ ok: false, error: "authorKind:'human', publicSummary, email, and over18:true required", details: parsed.error.flatten() }, 400);
   }
   // The human path is dark (503) until the LlamaPay key is set — never a 403 (this is the OPEN board).
-  if (!c.env.LLAMAPAY_API_KEY) return c.json({ error: "human payments not configured", code: "llamapay_unconfigured" }, 503);
+  if (!c.env.LLAMAPAY_API_KEY) return c.json({ ok: false, code: "llamapay_unconfigured" }, 503);
 
   const db = makeDb(c.env.DB);
-  const r = await reserveHumanSlot(db, c.env, parsed.data);
+  // The server generates the authoritative order id inside reserveHumanSlot (no client `ref`); the
+  // cf-connecting-ip scopes the anti-squatting control + the per-poster chaperone callerRef.
+  const r = await reserveHumanSlot(db, c.env, parsed.data, c.req.header("cf-connecting-ip"));
   switch (r.kind) {
     case "full":
-      return c.json({ error: "the window is full — all featured slots are taken; try again later", capReached: true }, 409);
+      return c.json({ ok: false, error: "the window is full — all featured slots are taken; try again later", capReached: true }, 409);
     case "blocked":
       return c.json({ ok: false, blocked: true, reason: r.reason }, 422);
+    case "squatting":
+      // An outstanding unpaid reservation already held by this IP → 429 (finding #6). Pay or wait for it
+      // to expire, then reserve again.
+      return c.json({ ok: false, error: r.reason, squatting: true }, 429);
     case "charge_failed":
-      return c.json({ error: "could not start checkout", reason: r.reason }, 502);
-    case "already":
-      return c.json({ ok: true, orderId: r.orderId, status: r.status, note: "already reserved — poll status" });
+      return c.json({ ok: false, error: "could not start checkout", reason: r.reason }, 502);
     case "reserved":
       return c.json({ ok: true, orderId: r.orderId, checkoutUrl: r.checkoutUrl, expiresInMinutes: r.expiresInMinutes });
   }
