@@ -103,6 +103,9 @@ STREAM_DAILY_BUDGET_USD = "5"
 # Talk-to-Ishtar (paid chat). CHAT_MODEL = a general instruct model (NOT the gpt-oss reasoning
 # model used for gambits, which is poor for open chat). 25 messages per $1 USDC top-up.
 CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+# Intent/scope gate — a cheap small model classifies whether a chat message is about the user's love
+# life; off-topic gets a warning and never the 70B reply (stops the free quota being farmed as an LLM).
+TOPIC_MODEL = "@cf/meta/llama-3.2-3b-instruct"
 CHAT_CREDITS_PER_USD = "25"
 # Public-launch flip: "true" opens Talk-to-Ishtar to everyone on free quota (3/day base). Until set,
 # only the founder wallet (gokhan.eth) + CHAT_WHITELIST get a real reply; everyone else sees PRELAUNCH.

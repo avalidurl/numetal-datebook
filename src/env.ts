@@ -38,6 +38,7 @@ export interface Env {
   STREAM_DAILY_BUDGET_USD?: string;
   // Talk-to-Ishtar (paid chat). All optional → sensible defaults in code.
   CHAT_MODEL?: string; // overrides GAMBIT_MODEL for the conversational brain
+  TOPIC_MODEL?: string; // small fast model for the intent/scope gate (default @cf/meta/llama-3.2-3b-instruct)
   MODEL_POOL?: string; // P5: comma-separated VERIFIED-LIVE Workers AI ids; each persona courts with its own (empty → single CHAT_MODEL)
   CHAT_CREDITS_PER_USD?: string; // messages bought per $1 USDC top-up (default 25)
   CHAT_LAUNCHED?: string; // "true"/"1" opens Talk to everyone; unset = closed test (whitelist only)
