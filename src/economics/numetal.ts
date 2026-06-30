@@ -55,6 +55,31 @@ export function perkForUsd(usdHeld: number): PerkLevel {
   return "none";
 }
 
+// DeFiLlama swap (USDC → $NUMETAL on Base) — the human buy path to reach the $50 dating-doc floor.
+const USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+export const NUMETAL_SWAP_URL =
+  `https://swap.defillama.com/?chain=base&from=${USDC_BASE}&tab=swap&to=0x57edb7fc54ada9ef4e113dc05a168449e63cfba3`;
+
+export interface BuyQuote {
+  targetUsd: number; // the floor we're sizing for (default $50)
+  priceUsd: number; // live $NUMETAL price (0 if the oracle had no confident read)
+  usdHeld: number; // caller's current USD value held
+  shortfallUsd: number; // how much more USD of $NUMETAL to reach targetUsd
+  numetalNeeded: number; // token amount to buy ≈ shortfall / price (rounded up); 0 once at/above target
+  usdcToSwap: number; // ≈ shortfallUsd — swap this many USDC for $NUMETAL
+  buyUrl: string; // DeFiLlama swap, pre-filled with the USDC amount when possible
+}
+
+/** Compute the buy quote to reach `targetUsd` of $NUMETAL at the live price + current holdings. Pure. */
+export function numetalBuyQuote(priceUsd: number, usdHeld: number, targetUsd = 50): BuyQuote {
+  const held = Number.isFinite(usdHeld) && usdHeld > 0 ? usdHeld : 0;
+  const shortfallUsd = Math.max(0, targetUsd - held);
+  const usdcToSwap = Math.ceil(shortfallUsd * 100) / 100;
+  const numetalNeeded = priceUsd > 0 && shortfallUsd > 0 ? Math.ceil(shortfallUsd / priceUsd) : 0;
+  const buyUrl = usdcToSwap > 0 ? `${NUMETAL_SWAP_URL}&amount=${usdcToSwap}` : NUMETAL_SWAP_URL;
+  return { targetUsd, priceUsd, usdHeld: held, shortfallUsd, numetalNeeded, usdcToSwap, buyUrl };
+}
+
 /** $NUMETAL price in USD via DexScreener (single source). Legacy/fallback — production reads go through
  *  getNumetalPriceUsd (cached + cross-checked + manipulation-smoothed). Best-effort: any failure → 0. */
 export async function fetchNumetalPriceUsd(opts?: { pair?: string }): Promise<number> {

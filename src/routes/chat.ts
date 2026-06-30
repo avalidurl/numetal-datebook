@@ -17,7 +17,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db as makeDb, type DB } from "../db/client";
 import { chatMessages, chatTopups, events, heartFiles, ownerWallets, owners } from "../db/schema";
 import { seal } from "../crypto/box";
-import { getNumetalPriceUsd, readNumetalUsd } from "../economics/numetal";
+import { getNumetalPriceUsd, numetalBuyQuote, readNumetalUsd } from "../economics/numetal";
 import type { Env } from "../env";
 import {
   addCredits,
@@ -272,6 +272,17 @@ chatRoutes.get("/chat/balance", async (c) => {
   return c.json({ address, ...(await getBalance(db, c.env, address)) });
 });
 
+/* ---- 4b) buy-quote (PUBLIC) — how much $NUMETAL to buy to reach the floor, + a DeFiLlama swap link.
+ * Powers the "Buy $NUMETAL" button. Optional ?usdHeld= personalizes the shortfall (display only; the
+ * real gate reads on-chain in submit-doc). ------------------------------------------------------- */
+chatRoutes.get("/chat/buy-quote", async (c) => {
+  const db = makeDb(c.env.DB);
+  const target = Number(c.env.MIN_DOC_USD ?? "50") || 50;
+  const priceUsd = await getNumetalPriceUsd(db, c.env);
+  const held = Number(c.req.query("usdHeld"));
+  return c.json(numetalBuyQuote(priceUsd, Number.isFinite(held) ? held : 0, target));
+});
+
 /* ---- 5) feedback → discount (Phase 0 capture) — HUMANS ONLY ------------------------------- */
 // A rating or (high-signal) date debrief earns chat credits AND mints an episode. The discount
 // buys the proprietary "what actually landed" data the moat needs; awards are capped per day.
@@ -368,11 +379,13 @@ export async function submitDatingDoc(
   if (minUsd > 0) {
     const priceUsd = await getNumetalPriceUsd(db, env); // cached, cross-checked, one-sided-smoothed (anti pump-to-pass)
     const { usdHeld } = await readNumetalUsd(input.address, { rpcUrl: env.BASE_RPC_URL, contract: env.NUMETAL_CA, priceUsd });
-    if (usdHeld < minUsd)
+    if (usdHeld < minUsd) {
+      const buy = numetalBuyQuote(priceUsd, usdHeld, minUsd); // live amount of $NUMETAL to buy + the DeFiLlama swap link
       return {
         code: 402,
-        body: { error: `the floor is paid — hold at least $${minUsd} of $NUMETAL to create a dating doc`, usdHeld: Math.round(usdHeld * 100) / 100, required: minUsd },
+        body: { error: `the floor is paid — hold at least $${minUsd} of $NUMETAL to create a dating doc`, usdHeld: Math.round(usdHeld * 100) / 100, required: minUsd, buy },
       };
+    }
   }
 
   const heartStr = JSON.stringify(input.heart);

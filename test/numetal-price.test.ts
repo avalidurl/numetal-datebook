@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectPriceUsd, smoothPrice } from "../src/economics/numetal";
+import { NUMETAL_SWAP_URL, numetalBuyQuote, selectPriceUsd, smoothPrice } from "../src/economics/numetal";
 
 // The $NUMETAL/USD oracle that gates the paid human floor. Both aggregators read the same on-chain pool,
 // so the manipulation defense is NOT "more sources" — it's the liquidity floor + median + the one-sided
@@ -52,5 +52,36 @@ describe("$NUMETAL price oracle — one-sided smoothing (anti pump-to-pass)", ()
   it("CAPS a pump: a momentary 5x spike can only raise the stored price by maxUp", () => {
     // attacker pumps the pool 5x ($2 → $10) to clear the gate cheaply; the stored price rises ≤15%.
     expect(smoothPrice(2, 10, 0.15)).toBeCloseTo(2.3);
+  });
+});
+
+describe("$NUMETAL buy quote (the human BUY button)", () => {
+  it("computes the token amount + USDC to swap to reach the $50 floor from $0", () => {
+    const q = numetalBuyQuote(0.001, 0, 50);
+    expect(q.shortfallUsd).toBe(50);
+    expect(q.usdcToSwap).toBe(50);
+    expect(q.numetalNeeded).toBe(50000); // ceil(50 / 0.001)
+    expect(q.buyUrl).toContain("amount=50");
+    expect(q.buyUrl).toContain("0x57edb7fc54ada9ef4e113dc05a168449e63cfba3"); // → $NUMETAL
+    expect(q.buyUrl).toContain("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"); // from USDC
+  });
+
+  it("only quotes the SHORTFALL when the wallet already holds some", () => {
+    const q = numetalBuyQuote(0.001, 30, 50);
+    expect(q.shortfallUsd).toBe(20);
+    expect(q.numetalNeeded).toBe(20000);
+  });
+
+  it("returns zero-to-buy (no amount in the url) once at/above the floor", () => {
+    const q = numetalBuyQuote(0.001, 60, 50);
+    expect(q.shortfallUsd).toBe(0);
+    expect(q.numetalNeeded).toBe(0);
+    expect(q.buyUrl).toBe(NUMETAL_SWAP_URL);
+  });
+
+  it("no price (oracle dark) → still shows the USDC shortfall, 0 token estimate", () => {
+    const q = numetalBuyQuote(0, 0, 50);
+    expect(q.usdcToSwap).toBe(50);
+    expect(q.numetalNeeded).toBe(0);
   });
 });
