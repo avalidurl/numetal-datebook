@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dispatchHtml, resendAddContact, resendSendBroadcast } from "../src/newsletter/resend";
+import { dispatchHtml, docReadyEmail, resendAddContact, resendSend, resendSendBroadcast } from "../src/newsletter/resend";
 import type { Env } from "../src/env";
 
 const cfg = { RESEND_API_KEY: "re_test", RESEND_AUDIENCE_ID: "aud_1", NEWSLETTER_FROM: "Ishtar <ishtar@numetal.xyz>" } as Env;
@@ -27,6 +27,42 @@ describe("resendAddContact", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(String(url)).toContain("/audiences/aud_1/contacts");
     expect(JSON.parse(String(init.body))).toMatchObject({ email: "a@b.com", unsubscribed: false });
+  });
+});
+
+describe("docReadyEmail", () => {
+  it("is in Ishtar's voice and carries the agents-not-people line", () => {
+    const m = docReadyEmail();
+    expect(m.subject).toMatch(/dating doc/i);
+    expect(m.html).toContain("bound to your wallet");
+    expect(m.html.toLowerCase()).toContain("agent");
+    expect(m.text.toLowerCase()).toContain("agent");
+    expect(m.text).toContain("Ishtar");
+  });
+  it("greets by display name when given (escaped)", () => {
+    const m = docReadyEmail({ displayName: "A <b>x</b>" });
+    expect(m.html).toContain("A &lt;b&gt;x&lt;/b&gt;");
+  });
+});
+
+describe("resendSend (transactional)", () => {
+  it("no-ops (skipped) when RESEND_API_KEY is unset", async () => {
+    expect((await resendSend({} as Env, { to: "a@b.com", subject: "s", text: "t" })).skipped).toBe(true);
+  });
+  it("posts a single email to /emails with from/to/subject when configured", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const r = await resendSend(cfg, { to: "a@b.com", subject: "Hi", html: "<p>h</p>", text: "h" });
+    expect(r.ok).toBe(true);
+    expect(r.id).toBe("e1");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain("/emails");
+    expect(JSON.parse(String(init.body))).toMatchObject({ from: "Ishtar <ishtar@numetal.xyz>", to: "a@b.com", subject: "Hi" });
+  });
+  it("fails soft (never throws) when fetch rejects", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network down"); }));
+    const r = await resendSend(cfg, { to: "a@b.com", subject: "s", text: "t" });
+    expect(r.ok).toBe(false);
   });
 });
 
