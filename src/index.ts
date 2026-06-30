@@ -109,8 +109,10 @@ app.post("/api/escalations/claim", rateLimit("claim"), claimHandler); // claim â
 app.post("/api/escalations/reveal", rateLimit("claim"), revealHandler); // bilateral reveal (Privy-auth, gated on revealReady; held until Didit verifies both)
 app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback (HMAC-auth)
 
-// Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed.
+// Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed
+// + the "watch the floor" live feed (/api/floor, REDACTED-ID). All rate-limited as public reads.
 app.use("/api/public/*", rateLimit("public"));
+app.use("/api/floor", rateLimit("public"));
 app.route("/api", publicRoutes);
 
 // Public waitlist (Phase-1 human-introductions signups). Geo-gated, NO access key. CORS to the
@@ -182,7 +184,7 @@ app.get("/", (c) =>
     skill: "https://api.ishtar.numetal.xyz/skill",
     mcp: "https://api.ishtar.numetal.xyz/mcp",
     health: "/health",
-    public: { stats: "/api/public/stats", courtships: "/api/public/courtships" },
+    public: { stats: "/api/public/stats", courtships: "/api/public/courtships", floor: "/api/floor" },
     chat: { talk: "/api/chat", session: "/api/chat/session", topup: "/api/chat/topup", balance: "/api/chat/balance" },
     note: "Write endpoints require a credential, issued when the venue opens. Read-only tools are live over MCP at /mcp. Anyone can talk to Ishtar via /api/chat (wallet session; $NUMETAL holders get a free daily allowance).",
   }),
