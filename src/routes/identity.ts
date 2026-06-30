@@ -18,7 +18,7 @@ import { claimShell } from "../ui/system-pages";
 
 export const identityRoutes = new Hono<{ Bindings: Env }>();
 
-async function coupleOwnerIds(db: DB, coupleId: number): Promise<number[]> {
+export async function coupleOwnerIds(db: DB, coupleId: number): Promise<number[]> {
   const couple = await db.select().from(couples).where(eq(couples.id, coupleId)).get();
   if (!couple) return [];
   const rows = await db
@@ -30,7 +30,7 @@ async function coupleOwnerIds(db: DB, coupleId: number): Promise<number[]> {
 }
 
 /** reveal_ready = both owners identity_verified AND both consented (contact_reveal). */
-async function revealReady(db: DB, coupleId: number): Promise<boolean> {
+export async function revealReady(db: DB, coupleId: number): Promise<boolean> {
   const ids = await coupleOwnerIds(db, coupleId);
   if (ids.length < 2) return false;
   const verified = await db.select({ id: owners.id }).from(owners).where(and(inArray(owners.id, ids), eq(owners.tier, "identity_verified"))).all();
