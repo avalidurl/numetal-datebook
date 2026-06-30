@@ -169,6 +169,7 @@ app.use("/api/chat/balance", rateLimit("intake"));
 app.use("/api/chat/feedback", rateLimit("intake")); // feedback→credit faucet must be throttled (audit)
 app.use("/api/chat/admin/grant", rateLimit("payment")); // founder grant (ACCESS_KEY) — throttle so a leaked key can't be looped
 app.use("/api/chat/submit-doc", rateLimit("intake")); // human floor: dating-doc creation — throttle persona/owner writes
+app.use("/api/chat/buy-quote", rateLimit("public")); // public $NUMETAL buy-quote (cached price read)
 app.use("/api/chat", rateLimit("intake"));
 app.route("/api", chatRoutes);
 
