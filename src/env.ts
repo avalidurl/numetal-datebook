@@ -58,6 +58,11 @@ export interface Env {
   PUBLIC_SITE_URL?: string; // public site origin for human-facing links (matches page). Default https://ishtar.numetal.xyz
   NOTIFY_TOKEN_SECRET?: string; // optional override for the match-token HMAC key; falls back to ENCRYPTION_KEY
   ENCRYPTION_KEY?: string; // base64 of 32 bytes (AES-256); at-rest encryption is dark until set
+  // XMTP outbound (match-alert wallet↔wallet DM). Both optional → the xmtp notify channel is a safe
+  // no-op (canSend=false everywhere) until set; notify still falls back to email. The signer SEED is
+  // NOT here — it lives only in the listener process (src/xmtp/README.md); this Worker only POSTs to it.
+  XMTP_OUTBOUND_URL?: string; // the listener's send endpoint, e.g. https://xmtp-listener.internal/send
+  XMTP_OUTBOUND_TOKEN?: string; // optional bearer the listener requires (Authorization: Bearer …)
   // Newsletter (Resend). All optional → the newsletter is dark (no-op) until set.
   RESEND_API_KEY?: string; // re_… secret; sends from the verified numetal.xyz domain
   RESEND_AUDIENCE_ID?: string; // the Resend audience newsletter subscribers are added to

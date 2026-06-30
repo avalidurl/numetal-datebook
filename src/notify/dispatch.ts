@@ -20,6 +20,7 @@
 import type { Env } from "../env";
 import { open } from "../crypto/box";
 import { resendSend } from "../newsletter/resend";
+import { isXmtpAddress, sendXmtpDM, xmtpConfigured } from "../xmtp/outbound";
 
 /** The owner being notified. `contactRef` is the SEALED contact pointer (may be an "email:" / raw email). */
 export interface NotifyOwner {
@@ -27,6 +28,7 @@ export interface NotifyOwner {
   displayName?: string | null;
   contactRef?: string | null; // sealed (enc:v1:…) or legacy plaintext; opened by the email adapter
   alertChannels?: string | null; // CSV of enabled channel names; null/empty → ['email']
+  wallet?: string | null; // XMTP-reachable EVM wallet (0x…) resolved by the dispatcher; null = email-only owner
 }
 
 /** The message a channel delivers. `url` is the "come look" link (the matches page magic-link). */
@@ -70,13 +72,39 @@ const emailChannel: NotifyChannel = {
   },
 };
 
+/* --------------------------------------------------------------------- xmtp (wallet↔wallet match alert)
+ *
+ * Delivers the "come look" alert as an XMTP DM to the owner's wallet, via the listener's outbound path
+ * (src/xmtp/outbound.ts → POST to the listener that holds the signer; see src/xmtp/README.md). We do NOT
+ * spin up a second XMTP client in the Worker — the signer seed lives only in the listener by design.
+ *
+ *   canSend = (a) the owner has an XMTP-reachable wallet (resolved by the dispatcher into owner.wallet),
+ *             AND (b) XMTP outbound is configured (XMTP_OUTBOUND_URL present).
+ *   send    = POST {to: wallet, text} to the listener; the body is msg.text + the match magic-link (url).
+ *
+ * Both gates false-safe: an email-only featured-human owner has no wallet → canSend false → notify falls
+ * back to email. If XMTP is unconfigured, canSend is false for EVERYONE (no behavior change, no crash).
+ */
+const xmtpChannel: NotifyChannel = {
+  name: "xmtp",
+  canSend(env, owner) {
+    return xmtpConfigured(env) && isXmtpAddress(owner.wallet ?? null);
+  },
+  async send(env, owner, msg) {
+    const to = (owner.wallet ?? "").trim();
+    if (!isXmtpAddress(to)) return { ok: false, reason: "no xmtp-reachable wallet" };
+    // The DM body: the come-look line + the match magic-link. Plain text — XMTP DMs are text.
+    const body = msg.url && !msg.text.includes(msg.url) ? `${msg.text}\n${msg.url}` : msg.text;
+    return sendXmtpDM(env, to, body);
+  },
+};
+
 /* --------------------------------------------------------------------- STUB channels (fill these later)
  * Each stub is a no-op that returns {ok:false, reason:'not-implemented'} and reports canSend=false, so
  * the dispatcher never selects it (and never records a phantom send). A future branch implements the
- * adapter for its medium and flips canSend to a real check. The XMTP adapter, when built, will relay
- * via the existing XMTP brain/listener (see src/xmtp/README.md) — POST {conversationId, text} to the
- * brain Worker and let the listener (which holds the signer) deliver. Telegram/iMessage/WhatsApp/Signal
- * follow the same shape: resolve the owner's handle for that medium, then call the medium's send API.
+ * adapter for its medium and flips canSend to a real check (see the xmtp channel above for the pattern).
+ * Telegram/iMessage/WhatsApp/Signal follow the same shape: resolve the owner's handle for that medium,
+ * then call the medium's send API.
  */
 function makeStub(name: string): NotifyChannel {
   return {
@@ -92,7 +120,6 @@ function makeStub(name: string): NotifyChannel {
   };
 }
 
-const xmtpChannel = makeStub("xmtp");
 const telegramChannel = makeStub("telegram");
 const imessageChannel = makeStub("imessage");
 const whatsappChannel = makeStub("whatsapp");
@@ -239,6 +266,33 @@ export function matchAlertEmail(url: string): { subject: string; text: string; h
   return { subject, text, html };
 }
 
+/* --------------------------------------------------------------------- owner-wallet resolution
+ *
+ * The XMTP channel needs the owner's XMTP-reachable wallet. We resolve it in order:
+ *   (1) owners.wallet — the denormalized pointer (set on the wallet-bound chat-doc / agent path).
+ *   (2) owner_wallets — the canonical store: the most-recent ACTIVE EVM wallet (chain_family='evm').
+ * Returns a 0x… address or null. Email-only featured-human owners have neither → null → xmtp canSend
+ * is false → notify falls back to email. NEVER throws (a resolution failure must not break notify).
+ */
+export async function resolveOwnerWallet(
+  d1: D1Database,
+  ownerId: number,
+  ownerWallet: string | null | undefined,
+): Promise<string | null> {
+  if (isXmtpAddress(ownerWallet ?? null)) return (ownerWallet as string).trim();
+  try {
+    const row = (await d1
+      .prepare(
+        "SELECT address FROM owner_wallets WHERE owner_id = ?1 AND chain_family = 'evm' AND status = 'active' ORDER BY id DESC LIMIT 1",
+      )
+      .bind(ownerId)
+      .first()) as { address: string | null } | null;
+    return isXmtpAddress(row?.address ?? null) ? (row!.address as string).trim() : null;
+  } catch {
+    return null; // owner_wallets absent or query failed → no XMTP wallet (email fallback)
+  }
+}
+
 /* --------------------------------------------------------------------- the dispatcher */
 
 /**
@@ -262,10 +316,10 @@ export async function notifyOwner(
   const out = { attempted: [] as string[], sent: [] as string[], skipped: [] as string[] };
   try {
     const owner = (await d1
-      .prepare("SELECT id, display_name, contact_ref, alert_channels FROM owners WHERE id = ?1")
+      .prepare("SELECT id, display_name, contact_ref, alert_channels, wallet FROM owners WHERE id = ?1")
       .bind(ownerId)
       .first()) as
-      | { id: number; display_name: string | null; contact_ref: string | null; alert_channels: string | null }
+      | { id: number; display_name: string | null; contact_ref: string | null; alert_channels: string | null; wallet: string | null }
       | null;
     if (!owner) return out;
     const o: NotifyOwner = {
@@ -273,15 +327,18 @@ export async function notifyOwner(
       displayName: owner.display_name,
       contactRef: owner.contact_ref,
       alertChannels: owner.alert_channels,
+      wallet: await resolveOwnerWallet(d1, owner.id, owner.wallet),
     };
 
     const ref = String(payload.coupleId ?? "");
     const url = payload.matchesUrl ?? (await matchesUrl(env, ownerId));
     const msg: NotifyMessage = kind === "match" ? { ...matchAlertEmail(url), url } : { subject: "Ishtar", text: url, url };
 
-    for (const name of enabledChannels(o)) {
+    // Attempt one channel: claim its idempotency row, check readiness, send, record the outcome.
+    // Returns 'sent' | 'skipped' | 'replayed' (claim lost). Pushes into `out`. Never throws.
+    const dispatchTo = async (name: string): Promise<"sent" | "skipped" | "replayed"> => {
       const channel = getChannel(name);
-      if (!channel) continue; // unknown channel name in the CSV → ignore
+      if (!channel) return "skipped"; // unknown channel name → ignore (not counted as attempted)
       out.attempted.push(name);
 
       // Idempotency claim FIRST: one row per (owner, kind, ref, channel). A second beat loses the claim.
@@ -293,7 +350,7 @@ export async function notifyOwner(
         .run();
       if (!claim.meta?.changes) {
         out.skipped.push(name); // already handled (replay) → never double-send
-        continue;
+        return "replayed";
       }
 
       // Won the claim. Check readiness, then send. Record the real outcome on the claimed row.
@@ -319,8 +376,25 @@ export async function notifyOwner(
         .bind(status, reason, ownerId, kind, ref, name)
         .run()
         .catch(() => {});
-      if (status === "sent") out.sent.push(name);
-      else out.skipped.push(name);
+      if (status === "sent") {
+        out.sent.push(name);
+        return "sent";
+      }
+      out.skipped.push(name);
+      return "skipped";
+    };
+
+    const enabled = enabledChannels(o);
+    let anySent = false;
+    for (const name of enabled) {
+      if ((await dispatchTo(name)) === "sent") anySent = true;
+    }
+
+    // Email is the guaranteed fallback: if the owner's preferred channels did not include email and none
+    // of them actually delivered (e.g. only 'xmtp' was enabled but the owner has no wallet / XMTP is off),
+    // fall back to email so the alert still reaches them. Its own claim row keeps this idempotent on replay.
+    if (!anySent && !enabled.includes("email")) {
+      await dispatchTo("email");
     }
   } catch {
     /* notify is best-effort: never break the caller (matching) over a notify error */
