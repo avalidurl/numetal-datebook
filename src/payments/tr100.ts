@@ -130,16 +130,16 @@ export function renderTR100(i: ReceiptInput): string {
       return `│ ${lab}${cell}${" ".repeat(padCount)} │`;
     })
     .join("\n");
-  const footer = pad(ATTRIBUTION.length > W - 2 ? ATTRIBUTION.slice(0, W - 3) + "…" : ATTRIBUTION);
 
+  // The U.S. Graphics attribution is NOT printed inside the box (it only ever fit truncated, e.g.
+  // "…U.S. Graphic…", and duplicated the footnote below). It appears EXACTLY ONCE — as the readable
+  // footnote line below the box (see the trailing <div>). The box closes straight after the body rows.
   const ascii = [
     top,
     `│${title}│`,
     `│${sub}│`,
     mid,
     bodyRows,
-    mid,
-    `│${footer}│`,
     bot,
   ].join("\n");
 

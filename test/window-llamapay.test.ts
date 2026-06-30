@@ -446,6 +446,35 @@ describe("The Window — LlamaPay human path", () => {
       expect(html).toContain("BSD-3-Clause");
     });
 
+    // The attribution must appear EXACTLY ONCE — as the footnote BELOW the box, never duplicated as an
+    // in-box (truncated) row. U.S. Graphics stays credited.
+    it("credits U.S. Graphics EXACTLY ONCE — as the footnote below the box (not duplicated in-box)", () => {
+      const html = renderTR100({ ...base, authorKind: "human", llamapayHostedUrl: "https://checkout.llamapay.io/pay/abc" });
+      const ATTRIBUTION = "Receipt layout after the TR-100 Machine Report · U.S. Graphics Co. · BSD-3-Clause © 2024";
+      // the full attribution string appears once in the rendered HTML
+      const occurrences = html.split(ATTRIBUTION).length - 1;
+      expect(occurrences).toBe(1);
+      // and that one occurrence is the footnote BELOW the box (after the </pre> that holds the ascii box)
+      const afterPre = html.slice(html.indexOf("</pre>"));
+      expect(afterPre).toContain(ATTRIBUTION);
+      // the box itself (inside <pre>) no longer carries the attribution row
+      const pre = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/)?.[1] ?? "";
+      expect(pre).not.toContain("U.S. Graphic"); // neither the full nor the truncated "…U.S. Graphic…"
+      // U.S. Graphics is still credited somewhere in the receipt
+      expect(html).toContain("U.S. Graphics Co.");
+    });
+
+    // After removing the in-box attribution row, the box must still render with aligned borders.
+    it("box borders stay aligned after the in-box attribution row is removed", () => {
+      const html = renderTR100({ ...base, authorKind: "human", llamapayHostedUrl: "https://checkout.llamapay.io/pay/abc" });
+      const pre = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/)?.[1] ?? "";
+      const lines = pre.replace(/<[^>]+>/g, "").split("\n").filter((l) => l.startsWith("│") || l.startsWith("┌") || l.startsWith("├") || l.startsWith("└"));
+      const widths = new Set(lines.map((l) => [...l].length));
+      expect(widths.size).toBe(1); // every box line (borders + body) is the same visible width
+      // the box closes with a bottom rule directly after the last body row (no trailing footer rule)
+      expect(pre.trimEnd().endsWith("┘")).toBe(true);
+    });
+
     it("HUMAN path shows the hosted payment URL (NOT the internal id) and NO basescan link", () => {
       const html = renderTR100({ ...base, authorKind: "human", llamapayHostedUrl: "https://checkout.llamapay.io/pay/h1" });
       expect(html).toContain("https://checkout.llamapay.io/pay/h1");
