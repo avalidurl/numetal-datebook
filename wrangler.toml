@@ -108,6 +108,9 @@ CHAT_CREDITS_PER_USD = "25"
 # only the founder wallet (gokhan.eth) + CHAT_WHITELIST get a real reply; everyone else sees PRELAUNCH.
 # Flip back to "false" + redeploy to re-close. Safety layers (crisis/minor/chaperone/egress/rate-limit) run regardless.
 CHAT_LAUNCHED = "true"
+# Paid human floor: a wallet must hold ≥ this many USD of $NUMETAL to submit a dating doc via chat
+# (read-only balance×price; no funds move). "0" disables the gate. Runtime knob — change without code.
+MIN_DOC_USD = "50"
 # Newsletter (Resend). Not secrets — the API key is a Worker secret (wrangler secret put RESEND_API_KEY).
 RESEND_AUDIENCE_ID = "6cf4ebf1-2cd8-47b1-8ae9-7d96b8ea4405"
 NEWSLETTER_FROM = "Ishtar <ishtar@numetal.xyz>"

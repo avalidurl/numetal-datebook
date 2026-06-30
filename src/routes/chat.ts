@@ -7,14 +7,16 @@
 import { Hono } from "hono";
 import { verifyMessage } from "viem";
 import { z } from "zod";
-import { chaperone } from "../chaperone";
+import { chaperone, type GuardFn } from "../chaperone";
 import { egressFilter } from "../xmtp/egress";
 import { ishtarReply, looksLikeSystemLeak, ISHTAR_PROMPT_ANCHORS, type ChatMode } from "../chat/ishtar";
 import { crisisResponse, detectCrisis, recordCrisisEvent } from "../safety/crisis";
 import { MINOR_REDIRECT, detectMinor, recordMinorEvent } from "../safety/age";
-import { db as makeDb } from "../db/client";
-import { chatMessages, chatTopups } from "../db/schema";
+import { and, desc, eq } from "drizzle-orm";
+import { db as makeDb, type DB } from "../db/client";
+import { chatMessages, chatTopups, heartFiles, ownerWallets, owners } from "../db/schema";
 import { seal } from "../crypto/box";
+import { readNumetalUsd } from "../economics/numetal";
 import type { Env } from "../env";
 import {
   addCredits,
@@ -306,6 +308,128 @@ chatRoutes.post("/chat/feedback", async (c) => {
 
   const { awarded } = await recordFeedback(db, c.env, { subject: address, kind, rating, body });
   return c.json({ ok: true, kind, creditsAwarded: awarded, ...(await getBalance(db, c.env, address)) });
+});
+
+/* ---- 5b) chat→floor bridge: "build your dating agent by talking to Ishtar" ----------------
+ * A signed-in human (bearer session = wallet-bound + 18+ attested) submits the dating doc Ishtar
+ * helped them draft. The human floor is PAID: the wallet must hold ≥ MIN_DOC_USD of $NUMETAL — a
+ * READ-ONLY balance×price check (no funds move; same oracle the free-quota perk already uses). The
+ * doc is chaperoned, sealed at rest, and bound to the wallet (owner_wallets). It is HELD pending
+ * adult verification (Didit) — no persona is admitted to the floor and nothing reveals until the
+ * founder funds + activates it, so a fresh submission is a soft-launch "ready in ~a day" hold.
+ * IMPORTANT: this courts people's AGENTS, never people directly — surfaced to the human up front. */
+const MAX_DOC_CHARS = 8000;
+const HUMAN_FLOOR_NETWORK = "eip155:8453"; // Base mainnet — the wallet the human signed in with
+const submitDocSchema = z.object({
+  heart: z.record(z.unknown()), // the dating doc (matcher reads the optional structured `prefs` block)
+  displayName: z.string().max(120).optional(),
+  contactRef: z.string().max(200).optional(),
+  email: z.string().email().max(200).optional(),
+});
+
+export interface SubmitDocInput {
+  address: string;
+  heart: Record<string, unknown>;
+  displayName?: string;
+  contactRef?: string;
+  email?: string;
+}
+
+/**
+ * Core of the chat→floor bridge — testable (guard injectable like admitWithCap). Returns an HTTP
+ * {code, body}. Gates in order: 18+ attestation → paid $NUMETAL floor (read-only) → size → chaperone
+ * (admission, fail-closed) → create/bind a HELD, wallet-bound owner + sealed heart revision.
+ */
+export async function submitDatingDoc(
+  db: DB,
+  env: Env,
+  input: SubmitDocInput,
+  deps?: { guard?: GuardFn },
+): Promise<{ code: number; body: Record<string, unknown> }> {
+  if (!(await isAdultAttested(db, input.address)))
+    return { code: 403, body: { error: "confirm you are 18 or older — start a new session", reattest: true } };
+
+  // PAID human floor: hold ≥ MIN_DOC_USD of $NUMETAL. Read-only balance×price (no funds move); a failed
+  // read → 0 → gated. "0" disables (e.g. tests). Same oracle the free-quota perk already trusts.
+  const minUsd = Number(env.MIN_DOC_USD ?? "50");
+  if (minUsd > 0) {
+    const { usdHeld } = await readNumetalUsd(input.address, { rpcUrl: env.BASE_RPC_URL, contract: env.NUMETAL_CA });
+    if (usdHeld < minUsd)
+      return {
+        code: 402,
+        body: { error: `the floor is paid — hold at least $${minUsd} of $NUMETAL to create a dating doc`, usdHeld: Math.round(usdHeld * 100) / 100, required: minUsd },
+      };
+  }
+
+  const heartStr = JSON.stringify(input.heart);
+  if (heartStr.length < 20) return { code: 400, body: { error: "your dating doc is too thin — tell Ishtar more about who you are and who you seek" } };
+  if (heartStr.length > MAX_DOC_CHARS) return { code: 413, body: { error: `doc too large (max ${MAX_DOC_CHARS} chars)` } };
+
+  // Chaperone the doc (admission stage, fail-closed) BEFORE it is stored or bound to anyone.
+  const v = await chaperone(db, env, { stage: "admission", targetType: "heart_file", targetId: 0, text: heartStr, callerRef: `chatdoc:${input.address}` }, deps);
+  if (v.verdict !== "allow" && v.verdict !== "sanitize")
+    return { code: 422, body: { error: "your dating doc was held by the chaperone", reason: v.reason } };
+
+  // One doc per wallet (idempotent): an existing wallet adds a heart revision instead of a duplicate.
+  const bound = await db
+    .select({ ownerId: ownerWallets.ownerId })
+    .from(ownerWallets)
+    .where(and(eq(ownerWallets.network, HUMAN_FLOOR_NETWORK), eq(ownerWallets.address, input.address)))
+    .get();
+
+  let ownerId: number;
+  let revision = 1;
+  const sealedContact = await seal(env, input.contactRef ?? input.email); // email/contact sealed at rest for the soft-launch notify
+  if (bound?.ownerId) {
+    ownerId = bound.ownerId;
+    const last = await db.select({ revision: heartFiles.revision }).from(heartFiles).where(eq(heartFiles.ownerId, ownerId)).orderBy(desc(heartFiles.revision)).get();
+    revision = (last?.revision ?? 0) + 1;
+    if (sealedContact) await db.update(owners).set({ contactRef: sealedContact }).where(eq(owners.id, ownerId)).run();
+  } else {
+    const owner = await db
+      .insert(owners)
+      .values({
+        displayName: input.displayName,
+        contactRef: sealedContact,
+        tier: "profile_claimed", // wallet-claimed; identity_verified comes after Didit
+        ageAttested: 1, // bound 18+ from the signed-in chat session
+        status: "pending", // HELD until adult-verification is funded + run
+        homeMarket: "other",
+        activeMarket: "remote",
+        researchOptin: "none",
+      })
+      .returning({ id: owners.id })
+      .get();
+    ownerId = owner.id;
+    await db.insert(ownerWallets).values({ ownerId, provider: "external", chainFamily: "evm", network: HUMAN_FLOOR_NETWORK, address: input.address }).onConflictDoNothing().run();
+  }
+
+  const hf = await db.insert(heartFiles).values({ ownerId, revision, bodyJson: (await seal(env, heartStr)) ?? "", status: "submitted" }).returning({ id: heartFiles.id }).get();
+
+  return {
+    code: 200,
+    body: {
+      ok: true,
+      ownerId,
+      heartFileId: hf.id,
+      revision,
+      status: "pending_verification",
+      message:
+        "Your dating doc is in and bound to your wallet. Your agent joins the courtship floor once we verify you're an adult — we'll write within about a day. Remember: here your agent flirts with other people's agents, never people directly.",
+    },
+  };
+}
+
+chatRoutes.post("/chat/submit-doc", async (c) => {
+  const token = bearer(c.req.header("authorization"));
+  if (!token) return c.json({ error: "missing bearer session — sign in to Talk first" }, 401);
+  const db = makeDb(c.env.DB);
+  const address = await resolveSession(db, token);
+  if (!address) return c.json({ error: "invalid or expired session" }, 401);
+  const parsed = submitDocSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "invalid dating doc", issues: parsed.error.issues }, 400);
+  const r = await submitDatingDoc(db, c.env, { address, ...parsed.data });
+  return c.json(r.body, r.code as 200 | 400 | 402 | 403 | 413 | 422);
 });
 
 /* ---- 6) founder grant (ACCESS_KEY) — issue a session + credits for testing/comps ---------- */

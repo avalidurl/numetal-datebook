@@ -42,6 +42,7 @@ export interface Env {
   CHAT_CREDITS_PER_USD?: string; // messages bought per $1 USDC top-up (default 25)
   CHAT_LAUNCHED?: string; // "true"/"1" opens Talk to everyone; unset = closed test (whitelist only)
   CHAT_WHITELIST?: string; // comma-separated wallets allowed during the closed test (redacted)
+  MIN_DOC_USD?: string; // paid human floor: min USD of $NUMETAL a wallet must hold to submit a dating doc (default 50; "0" disables)
   BASE_RPC_URL?: string; // override the public Base RPC used for the $NUMETAL perk read
   NUMETAL_CA?: string; // override the $NUMETAL contract address
   // Cloudflare Access (operator email gate) — vars, not secrets.
