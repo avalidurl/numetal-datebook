@@ -88,7 +88,7 @@ export function x402Challenge(opts: { sku: Sku; network: string; payTo: string; 
         resource: opts.sku.route,
         description: `Ishtar ${opts.sku.id}`,
         payTo: opts.payTo,
-        asset: USDC_BASE_SEPOLIA,
+        asset: opts.network === MAINNET_NETWORK ? USDC_BASE_MAINNET : USDC_BASE_SEPOLIA,
         mimeType: "application/json",
         outputSchema: { orderId: opts.orderId },
       },
@@ -100,24 +100,67 @@ export function x402Challenge(opts: { sku: Sku; network: string; payTo: string; 
   });
 }
 
-/** Real facilitator-backed provider. verify()=verify+settle through the facilitator. */
+// ── CDP (mainnet) auth: a per-request EdDSA Bearer JWT ─────────────────────────────────────────────
+const jwtEnc = new TextEncoder();
+const b64url = (b: Uint8Array): string => btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const fromB64 = (s: string): Uint8Array => Uint8Array.from(atob(s.trim()), (c) => c.charCodeAt(0));
+
+/**
+ * Mint a Coinbase CDP Bearer JWT (EdDSA / Ed25519) bound to ONE request (method+host+path), valid ~2 min.
+ * A CDP "Secret API Key" is base64 of a 64-byte Ed25519 key ([32-byte seed][32-byte public]); we wrap the
+ * seed in the fixed Ed25519 PKCS8 prefix and sign with Web Crypto (no Node deps; runs in the Worker).
+ */
+export async function cdpBearer(keyId: string, secretB64: string, method: string, host: string, path: string): Promise<string> {
+  const raw = fromB64(secretB64);
+  const seed = raw.length >= 32 ? raw.slice(0, 32) : raw; // Ed25519 private seed = first 32 bytes
+  const pkcs8 = new Uint8Array([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20, ...seed]);
+  const key = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "EdDSA", typ: "JWT", kid: keyId, nonce: b64url(crypto.getRandomValues(new Uint8Array(16))) };
+  const payload = { sub: keyId, iss: "cdp", aud: ["cdp_service"], nbf: now, exp: now + 120, uris: [`${method} ${host}${path}`] };
+  const signingInput = `${b64url(jwtEnc.encode(JSON.stringify(header)))}.${b64url(jwtEnc.encode(JSON.stringify(payload)))}`;
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, key, jwtEnc.encode(signingInput)));
+  return `${signingInput}.${b64url(sig)}`;
+}
+
+/** Decode an X-PAYMENT header (base64-JSON or raw-JSON) to the full payment payload object. */
+function decodePayment(header: string): Record<string, unknown> | null {
+  for (const dec of [() => atob(header), () => header]) {
+    try {
+      return JSON.parse(dec()) as Record<string, unknown>;
+    } catch {
+      /* try the next form */
+    }
+  }
+  return null;
+}
+
+interface ModeCfg {
+  network: string;
+  facilitator: string;
+  asset: string;
+  mainnet: boolean;
+}
+function modeCfg(env: Env): ModeCfg {
+  if (env.X402_MODE === "mainnet")
+    return { network: MAINNET_NETWORK, facilitator: CDP_FACILITATOR, asset: USDC_BASE_MAINNET, mainnet: true };
+  return { network: STAGING_NETWORK, facilitator: STAGING_FACILITATOR, asset: USDC_BASE_SEPOLIA, mainnet: false };
+}
+
+/**
+ * Facilitator-backed provider. Staging = Base-Sepolia via the keyless x402.org facilitator (/verify only —
+ * testnet, no real money moves). Mainnet = Base via the CDP facilitator, JWT-authed, verify→SETTLE (real
+ * USDC moves on settle). Either way verify() FAIL-CLOSED and the signed TERMS (amount/recipient/network) are
+ * checked independently of the facilitator's word (red-team C3/C4/H8).
+ */
 export function makeX402Provider(env: Env): PaymentProvider {
-  const facilitator = STAGING_FACILITATOR;
+  const cfg = modeCfg(env);
   return {
-    network: STAGING_NETWORK,
-    facilitator,
+    network: cfg.network,
+    facilitator: cfg.facilitator,
     async verify(paymentHeader: string, sku: Sku, payTo: string): Promise<VerifiedPayment> {
       try {
-        const res = await fetch(`${facilitator}/verify`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ payment: paymentHeader, network: STAGING_NETWORK, payTo, resource: sku.route }),
-        });
-        if (!res.ok) return { verified: false, raw: `facilitator ${res.status}` };
-        const j = (await res.json()) as VerifiedPayment & { isValid?: boolean };
-        if (!(j.verified ?? j.isValid ?? false)) return { verified: false, raw: j.raw ?? "facilitator rejected" };
-        // Facilitator confirmed the SIGNATURE — now confirm the signed TERMS (C3/C4/H8). Never trust
-        // the facilitator's word on amount/recipient; read them from the signed authorization.
+        // Independent term check FIRST — never trust the facilitator on amount/recipient/network.
         const terms = parsePaymentHeader(paymentHeader);
         if (!terms || !terms.value || !terms.to) return { verified: false, raw: "payment terms unreadable" };
         let value: bigint;
@@ -129,15 +172,58 @@ export function makeX402Provider(env: Env): PaymentProvider {
         const required = BigInt(Math.round(Number(sku.priceUsd.replace("$", "")) * 1e6)); // USDC 6dp
         if (value < required) return { verified: false, raw: "underpayment" };
         if (terms.to.toLowerCase() !== payTo.toLowerCase()) return { verified: false, raw: "payTo mismatch" };
-        if (terms.network && terms.network !== STAGING_NETWORK) return { verified: false, raw: "network mismatch" };
-        return {
-          ...j,
+        if (terms.network && terms.network !== cfg.network) return { verified: false, raw: "network mismatch" };
+        const ok = (): VerifiedPayment => ({
           verified: true,
           nonce: terms.nonce,
           payTo: terms.to,
-          network: terms.network ?? STAGING_NETWORK,
+          network: cfg.network,
           amountUsdc: (Number(value) / 1e6).toFixed(6),
-        };
+        });
+
+        if (cfg.mainnet) {
+          if (!env.CDP_API_KEY_ID || !env.CDP_API_KEY_SECRET) return { verified: false, raw: "cdp keys missing" };
+          const host = "api.cdp.coinbase.com";
+          const base = "/platform/v2/x402";
+          const paymentPayload = decodePayment(paymentHeader);
+          if (!paymentPayload) return { verified: false, raw: "payment payload unreadable" };
+          const paymentRequirements = {
+            scheme: "exact",
+            network: cfg.network,
+            maxAmountRequired: required.toString(),
+            asset: cfg.asset,
+            payTo,
+            resource: sku.route,
+            description: `Ishtar ${sku.id}`,
+            mimeType: "application/json",
+            maxTimeoutSeconds: 60,
+          };
+          const body = JSON.stringify({ x402Version: 1, paymentPayload, paymentRequirements });
+          // verify (signature/funds valid?)
+          const vTok = await cdpBearer(env.CDP_API_KEY_ID, env.CDP_API_KEY_SECRET, "POST", host, `${base}/verify`);
+          const vr = await fetch(`${cfg.facilitator}/verify`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${vTok}` }, body });
+          if (!vr.ok) return { verified: false, raw: `cdp verify ${vr.status}` };
+          const vj = (await vr.json()) as { isValid?: boolean; invalidReason?: string; payer?: string };
+          if (!vj.isValid) return { verified: false, raw: vj.invalidReason ?? "cdp rejected" };
+          // settle (broadcast transferWithAuthorization — real USDC moves here)
+          const sTok = await cdpBearer(env.CDP_API_KEY_ID, env.CDP_API_KEY_SECRET, "POST", host, `${base}/settle`);
+          const sr = await fetch(`${cfg.facilitator}/settle`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${sTok}` }, body });
+          if (!sr.ok) return { verified: false, raw: `cdp settle ${sr.status}` };
+          const sj = (await sr.json()) as { success?: boolean; errorReason?: string; transaction?: string; payer?: string };
+          if (!sj.success) return { verified: false, raw: sj.errorReason ?? "cdp settle failed" };
+          return { ...ok(), payer: sj.payer ?? terms.to, tx: sj.transaction };
+        }
+
+        // Staging: keyless x402.org facilitator, /verify only (testnet — no real settlement).
+        const res = await fetch(`${cfg.facilitator}/verify`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ payment: paymentHeader, network: cfg.network, payTo, resource: sku.route }),
+        });
+        if (!res.ok) return { verified: false, raw: `facilitator ${res.status}` };
+        const j = (await res.json()) as VerifiedPayment & { isValid?: boolean };
+        if (!(j.verified ?? j.isValid ?? false)) return { verified: false, raw: j.raw ?? "facilitator rejected" };
+        return { ...j, ...ok() };
       } catch (err) {
         return { verified: false, raw: `verify_error: ${(err as Error).message}` };
       }
