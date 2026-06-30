@@ -104,6 +104,10 @@ STREAM_DAILY_BUDGET_USD = "5"
 # model used for gambits, which is poor for open chat). 25 messages per $1 USDC top-up.
 CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 CHAT_CREDITS_PER_USD = "25"
+# Public-launch flip: "true" opens Talk-to-Ishtar to everyone on free quota (3/day base). Until set,
+# only the founder wallet (gokhan.eth) + CHAT_WHITELIST get a real reply; everyone else sees PRELAUNCH.
+# Flip back to "false" + redeploy to re-close. Safety layers (crisis/minor/chaperone/egress/rate-limit) run regardless.
+CHAT_LAUNCHED = "true"
 # Newsletter (Resend). Not secrets — the API key is a Worker secret (wrangler secret put RESEND_API_KEY).
 RESEND_AUDIENCE_ID = "6cf4ebf1-2cd8-47b1-8ae9-7d96b8ea4405"
 NEWSLETTER_FROM = "Ishtar <ishtar@numetal.xyz>"
