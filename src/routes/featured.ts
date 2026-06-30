@@ -27,6 +27,8 @@ import { chaperone, type GuardFn } from "../chaperone";
 import { getSetting } from "../economics/budget";
 import { accrueBuyback } from "../economics/reserve";
 import { attest18 } from "../economics/chatcredits";
+import { admitWithCap } from "../admission";
+import { owners } from "../db/schema";
 import { SKUS, makeX402Provider, x402Challenge, type PaymentProvider } from "../payments/x402";
 import { createLlamapayCharge, verifyLlamapayWebhook, type LlamapayEvent } from "../payments/llamapay";
 import { renderTR100, renderTR100Document, type ReceiptInput } from "../payments/tr100";
@@ -183,8 +185,32 @@ export async function claimAndPublishFeatured(
   if ((flip.meta.changes ?? 0) === 1) {
     await attest18(db, v.payer); // over18 confirmed at the route → recorded (defensible adults-only record)
     await accrueBuyback(db, env, null, Number(sku.priceUsd.replace("$", ""))); // no premium_orders row → null ref
+    // ENROL link for the AGENT path: NEVER fabricate a persona for an agent post. If the post's authorRef
+    // matches an EXISTING persona handle, link owner_id/persona_id to it (so match-notify's owner_id join
+    // works for an already-on-floor agent too); otherwise skip — the agent is its own dater, enrolled via
+    // /personas, not invented here. The human path's full owner+persona creation lives in the webhook.
+    if (input.authorRef) {
+      await linkExistingPersona(env, postId, input.authorRef).catch(() => {});
+    }
   }
   return { kind: "live", id: postId, expiresAt, payer: v.payer.toLowerCase(), tx: v.tx };
+}
+
+/**
+ * Best-effort AGENT-path link: if `handle` matches an existing persona, stamp its owner_id + persona_id
+ * onto the featured post (idempotent — only writes when the post's owner_id is still null). Creates
+ * NOTHING: an agent post with no matching persona is left unlinked (we never fabricate an agent persona).
+ */
+async function linkExistingPersona(env: Env, postId: number, handle: string): Promise<void> {
+  const persona = await env.DB
+    .prepare("SELECT id, owner_id FROM personas WHERE handle=?1")
+    .bind(handle)
+    .first<{ id: number; owner_id: number | null }>();
+  if (!persona) return; // no existing persona → skip (do NOT fabricate one)
+  await env.DB
+    .prepare("UPDATE featured_posts SET owner_id=?2, persona_id=?3 WHERE id=?1 AND owner_id IS NULL")
+    .bind(postId, persona.owner_id ?? null, persona.id)
+    .run();
 }
 
 /* ───────────────────────────── HUMAN payment path (LlamaPay) ─────────────────────────────────────
@@ -392,6 +418,90 @@ async function alertOrphanedPayment(env: Env, orderId: string, paymentId: string
   }
 }
 
+/* ───────────────────────────── ENROL-ON-FEATURE ─────────────────────────────────────────────────
+ * When a featured HUMAN's payment confirms (the winning flip→live), enrol them as a matchable persona
+ * so their agent courts on the floor — the prerequisite behind match-notify. We REUSE the exact onboard
+ * path /personas uses: create an owner (sealed email as contactRef + 18+ attest carried from reserve),
+ * then admitWithCap() with the post's public_summary (+ reveal note) as the heart. admitWithCap sets the
+ * persona to status='admitted', which IS what makes it matchable — the match coordinator selects
+ * candidates by `personas.status='admitted'`, so admission auto-enrols into courtship (no extra step).
+ *
+ * IDEMPOTENT by owner_id: if featured_posts.owner_id is already set (a webhook replay or a re-driven
+ * event), we skip entirely — no second owner, no second persona. The slot's owner_id is THE shared
+ * contract the match-notify sibling joins on.
+ *
+ * Contact REVEAL stays gated DOWNSTREAM (identity_verified + intro consent + 18+ at reveal time): the
+ * sealed email becomes the owner's contactRef, which is NEVER served to boards — enrol only makes the
+ * persona matchable, it does NOT reveal the human's contact.
+ */
+export async function enrolFeaturedHuman(
+  db: DB,
+  env: Env,
+  post: {
+    id: number;
+    order_id: string;
+    public_summary: string;
+    reveal_fields?: string | null;
+    email_sealed: string | null;
+    author_ref?: string | null;
+    owner_id?: number | null;
+  },
+  deps?: { guard?: GuardFn },
+): Promise<{ enrolled: boolean; ownerId?: number; personaId?: number; reason?: string }> {
+  // Idempotency: owner_id already linked → this post was enrolled on a prior winning flip. Skip.
+  if (post.owner_id != null) return { enrolled: false, reason: "already enrolled" };
+
+  // Create the owner exactly like the onboard heart-file path: the sealed email is the private
+  // contactRef (already sealed at reserve in email_sealed — re-used verbatim, never re-plaintexted),
+  // tier=agent_represented (no human login), 18+ attested (the human affirmed over18:true at reserve so
+  // the slot can only exist for an adult). The owner starts admitted — a featured, paid human is a
+  // first-class participant, not a pending applicant.
+  const ownerRow = await db
+    .insert(owners)
+    .values({
+      displayName: post.author_ref ?? null,
+      contactRef: post.email_sealed, // already sealed at reserve; NEVER served to boards
+      tier: "agent_represented",
+      ageAttested: 1, // carried 18+ attestation from the reserve gate
+      status: "admitted",
+    })
+    .returning({ id: owners.id })
+    .get();
+  const ownerId = ownerRow.id;
+
+  // The dating "heart": the chaperoned public_summary the human published, plus the reveal note. This is
+  // the same shape /personas feeds admitWithCap (heartText). The persona handle is unique-constrained, so
+  // we derive a stable, collision-resistant one from the order id (one persona per featured order).
+  const revealNote = post.reveal_fields ? String(post.reveal_fields).trim() : "";
+  const heartText = revealNote ? `${post.public_summary}\n\n${revealNote}` : post.public_summary;
+  const handle = `window-${post.order_id}`.slice(0, 64);
+
+  // SAME admission path /personas uses → atomic cap + fail-closed chaperone. persona_age MUST be "18+"
+  // (carried from the reserve over18 gate). The chaperone already passed pre_publish at reserve; the
+  // admission chaperone is a second, independent fail-closed gate (defense in depth) on the heart.
+  const admit = await admitWithCap(
+    db,
+    env,
+    {
+      handle,
+      model: "@cf/meta/llama-3.1-8b-instruct", // a default conversational model for the human's agent persona
+      personaAge: "18+",
+      heartText,
+      ownerId,
+    },
+    deps?.guard ? { guard: deps.guard } : undefined,
+  );
+
+  // Link the post → owner/persona. owner_id is the shared-contract link; set it even if the cap was full
+  // (the persona stays 'pending' and admits on a later cycle) so the enrol is recorded + idempotent.
+  await env.DB
+    .prepare("UPDATE featured_posts SET owner_id=?2, persona_id=?3 WHERE id=?1")
+    .bind(post.id, ownerId, admit.personaId ?? null)
+    .run();
+
+  return { enrolled: true, ownerId, personaId: admit.personaId, reason: admit.reason };
+}
+
 /**
  * Process a verified LlamaPay webhook event. IDEMPOTENT and crash-safe (findings #3 + #4):
  *   - The dedup INSERT is written ONLY AFTER the feature/flip (or terminal orphaned-decision) succeeds,
@@ -407,7 +517,7 @@ export async function handleLlamapayEvent(
   db: DB,
   env: Env,
   event: LlamapayEvent,
-  deps?: { sendEmail?: (to: string, subject: string, html: string) => Promise<void> },
+  deps?: { sendEmail?: (to: string, subject: string, html: string) => Promise<void>; guard?: GuardFn },
 ): Promise<WebhookOutcome> {
   // Replay short-circuit: a truly-processed event was recorded in llamapay_webhook_events at the END of
   // a prior successful run → no-op 200. (We do NOT write the dedup row here — finding #4 moves it to the
@@ -441,9 +551,9 @@ export async function handleLlamapayEvent(
   }
 
   const row = await env.DB
-    .prepare("SELECT id, status, author_kind, author_ref, public_summary, email_sealed, charge_hosted_url, order_id FROM featured_posts WHERE order_id=?1")
+    .prepare("SELECT id, status, author_kind, author_ref, public_summary, reveal_fields, email_sealed, charge_hosted_url, order_id, owner_id FROM featured_posts WHERE order_id=?1")
     .bind(orderId)
-    .first<{ id: number; status: string; author_kind: string; author_ref: string | null; public_summary: string; email_sealed: string | null; charge_hosted_url: string | null; order_id: string }>();
+    .first<{ id: number; status: string; author_kind: string; author_ref: string | null; public_summary: string; reveal_fields: string | null; email_sealed: string | null; charge_hosted_url: string | null; order_id: string; owner_id: number | null }>();
   if (!row) {
     await markProcessed();
     return { kind: "no_order" };
@@ -519,6 +629,16 @@ export async function handleLlamapayEvent(
   // First (winning) flip only: accrue buyback once. (No 18+ wallet to attest — the human attested
   // over18:true at reserve; the slot is bound to the LlamaPay payment, not a wallet.)
   await accrueBuyback(db, env, orderId, Number(priceUsd)).catch(() => {});
+
+  // ENROL-ON-FEATURE: a HUMAN poster becomes a matchable persona the moment their slot goes live, so
+  // their agent courts on the floor (the prerequisite behind match-notify). REUSES the /personas onboard
+  // path (admitWithCap) and is idempotent on featured_posts.owner_id — a replay finds it already set and
+  // skips. The AGENT x402 path is enrolled at publish (claimAndPublishFeatured), NOT here. Best-effort:
+  // a throw before markProcessed leaves the event un-deduped → LlamaPay retries → enrol re-drives (and
+  // its owner_id guard prevents a double-enrol). Reveal stays gated downstream — this only matchmakes.
+  if (row.author_kind === "human") {
+    await enrolFeaturedHuman(db, env, row, deps?.guard ? { guard: deps.guard } : undefined).catch(() => {});
+  }
 
   // Mint + email the TR-100 receipt (best-effort; never fails the 200). Record the send outcome on the
   // row (finding #7) so GET /status can report emailSent.
