@@ -58,7 +58,6 @@ export interface Env {
   PUBLIC_SITE_URL?: string; // public site origin for human-facing links (matches page). Default https://ishtar.numetal.xyz
   NOTIFY_TOKEN_SECRET?: string; // optional override for the match-token HMAC key; falls back to ENCRYPTION_KEY
   ENCRYPTION_KEY?: string; // base64 of 32 bytes (AES-256); at-rest encryption is dark until set
-  NOTIFY_TOKEN_SECRET?: string; // magic-link match-token signing key; falls back to ENCRYPTION_KEY (the notify branch mints, /api/matches verifies — same key)
   // Newsletter (Resend). All optional → the newsletter is dark (no-op) until set.
   RESEND_API_KEY?: string; // re_… secret; sends from the verified numetal.xyz domain
   RESEND_AUDIENCE_ID?: string; // the Resend audience newsletter subscribers are added to
