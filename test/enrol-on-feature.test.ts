@@ -182,38 +182,103 @@ describe("ENROL-ON-FEATURE — featured humans become matchable personas", () =>
     }
   });
 
-  it("an AGENT post whose authorRef MATCHES an existing persona links to it (no new persona created)", async () => {
+  it("FINDING 1: an AGENT post whose authorRef equals an existing (victim) handle does NOT stamp that persona's owner_id/persona_id (anti-spoof)", async () => {
     const db = makeDb(env.DB);
-    // Seed an already-on-floor agent persona via the SAME admission path (an existing dater).
-    const ownerRow = await env.DB
+    // Seed a VICTIM persona+owner already on the floor (a real dater with a publicly-known handle).
+    const victimOwner = await env.DB
       .prepare("INSERT INTO owners (tier, status, age_attested) VALUES ('agent_represented','admitted',1) RETURNING id")
       .first<{ id: number }>();
-    const handle = "existing_bot_" + rnd();
-    const personaRow = await env.DB
+    const victimHandle = "victim_bot_" + rnd();
+    const victimPersona = await env.DB
       .prepare("INSERT INTO personas (owner_id, handle, model, heart_json, persona_age, status) VALUES (?1, ?2, 'm', '{}', '18+', 'admitted') RETURNING id")
-      .bind(ownerRow!.id, handle)
+      .bind(victimOwner!.id, victimHandle)
       .first<{ id: number }>();
 
+    // An ATTACKER pays for a featured post and supplies the VICTIM's public handle as authorRef. With no
+    // proof of ownership, the old code would graft the victim's owner_id onto the attacker's post →
+    // tripping the human match-notify gate into an unsolicited "you have a match" email to the victim.
     const payProvider: PaymentProvider = {
       network: "eip155:84532",
       facilitator: "mock",
-      async verify() { return { verified: true, payer: "0xExisting", tx: "0xTX2", amountUsdc: "50" }; },
+      async verify() { return { verified: true, payer: "0xAttacker", tx: "0xTXSPOOF", amountUsdc: "50" }; },
     };
     const out = await claimAndPublishFeatured(
       db,
       lpEnv(),
-      { authorKind: "agent", authorRef: handle, publicSummary: "the existing bot returns", ref: "agentref_" + rnd() },
+      { authorKind: "agent", authorRef: victimHandle, publicSummary: "i am definitely the victim, pinky promise", ref: "agentref_" + rnd() },
       "0xPAY",
       { provider: payProvider, guard: okGuard },
     );
     expect(out.kind).toBe("live");
     if (out.kind !== "live") return;
 
-    // The post is linked to the EXISTING persona/owner — and NO new persona was created.
-    const post = await env.DB.prepare("SELECT owner_id, persona_id FROM featured_posts WHERE id=?1").bind(out.id).first<{ owner_id: number; persona_id: number }>();
-    expect(post?.persona_id).toBe(personaRow!.id);
-    expect(post?.owner_id).toBe(ownerRow!.id);
+    // The attacker's post is NOT linked to the victim — owner_id/persona_id stay NULL (correct: an agent
+    // post never carries owner_id; only the trusted server-side human enrol sets it).
+    const post = await env.DB.prepare("SELECT owner_id, persona_id FROM featured_posts WHERE id=?1").bind(out.id).first<{ owner_id: number | null; persona_id: number | null }>();
+    expect(post?.owner_id).toBeNull();
+    expect(post?.persona_id).toBeNull();
+
+    // The victim's own persona/owner are untouched (no extra rows, none re-pointed).
     const personaCount = await env.DB.prepare("SELECT COUNT(*) c FROM personas").first<{ c: number }>();
-    expect(Number(personaCount?.c)).toBe(1); // still just the one seeded persona — none fabricated
+    expect(Number(personaCount?.c)).toBe(1); // still just the victim's persona
+    const stillVictim = await env.DB.prepare("SELECT owner_id FROM personas WHERE id=?1").bind(victimPersona!.id).first<{ owner_id: number }>();
+    expect(stillVictim?.owner_id).toBe(victimOwner!.id);
+  });
+
+  it("FINDING 2: link UPDATE fails after the owner insert, then a re-claim → EXACTLY ONE owner + ONE persona, owner_id ends set", async () => {
+    const db = makeDb(env.DB);
+    const orderId = await reserve({ reveal: "footnote enjoyer" });
+
+    // Drive enrol on a row whose env.DB.prepare THROWS for the final link UPDATE (the
+    // "UPDATE featured_posts SET owner_id=...persona_id=..." statement) — simulating a crash after the
+    // owner insert + admit but before the post is linked. The owner+persona are written; the post's
+    // owner_id stays NULL (orphaned owner — exactly the non-atomic bug).
+    const realDb = lpEnv().DB;
+    let threw = false;
+    const failingDb = {
+      ...realDb,
+      prepare(sql: string) {
+        if (sql.includes("UPDATE featured_posts SET owner_id") && sql.includes("persona_id")) {
+          threw = true;
+          throw new Error("simulated crash during the link UPDATE");
+        }
+        return realDb.prepare(sql);
+      },
+    } as typeof realDb;
+
+    const row = await realDb
+      .prepare("SELECT id, order_id, public_summary, reveal_fields, email_sealed, author_ref, owner_id FROM featured_posts WHERE order_id=?1")
+      .bind(orderId)
+      .first<any>();
+
+    await expect(
+      enrolFeaturedHuman(db, { ...lpEnv(), DB: failingDb }, row, { guard: okGuard }),
+    ).rejects.toThrow(/simulated crash/);
+    expect(threw).toBe(true);
+
+    // Post-crash state: the owner + persona were inserted, but the post's owner_id is still NULL
+    // (the link UPDATE never landed) — the orphaned-owner condition.
+    const afterCrash = await realDb.prepare("SELECT owner_id, persona_id FROM featured_posts WHERE order_id=?1").bind(orderId).first<{ owner_id: number | null; persona_id: number | null }>();
+    expect(afterCrash?.owner_id).toBeNull();
+    const ownersAfterCrash = await realDb.prepare("SELECT COUNT(*) c FROM owners").first<{ c: number }>();
+    expect(Number(ownersAfterCrash?.c)).toBe(1); // the orphaned owner
+
+    // RE-CLAIM (a real env.DB now): the deterministic-handle reuse-lookup finds the existing persona and
+    // REUSES its owner — it must NOT insert a second owner, and it must (re)link the post.
+    const reRow = await realDb
+      .prepare("SELECT id, order_id, public_summary, reveal_fields, email_sealed, author_ref, owner_id FROM featured_posts WHERE order_id=?1")
+      .bind(orderId)
+      .first<any>();
+    const out = await enrolFeaturedHuman(db, lpEnv(), reRow, { guard: okGuard });
+    expect(out.enrolled).toBe(true);
+
+    // EXACTLY ONE owner + ONE persona for this order, and the post's owner_id is now set.
+    const owners = await realDb.prepare("SELECT COUNT(*) c FROM owners").first<{ c: number }>();
+    const personas = await realDb.prepare("SELECT COUNT(*) c FROM personas WHERE handle=?1").bind(`window-${orderId}`.slice(0, 64)).first<{ c: number }>();
+    expect(Number(owners?.c)).toBe(1); // NOT duplicated by the re-claim
+    expect(Number(personas?.c)).toBe(1);
+    const linked = await realDb.prepare("SELECT owner_id, persona_id FROM featured_posts WHERE order_id=?1").bind(orderId).first<{ owner_id: number | null; persona_id: number | null }>();
+    expect(linked?.owner_id).toBeTruthy();
+    expect(linked?.persona_id).toBeTruthy();
   });
 });
