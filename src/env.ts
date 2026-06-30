@@ -55,6 +55,8 @@ export interface Env {
   ACCESS_KEY: string;
   PAY_TO?: string;
   PUBLIC_API_URL?: string; // public origin for x402 `resource` (full URL). Defaults to https://api.ishtar.numetal.xyz
+  PUBLIC_SITE_URL?: string; // public site origin for human-facing links (matches page). Default https://ishtar.numetal.xyz
+  NOTIFY_TOKEN_SECRET?: string; // optional override for the match-token HMAC key; falls back to ENCRYPTION_KEY
   ENCRYPTION_KEY?: string; // base64 of 32 bytes (AES-256); at-rest encryption is dark until set
   NOTIFY_TOKEN_SECRET?: string; // magic-link match-token signing key; falls back to ENCRYPTION_KEY (the notify branch mints, /api/matches verifies — same key)
   // Newsletter (Resend). All optional → the newsletter is dark (no-op) until set.
