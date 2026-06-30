@@ -511,6 +511,11 @@ export const featuredPosts = sqliteTable(
     status: text("status").notNull().default("reserving"), // reserving | live | expired | blocked
     createdAt: text("created_at").notNull().default(now),
     expiresAt: text("expires_at"), // now + 24h, set when the post flips to live
+    // Human (LlamaPay) path (migration 0020). The agent x402 path leaves these null.
+    chargeHostedUrl: text("charge_hosted_url"), // LlamaPay hosted-checkout URL handed to the human
+    emailSealed: text("email_sealed"), // receipt-recipient email, sealed at rest (never plaintext PII)
+    paymentRef: text("payment_ref"), // "llamapay:<id>" (human) | "x402:<tx>" (agent) | null
+    paidAt: text("paid_at"), // ISO timestamp the payment confirmed (receipt paid-at)
   },
   (t) => ({
     // Public-read + cron-purge driver: live rows by expiry. Also the per-UTC-day count source.
@@ -518,6 +523,15 @@ export const featuredPosts = sqliteTable(
     byDay: index("idx_featured_created").on(t.createdAt),
   }),
 );
+
+// LlamaPay webhook-event dedup (migration 0020). LlamaPay retries a webhook for up to 3 days with
+// backoff, so the handler persists each verified event.id and treats a replay as a 200 no-op.
+export const llamapayWebhookEvents = sqliteTable("llamapay_webhook_events", {
+  eventId: text("event_id").primaryKey(), // LlamaPay event.id — the dedup key
+  eventType: text("event_type"), // charge:pending | charge:confirmed | ...
+  orderId: text("order_id"), // echoed metadata.orderId (audit join to featured_posts)
+  seenAt: text("seen_at").notNull().default(now),
+});
 
 /* ----------------------------------------------------------------- coach memory (Phase 0) */
 // "Capture before you coach" — the human-side episodic substrate for Ishtar Talk. Keyed by the

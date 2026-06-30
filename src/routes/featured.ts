@@ -28,7 +28,15 @@ import { getSetting } from "../economics/budget";
 import { accrueBuyback } from "../economics/reserve";
 import { attest18 } from "../economics/chatcredits";
 import { SKUS, makeX402Provider, x402Challenge, type PaymentProvider } from "../payments/x402";
+import { createLlamapayCharge, verifyLlamapayWebhook, type LlamapayEvent } from "../payments/llamapay";
+import { renderTR100, renderTR100Document, type ReceiptInput } from "../payments/tr100";
+import { seal, open } from "../crypto/box";
+import { resendSend } from "../newsletter/resend";
 import type { Env } from "../env";
+
+// The public origin the LlamaPay charge redirects back to. The /window page reads ?order=<orderId>
+// to start polling GET /api/featured/status/:orderId.
+const WINDOW_PAGE_URL = "https://ishtar.numetal.xyz/window/";
 
 export const featuredRoutes = new Hono<{ Bindings: Env }>();
 
@@ -101,10 +109,16 @@ export async function claimAndPublishFeatured(
   if (existing) {
     postId = existing.id; // a prior 'reserving' row for this exact order_id (payment retried) — reuse it.
   } else {
+    // created_at is set EXPLICITLY to the canonical ISO `nowIso` (NOT the SQLite datetime('now')
+    // default). The reserving COUNT below compares created_at against the ISO `reserveFloor`; the
+    // SQLite default format ("YYYY-MM-DD HH:MM:SS", a SPACE) sorts BEFORE an ISO floor ("…T…Z", a
+    // 'T'), so a default-formatted warm reservation would NOT be counted → a second reserve would
+    // slip past a cap-of-1 → over-cap/double-charge. Writing ISO here keeps the comparison
+    // format-consistent so warm reservations are always counted (regression test covers this).
     const claim = await env.DB
       .prepare(
-        `INSERT INTO featured_posts (author_kind, author_ref, public_summary, reveal_fields, order_id, status)
-         SELECT ?1, ?2, ?3, ?4, ?5, 'reserving'
+        `INSERT INTO featured_posts (author_kind, author_ref, public_summary, reveal_fields, order_id, status, created_at)
+         SELECT ?1, ?2, ?3, ?4, ?5, 'reserving', ?9
          WHERE (
            SELECT COUNT(*) FROM featured_posts
            WHERE (status='live' AND expires_at > ?6)
@@ -121,6 +135,7 @@ export async function claimAndPublishFeatured(
         nowIso,
         reserveFloor,
         cap,
+        nowIso,
       )
       .first<{ id: number }>();
     if (!claim) return { kind: "full" }; // board full → 409, NO payment
@@ -155,11 +170,15 @@ export async function claimAndPublishFeatured(
 
   // (e) flip reserving → live, expires_at = now + 24h. Conditional on still being 'reserving' so a
   // concurrent retry can't double-flip; only the winning flip records the 18+ attest + buyback accrual.
+  // payment_ref = "x402:<tx>" (the on-chain settle tx) so the agent path's TR-100 receipt links basescan;
+  // paid_at drives the receipt's paid-at field. The HUMAN path records "llamapay:<id>" instead.
   const expiresAt = new Date(Date.now() + TTL_MS).toISOString();
+  const paidAt = new Date().toISOString();
   const publishedSummary = verdict.text ?? input.publicSummary;
+  const paymentRef = v.tx ? `x402:${v.tx}` : null;
   const flip = await env.DB
-    .prepare("UPDATE featured_posts SET status='live', payer=?2, expires_at=?3, public_summary=?4 WHERE id=?1 AND status='reserving'")
-    .bind(postId, v.payer.toLowerCase(), expiresAt, publishedSummary)
+    .prepare("UPDATE featured_posts SET status='live', payer=?2, expires_at=?3, public_summary=?4, payment_ref=?5, paid_at=?6 WHERE id=?1 AND status='reserving'")
+    .bind(postId, v.payer.toLowerCase(), expiresAt, publishedSummary, paymentRef, paidAt)
     .run();
   if ((flip.meta.changes ?? 0) === 1) {
     await attest18(db, v.payer); // over18 confirmed at the route → recorded (defensible adults-only record)
@@ -167,6 +186,305 @@ export async function claimAndPublishFeatured(
   }
   return { kind: "live", id: postId, expiresAt, payer: v.payer.toLowerCase(), tx: v.tx };
 }
+
+/* ───────────────────────────── HUMAN payment path (LlamaPay) ─────────────────────────────────────
+ * The human reaches the OPEN board with no founder key. We claim a slot atomically (same cap COUNT as
+ * the agent path — warm reservations included via the now-consistent ISO created_at), seal their
+ * email at rest, create a LlamaPay hosted charge, and hand back the checkout URL. Payment is
+ * confirmed asynchronously by the webhook, which flips reserving→live + mints the TR-100 receipt.
+ * The chaperone pre_publish screen runs on the public text at RESERVE time (fail-closed) so an
+ * explicit post can't even reach checkout.
+ */
+
+const reserveSchema = z.object({
+  authorKind: z.literal("human"),
+  publicSummary: z.string().min(1).max(2000),
+  reveal: z.record(z.string(), z.unknown()).optional(),
+  // email shape: a single @, a dot in the domain, bounded length.
+  email: z.string().regex(/^[^@\s]+@[^@\s]+\.[^@\s]+$/).max(200),
+  over18: z.literal(true),
+  ref: z.string().min(8).max(100),
+});
+export type ReserveInput = z.infer<typeof reserveSchema>;
+
+export type ReserveOutcome =
+  | { kind: "full" }
+  | { kind: "blocked"; reason: string }
+  | { kind: "already"; orderId: string; status: "reserving" | "live" }
+  | { kind: "charge_failed"; reason: string }
+  | { kind: "reserved"; orderId: string; checkoutUrl: string; expiresInMinutes: number };
+
+/**
+ * Claim a slot + create the LlamaPay charge for a HUMAN poster. Mirrors the agent claim: an atomic
+ * conditional INSERT guarded by the active-slot COUNT (live-by-expiry OR warm reservation), claimed
+ * BEFORE any charge so a full board never starts a checkout. `deps.guard` injects the chaperone
+ * classifier; `deps.createCharge` lets a test stub the LlamaPay call.
+ */
+export async function reserveHumanSlot(
+  db: DB,
+  env: Env,
+  input: ReserveInput,
+  deps?: {
+    guard?: GuardFn;
+    createCharge?: (orderId: string, redirectUrl: string, cancelUrl: string) => Promise<{ ok: boolean; hostedUrl?: string; reason?: string }>;
+  },
+): Promise<ReserveOutcome> {
+  const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
+  const orderId = `featured:human:${input.ref}`;
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const reserveFloor = new Date(now.getTime() - RESERVE_TTL_MS).toISOString();
+
+  // Idempotency: a ref that already reserved (warm) or went live is recoverable — never double-claim
+  // nor double-charge. The site can re-poll status.
+  const existing = await env.DB
+    .prepare("SELECT id, status FROM featured_posts WHERE order_id=?1")
+    .bind(orderId)
+    .first<{ id: number; status: string }>();
+  if (existing && existing.status === "live") return { kind: "already", orderId, status: "live" };
+  if (existing && existing.status === "blocked") return { kind: "blocked", reason: "post was blocked by the chaperone" };
+  if (existing && existing.status === "reserving") {
+    // A warm reservation for this exact ref — return its held checkout (no new charge).
+    const row = await env.DB.prepare("SELECT charge_hosted_url FROM featured_posts WHERE id=?1").bind(existing.id).first<{ charge_hosted_url: string | null }>();
+    if (row?.charge_hosted_url) return { kind: "reserved", orderId, checkoutUrl: row.charge_hosted_url, expiresInMinutes: Math.round(RESERVE_TTL_MS / 60000) };
+    return { kind: "already", orderId, status: "reserving" };
+  }
+
+  // Chaperone pre_publish on the FULL public payload BEFORE we hold a slot or charge — fail-closed,
+  // no S12 carve-out, so an explicit post never reaches checkout. targetId is unknown pre-insert → 0.
+  const revealText = input.reveal ? Object.values(input.reveal).map(String).join("\n") : "";
+  const screenText = revealText ? `${input.publicSummary}\n${revealText}` : input.publicSummary;
+  const verdict = await chaperone(
+    db,
+    env,
+    { stage: "pre_publish", targetType: "post", targetId: 0, text: screenText, callerRef: "featured:human" },
+    deps?.guard ? { guard: deps.guard } : undefined,
+  );
+  if (verdict.verdict !== "allow" && verdict.verdict !== "sanitize") return { kind: "blocked", reason: verdict.reason };
+  const publishSummary = verdict.text ?? input.publicSummary;
+
+  // Atomic slot claim (cap COUNT incl. warm reservations). created_at = ISO nowIso so the COUNT below
+  // and the purge stay format-consistent with reserveFloor (the cap-regression bug fix).
+  const claim = await env.DB
+    .prepare(
+      `INSERT INTO featured_posts (author_kind, author_ref, public_summary, reveal_fields, order_id, status, created_at)
+       SELECT 'human', NULL, ?1, ?2, ?3, 'reserving', ?4
+       WHERE (
+         SELECT COUNT(*) FROM featured_posts
+         WHERE (status='live' AND expires_at > ?5)
+            OR (status='reserving' AND created_at > ?6)
+       ) < ?7
+       RETURNING id`,
+    )
+    .bind(publishSummary, input.reveal ? JSON.stringify(input.reveal) : null, orderId, nowIso, nowIso, reserveFloor, cap)
+    .first<{ id: number }>();
+  if (!claim) return { kind: "full" }; // board full → 409, NO charge
+
+  // Seal the email at rest (crypto/box; no-op→plaintext only when ENCRYPTION_KEY is unset/dev).
+  const sealedEmail = (await seal(env, input.email)) ?? input.email;
+  await env.DB.prepare("UPDATE featured_posts SET email_sealed=?2 WHERE id=?1").bind(claim.id, sealedEmail).run();
+
+  // Create the LlamaPay hosted charge. redirect_url returns to /window?order=<orderId> so the page
+  // starts polling status; cancel_url returns to the board.
+  const redirectUrl = `${WINDOW_PAGE_URL}?order=${encodeURIComponent(orderId)}`;
+  const cancelUrl = WINDOW_PAGE_URL;
+  const charge = deps?.createCharge
+    ? await deps.createCharge(orderId, redirectUrl, cancelUrl)
+    : await createLlamapayCharge(env, { orderId, amount: "50.00", currency: "USD", redirectUrl, cancelUrl });
+  if (!charge.ok || !charge.hostedUrl) {
+    // Free the just-claimed slot so a charge failure can't brick it (mark expired — auditable, keeps the row).
+    await env.DB.prepare("UPDATE featured_posts SET status='expired' WHERE id=?1 AND status='reserving'").bind(claim.id).run();
+    return { kind: "charge_failed", reason: charge.reason ?? "could not create charge" };
+  }
+  await env.DB.prepare("UPDATE featured_posts SET charge_hosted_url=?2 WHERE id=?1").bind(claim.id, charge.hostedUrl).run();
+  return { kind: "reserved", orderId, checkoutUrl: charge.hostedUrl, expiresInMinutes: Math.round(RESERVE_TTL_MS / 60000) };
+}
+
+/** Per-UTC-day slot ordinal for a live post (1-based count of live/expired rows created today, ≤ cap). */
+async function slotOrdinal(env: Env, postId: number): Promise<number> {
+  const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
+  const r = await env.DB
+    .prepare("SELECT COUNT(*) c FROM featured_posts WHERE id <= ?1 AND created_at >= ?2 AND status IN ('live','expired')")
+    .bind(postId, dayStart.toISOString())
+    .first<{ c: number }>();
+  return Math.max(1, Number(r?.c ?? 1));
+}
+
+/** Build the shared TR-100 receipt input for a row, then render it. */
+async function buildReceiptForRow(
+  env: Env,
+  row: { id: number; author_kind: string; author_ref: string | null; public_summary: string; payment_ref: string | null; paid_at: string | null; expires_at: string | null; charge_hosted_url: string | null; order_id: string },
+  cap: number,
+): Promise<{ receipt: ReceiptInput; html: string; document: string }> {
+  const slotOf = await slotOrdinal(env, row.id);
+  const paidAt = row.paid_at ?? new Date().toISOString();
+  const windowTo = row.expires_at ?? new Date(new Date(paidAt).getTime() + TTL_MS).toISOString();
+  const pr = row.payment_ref ?? "";
+  const isLlama = pr.startsWith("llamapay:");
+  const isX402 = pr.startsWith("x402:");
+  const receipt: ReceiptInput = {
+    orderId: row.order_id,
+    authorKind: row.author_kind === "agent" ? "agent" : "human",
+    handle: row.author_ref,
+    publicSummary: row.public_summary,
+    amountUsd: "50.00",
+    paidAt,
+    windowFrom: paidAt,
+    windowTo,
+    slotOf,
+    slotCap: cap,
+    ...(isLlama ? { llamapayId: pr.slice("llamapay:".length), llamapayHostedUrl: row.charge_hosted_url ?? undefined } : {}),
+    ...(isX402 ? { settlementTx: pr.slice("x402:".length) } : {}),
+  };
+  return { receipt, html: renderTR100(receipt), document: renderTR100Document(receipt) };
+}
+
+export type WebhookOutcome =
+  | { kind: "unconfigured" }
+  | { kind: "bad_signature"; reason: string }
+  | { kind: "replay"; eventId: string }
+  | { kind: "ignored"; reason: string }
+  | { kind: "no_order" }
+  | { kind: "live"; orderId: string; alreadyLive: boolean };
+
+/**
+ * Process a verified LlamaPay webhook event. IDEMPOTENT: dedups on event.id, and the reserving→live
+ * flip is conditional so a duplicate (or a pending-then-confirmed pair) features the slot exactly
+ * once. On the first flip it generates + emails the TR-100 receipt. ALWAYS resolves to a terminal
+ * outcome the caller maps to 200 (the only non-200 is a bad signature, handled before this runs).
+ */
+export async function handleLlamapayEvent(
+  db: DB,
+  env: Env,
+  event: LlamapayEvent,
+  deps?: { sendEmail?: (to: string, subject: string, html: string) => Promise<void> },
+): Promise<WebhookOutcome> {
+  // Dedup: persist the event.id; a replay (PRIMARY KEY conflict) → no-op 200.
+  const ins = await env.DB
+    .prepare("INSERT OR IGNORE INTO llamapay_webhook_events (event_id, event_type, order_id) VALUES (?1, ?2, ?3)")
+    .bind(event.id, event.type, event.data?.metadata?.orderId ?? null)
+    .run();
+  if ((ins.meta.changes ?? 0) === 0) return { kind: "replay", eventId: event.id };
+
+  // Only charge:pending (on chain) + charge:confirmed (finalized) mean paid. Anything else → ignore.
+  if (event.type !== "charge:pending" && event.type !== "charge:confirmed") return { kind: "ignored", reason: event.type };
+
+  const orderId = event.data?.metadata?.orderId;
+  if (!orderId) return { kind: "no_order" };
+
+  const row = await env.DB
+    .prepare("SELECT id, status, author_kind, author_ref, public_summary, email_sealed, charge_hosted_url, order_id FROM featured_posts WHERE order_id=?1")
+    .bind(orderId)
+    .first<{ id: number; status: string; author_kind: string; author_ref: string | null; public_summary: string; email_sealed: string | null; charge_hosted_url: string | null; order_id: string }>();
+  if (!row) return { kind: "no_order" };
+  if (row.status === "live") return { kind: "live", orderId, alreadyLive: true }; // already featured (pending→confirmed, or a retry)
+  if (row.status === "blocked") return { kind: "ignored", reason: "blocked" };
+
+  // Flip reserving→live (expires +24h). Conditional on still 'reserving' so concurrent events can't
+  // double-flip; the paymentRef records the LlamaPay payment id (the webhook has NO chain tx hash).
+  const paidAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + TTL_MS).toISOString();
+  const paymentRef = `llamapay:${event.data.id}`;
+  const flip = await env.DB
+    .prepare("UPDATE featured_posts SET status='live', expires_at=?2, paid_at=?3, payment_ref=?4 WHERE id=?1 AND status='reserving'")
+    .bind(row.id, expiresAt, paidAt, paymentRef)
+    .run();
+  if ((flip.meta.changes ?? 0) !== 1) return { kind: "live", orderId, alreadyLive: true }; // lost the race → already live
+
+  // First (winning) flip only: accrue buyback once. (No 18+ wallet to attest — the human attested
+  // over18:true at reserve; the slot is bound to the LlamaPay payment, not a wallet.)
+  await accrueBuyback(db, env, orderId, 50).catch(() => {});
+
+  // Mint + email the TR-100 receipt (best-effort; never fails the 200).
+  if (row.email_sealed) {
+    try {
+      const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
+      const built = await buildReceiptForRow(
+        env,
+        { ...row, payment_ref: paymentRef, paid_at: paidAt, expires_at: expiresAt },
+        cap,
+      );
+      const email = await open(env, row.email_sealed);
+      if (email) {
+        const subject = "Your Window slot is live — receipt (Ishtar)";
+        if (deps?.sendEmail) await deps.sendEmail(email, subject, built.document);
+        else await resendSend(env, { to: email, subject, html: built.document });
+      }
+    } catch {
+      /* receipt/email is best-effort — the slot is already live + the site shows the receipt via status */
+    }
+  }
+  return { kind: "live", orderId, alreadyLive: false };
+}
+
+export interface FeaturedStatus {
+  status: "reserving" | "live" | "expired" | "blocked" | "unknown";
+  receipt?: ReceiptInput;
+  receiptHtml?: string;
+}
+
+/** Read a poster's order status (the site polls this). Receipt present once the row is live. */
+export async function getFeaturedStatus(env: Env, orderId: string): Promise<FeaturedStatus> {
+  const row = await env.DB
+    .prepare("SELECT id, status, author_kind, author_ref, public_summary, payment_ref, paid_at, expires_at, charge_hosted_url, order_id FROM featured_posts WHERE order_id=?1")
+    .bind(orderId)
+    .first<{ id: number; status: string; author_kind: string; author_ref: string | null; public_summary: string; payment_ref: string | null; paid_at: string | null; expires_at: string | null; charge_hosted_url: string | null; order_id: string }>();
+  if (!row) return { status: "unknown" };
+  const status = (["reserving", "live", "expired", "blocked"].includes(row.status) ? row.status : "unknown") as FeaturedStatus["status"];
+  if (status !== "live") return { status };
+  const db = makeDb(env.DB);
+  const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
+  const built = await buildReceiptForRow(env, row, cap);
+  return { status, receipt: built.receipt, receiptHtml: built.html };
+}
+
+/* ─────────────────────────────── HUMAN path routes (PUBLIC — above the access gate) ───────────── */
+
+featuredRoutes.post("/featured/reserve", async (c) => {
+  const parsed = reserveSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
+    return c.json({ error: "authorKind:'human', publicSummary, email, over18:true, and ref (8-100 char) required", details: parsed.error.flatten() }, 400);
+  }
+  // The human path is dark (503) until the LlamaPay key is set — never a 403 (this is the OPEN board).
+  if (!c.env.LLAMAPAY_API_KEY) return c.json({ error: "human payments not configured", code: "llamapay_unconfigured" }, 503);
+
+  const db = makeDb(c.env.DB);
+  const r = await reserveHumanSlot(db, c.env, parsed.data);
+  switch (r.kind) {
+    case "full":
+      return c.json({ error: "the window is full — all featured slots are taken; try again later", capReached: true }, 409);
+    case "blocked":
+      return c.json({ ok: false, blocked: true, reason: r.reason }, 422);
+    case "charge_failed":
+      return c.json({ error: "could not start checkout", reason: r.reason }, 502);
+    case "already":
+      return c.json({ ok: true, orderId: r.orderId, status: r.status, note: "already reserved — poll status" });
+    case "reserved":
+      return c.json({ ok: true, orderId: r.orderId, checkoutUrl: r.checkoutUrl, expiresInMinutes: r.expiresInMinutes });
+  }
+});
+
+featuredRoutes.post("/featured/llamapay-webhook", async (c) => {
+  // Read the RAW body string FIRST (the signature is HMAC over the exact bytes).
+  const rawBody = await c.req.text();
+  const signature = c.req.header("x-cc-webhook-signature"); // Hono header lookup is case-insensitive
+  const v = await verifyLlamapayWebhook(c.env, rawBody, signature);
+  if (!v.ok || !v.event) {
+    if (v.reason === "llamapay webhook not configured") return c.json({ error: "webhook not configured" }, 503);
+    return c.json({ error: "invalid signature" }, 401);
+  }
+  const db = makeDb(c.env.DB);
+  // ALWAYS 200 on a verified event (idempotent; LlamaPay retries up to 3 days). Never leak internals.
+  await handleLlamapayEvent(db, c.env, v.event).catch(() => {});
+  return c.json({ ok: true });
+});
+
+featuredRoutes.get("/featured/status/:orderId", async (c) => {
+  const orderId = c.req.param("orderId");
+  if (!orderId) return c.json({ error: "orderId required" }, 400);
+  const s = await getFeaturedStatus(c.env, orderId);
+  return c.json(s);
+});
 
 featuredRoutes.post("/featured/post", async (c) => {
   const parsed = postSchema.safeParse(await c.req.json().catch(() => ({})));

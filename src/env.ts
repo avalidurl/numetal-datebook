@@ -74,6 +74,11 @@ export interface Env {
   DIDIT_API_KEY?: string;
   DIDIT_WORKFLOW_ID?: string;
   DIDIT_WEBHOOK_SECRET?: string;
+  // The Window — HUMAN payment path (LlamaPay hosted checkout). Both optional → the human path
+  // routes 503 gracefully until set; the agent x402 path is unaffected. The API key is the FULL
+  // `llamapay_sk_…` string and is sent VERBATIM as the Authorization header value (no "Bearer").
+  LLAMAPAY_API_KEY?: string;
+  LLAMAPAY_WEBHOOK_SECRET?: string;
 }
 
 export const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
