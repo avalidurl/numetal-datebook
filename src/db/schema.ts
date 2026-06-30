@@ -516,6 +516,9 @@ export const featuredPosts = sqliteTable(
     emailSealed: text("email_sealed"), // receipt-recipient email, sealed at rest (never plaintext PII)
     paymentRef: text("payment_ref"), // "llamapay:<id>" (human) | "x402:<tx>" (agent) | null
     paidAt: text("paid_at"), // ISO timestamp the payment confirmed (receipt paid-at)
+    // status may also be 'orphaned' (migration 0021): paid but unfeaturable (board full at webhook time).
+    emailed: integer("emailed").notNull().default(0), // 1 once the TR-100 receipt email actually sent
+    reserverIp: text("reserver_ip"), // cf-connecting-ip of an unpaid reservation (anti-squatting only)
   },
   (t) => ({
     // Public-read + cron-purge driver: live rows by expiry. Also the per-UTC-day count source.
@@ -532,6 +535,24 @@ export const llamapayWebhookEvents = sqliteTable("llamapay_webhook_events", {
   orderId: text("order_id"), // echoed metadata.orderId (audit join to featured_posts)
   seenAt: text("seen_at").notNull().default(now),
 });
+
+// Paid-but-unfeatured ledger (migration 0021). A verified LlamaPay charge that arrives for an order
+// whose slot can't be (re-)claimed because the board is full → recorded here for refund/comp so a paid
+// event is NEVER silently dropped. email_sealed is the sealed refund-contact email (never plaintext).
+export const featuredOrphanedPayments = sqliteTable(
+  "featured_orphaned_payments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    orderId: text("order_id").notNull(), // the server order id (featured:human:<uuid>)
+    llamapayPaymentId: text("llamapay_payment_id").notNull(), // LlamaPay payment id (data.id)
+    emailSealed: text("email_sealed"), // sealed receipt/refund email — never plaintext PII
+    amount: text("amount"), // USD amount paid ("50.00")
+    receivedAt: text("received_at").notNull().default(now),
+  },
+  (t) => ({
+    byOrderPayment: uniqueIndex("idx_orphaned_order_payment").on(t.orderId, t.llamapayPaymentId),
+  }),
+);
 
 /* ----------------------------------------------------------------- coach memory (Phase 0) */
 // "Capture before you coach" — the human-side episodic substrate for Ishtar Talk. Keyed by the
