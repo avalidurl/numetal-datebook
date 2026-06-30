@@ -10,11 +10,12 @@ import { z } from "zod";
 import { chaperone, type GuardFn } from "../chaperone";
 import { egressFilter } from "../xmtp/egress";
 import { ishtarReply, looksLikeSystemLeak, ISHTAR_PROMPT_ANCHORS, type ChatMode } from "../chat/ishtar";
+import { intentGate, OFFTOPIC_WARNING } from "../chat/intent";
 import { crisisResponse, detectCrisis, recordCrisisEvent } from "../safety/crisis";
 import { MINOR_REDIRECT, detectMinor, recordMinorEvent } from "../safety/age";
 import { and, desc, eq } from "drizzle-orm";
 import { db as makeDb, type DB } from "../db/client";
-import { chatMessages, chatTopups, heartFiles, ownerWallets, owners } from "../db/schema";
+import { chatMessages, chatTopups, events, heartFiles, ownerWallets, owners } from "../db/schema";
 import { seal } from "../crypto/box";
 import { getNumetalPriceUsd, readNumetalUsd } from "../economics/numetal";
 import type { Env } from "../env";
@@ -193,6 +194,17 @@ chatRoutes.post("/chat", async (c) => {
   // else gets a friendly "opens soon" (safety layers above still run for all). No charge, no model.
   if (!chatOpenFor(c.env, address)) {
     return c.json({ ok: true, reply: PRELAUNCH_REPLY, mode, via: "prelaunch", ...(await getBalance(db, c.env, address)) });
+  }
+
+  // (a0d) INTENT gate — keep Talk scoped to the human's love life so the free quota (and paid tiers) can't
+  // be farmed as a general-purpose LLM via the web UI, an agent, the skill, or an API. Runs BEFORE the
+  // chaperone + charge + model: off-topic gets a WARNING and never the model (no LLM value to extract) and
+  // is bounded by the edge RATE_LIMITER. Same for humans + agents (offTopic flag is the machine signal).
+  // FAIL-OPEN (scope gate, not safety): a classifier error is treated as on-topic.
+  const intent = await intentGate(db, c.env, message, undefined, `chat:${address}`);
+  if (!intent.onTopic) {
+    await db.insert(events).values({ kind: "chat_offtopic", payload: JSON.stringify({ address, via: intent.via, mode }) }).run().catch(() => {});
+    return c.json({ ok: true, reply: OFFTOPIC_WARNING, mode, via: "off_topic", offTopic: true, scope: "dating", ...(await getBalance(db, c.env, address)) });
   }
 
   // (a) chaperone the human's input BEFORE charging — a blocked message costs nothing. Fail-closed.
