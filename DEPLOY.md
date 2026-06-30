@@ -107,12 +107,15 @@ wrangler secret put ENCRYPTION_KEY
 wrangler secret put SENTRY_DSN   # optional — error capture is a no-op until set
 ```
 
-> **Edge rate limit (hardening 2026-06-21):** `wrangler.toml` declares a native `[[ratelimits]]`
-> binding `RATE_LIMITER` (60 req / 60s) applied to `/api/intake/*`, `/api/personas`,
-> `/api/premium/*`, and `/api/escalations/claim`. It needs no dashboard step — it deploys with
-> the Worker. For defense-in-depth also add a **WAF rate-limiting rule** in the dashboard
-> (Security → WAF → Rate limiting rules) on those paths. The middleware no-ops if the binding
-> is ever removed (local/test).
+> **Edge rate limit (hardening 2026-06-21; REDACTED-ID 2026-06-30):** `wrangler.toml` declares a native
+> `[[ratelimits]]` binding `RATE_LIMITER` (60 req / 60s) applied to `/api/intake/*`, `/api/personas`,
+> `/api/premium/*`, `/api/escalations/claim`, **and the four public surfaces** `/api/chat/nonce`,
+> `/api/waitlist`, `/api/chat/session`, `/api/chat/topup` (REDACTED-ID). It needs no dashboard step — it
+> deploys with the Worker. For defense-in-depth also add **WAF rate-limiting rules** in the dashboard
+> (~30 req/min/IP → Managed Challenge → Block) on the four REDACTED-ID paths — see
+> [`docs/waf-rate-limiting.md`](docs/waf-rate-limiting.md) for exact steps. CF L3/4 + L7 DDoS
+> auto-protection is already on for the proxied domain. The middleware no-ops if the binding is ever
+> removed (local/test).
 
 > **GDPR erasure:** the operator console exposes **erase owner** (§08) →
 > `POST /admin/actions/erase {ownerId}`; it cascade-deletes the owner's personal data and
