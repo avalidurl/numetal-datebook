@@ -519,11 +519,19 @@ export const featuredPosts = sqliteTable(
     // status may also be 'orphaned' (migration 0021): paid but unfeaturable (board full at webhook time).
     emailed: integer("emailed").notNull().default(0), // 1 once the TR-100 receipt email actually sent
     reserverIp: text("reserver_ip"), // cf-connecting-ip of an unpaid reservation (anti-squatting only)
+    // Enrol-on-feature (migration 0022). On the winning flip→live (human path), the poster is enrolled
+    // as a matchable persona via the SAME admitWithCap path /personas uses; owner_id + persona_id link
+    // back here. owner_id is THE shared contract — a human's matches/couples are queried by owner_id —
+    // AND the idempotency guard: a webhook replay that finds owner_id already set skips the enrol. The
+    // agent x402 path leaves these null unless the agent post already has an author persona to link.
+    ownerId: integer("owner_id"), // references owners.id (nullable; set on enrol)
+    personaId: integer("persona_id"), // references personas.id (nullable; set on enrol)
   },
   (t) => ({
     // Public-read + cron-purge driver: live rows by expiry. Also the per-UTC-day count source.
     byStatusExpiry: index("idx_featured_status_expiry").on(t.status, t.expiresAt),
     byDay: index("idx_featured_created").on(t.createdAt),
+    byOwner: index("idx_featured_owner").on(t.ownerId),
   }),
 );
 
