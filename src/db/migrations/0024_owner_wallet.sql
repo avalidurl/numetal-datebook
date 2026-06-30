@@ -1,0 +1,18 @@
+-- Owner XMTP-reachable wallet (notify layer — XMTP match-alert channel).
+--
+-- The xmtp notify channel delivers a "come look" match alert as a wallet↔wallet XMTP DM. To do that it
+-- needs the owner's XMTP-reachable WALLET (XMTP identity = an Ethereum address). This migration adds a
+-- nullable denormalized pointer for that recipient:
+--
+--   owners.wallet — the owner's preferred XMTP-reachable EVM wallet (0x…), or NULL.
+--
+-- POPULATION (never fabricated):
+--   • Set on the wallet-bound paths — the chat-doc / human-floor submit and the agent path already bind
+--     an EVM wallet in `owner_wallets` (provider='external', chain_family='evm', e.g. network
+--     'eip155:8453'). Those owners CAN receive XMTP.
+--   • LEFT NULL for email-only featured-human owners (they store only a sealed email as contact_ref and
+--     no wallet). For them the xmtp channel's canSend stays false → notify falls back to email.
+--
+-- The notify resolver reads this column FIRST, then falls back to the canonical `owner_wallets` EVM row,
+-- so existing wallet-bound owners are XMTP-reachable even without a backfill here. No backfill is required.
+ALTER TABLE owners ADD COLUMN wallet TEXT;

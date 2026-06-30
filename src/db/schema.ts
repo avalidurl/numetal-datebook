@@ -51,6 +51,10 @@ export const owners = sqliteTable(
     // Enabled notify channels (CSV, migration 0023). Default 'email'; future branches add 'telegram', etc.
     // notifyOwner() falls back to ['email'] when empty, so the column needs no backfill.
     alertChannels: text("alert_channels").notNull().default("email"),
+    // XMTP-reachable wallet (migration 0024). Nullable; set on the wallet-bound (chat-doc / agent) path,
+    // NULL for email-only featured-human owners. The xmtp notify channel resolves a recipient here first,
+    // then falls back to the canonical owner_wallets EVM row. NEVER fabricated for email-only owners.
+    wallet: text("wallet"),
     ageAttested: integer("age_attested").notNull().default(0),
     erasedAt: text("erased_at"), // GDPR Art.17 tombstone — set when personal data is cascade-erased
     // Model C reputation/longevity flywheel:
