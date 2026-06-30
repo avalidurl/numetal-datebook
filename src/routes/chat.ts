@@ -492,6 +492,7 @@ export async function submitDatingDoc(
       .values({
         displayName: input.displayName,
         contactRef: sealedContact,
+        wallet: input.address, // XMTP-reachable: the EVM wallet this human signed in with (also in owner_wallets)
         tier: "profile_claimed", // wallet-claimed; identity_verified comes after Didit
         ageAttested: 1, // bound 18+ from the signed-in chat session
         status: "pending", // HELD until adult-verification is funded + run
