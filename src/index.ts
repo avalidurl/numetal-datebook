@@ -26,6 +26,7 @@ import { heartbenchRoutes } from "./routes/heartbench";
 import { intakeRoutes } from "./routes/intake";
 import { purgeExpiredTrysts, trystRoutes } from "./routes/tryst";
 import { featuredRoutes, purgeExpiredFeatured } from "./routes/featured";
+import { matchesRoutes } from "./routes/matches";
 import { newsletterRoutes } from "./routes/newsletter";
 import { resendAddContact } from "./newsletter/resend";
 import { publicRoutes } from "./routes/public";
@@ -55,6 +56,7 @@ app.use("*", async (c, next) => {
       p.startsWith("/api/chat") ||
       p.startsWith("/api/premium") ||
       p.startsWith("/api/escalations") ||
+      p.startsWith("/api/matches") || // magic-link matches: may carry a revealed contact once unlocked — never cache
       p === "/claim"
     ) {
       // Red-team M4: paid/authenticated/identity responses must never be edge- or proxy-cacheable.
@@ -243,6 +245,20 @@ app.use("/api/featured/reserve", rateLimit("payment"));
 app.use("/api/featured/status/*", rateLimit("public"));
 app.use("/api/featured/llamapay-webhook", rateLimit("payment"));
 app.route("/api", featuredRoutes);
+
+// Magic-link "YOUR MATCHES" (per-owner signed link) — PUBLIC (above the access gate): a human reaches
+// their matches page from a token in their match email and can't hold the founder ACCESS_KEY. The
+// token binds the read to ONE ownerId (no enumeration), and contact is withheld until the bilateral
+// reveal gate clears. CORS for the first-party site fetch; rate-limited as a public read.
+const matchesCors = cors({
+  origin: ["https://ishtar.numetal.xyz", "https://datebook-staging.cloudflare-ooc0z.workers.dev"],
+  allowMethods: ["GET", "OPTIONS"],
+  allowHeaders: ["content-type"],
+  maxAge: 86400,
+});
+app.use("/api/matches", matchesCors);
+app.use("/api/matches", rateLimit("public"));
+app.route("/api", matchesRoutes);
 
 // Everything below requires the staging key.
 app.use("*", accessGate);
