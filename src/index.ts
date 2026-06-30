@@ -234,7 +234,14 @@ const featuredCors = cors({
 app.use("/api/featured", featuredCors);
 app.use("/api/featured/*", featuredCors);
 app.use("/api/featured", rateLimit("public")); // the GET board read — origin-cheap, lightly throttled
-app.use("/api/featured/post", rateLimit("payment")); // the money path — throttle so a leaked flow can't be looped
+app.use("/api/featured/post", rateLimit("payment")); // the AGENT money path — throttle so a leaked flow can't be looped
+// HUMAN path (LlamaPay) — all PUBLIC (above the access gate): a human reaches the OPEN board with no
+// founder key. reserve is a money path (creates a charge) → throttle as payment; status is a public
+// poll → throttle as public; the webhook is server-to-server (LlamaPay), throttled as payment and
+// authenticated by its own HMAC signature (NOT the access gate or rate-limit identity).
+app.use("/api/featured/reserve", rateLimit("payment"));
+app.use("/api/featured/status/*", rateLimit("public"));
+app.use("/api/featured/llamapay-webhook", rateLimit("payment"));
 app.route("/api", featuredRoutes);
 
 // Everything below requires the staging key.

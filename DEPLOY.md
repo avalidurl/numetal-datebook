@@ -105,6 +105,18 @@ wrangler secret put ENCRYPTION_KEY
 # re-encrypt before rotating if real data exists. (scripts/deploy.sh pushes this from .dev.vars.)
 
 wrangler secret put SENTRY_DSN   # optional — error capture is a no-op until set
+
+# The Window — HUMAN payment path (LlamaPay hosted checkout, REDACTED-ID). The agent x402 path needs
+# neither; the human reserve/webhook surfaces route 503 gracefully until BOTH are set.
+wrangler secret put LLAMAPAY_API_KEY
+# paste the FULL `llamapay_sk_…` string. It is sent VERBATIM as the Authorization header value
+# (NO "Bearer" prefix) on POST https://api.llamapay.io/charges.
+
+wrangler secret put LLAMAPAY_WEBHOOK_SECRET
+# the webhook signing secret from the LlamaPay Developer tab. Then point that tab's webhook at
+#   https://api.ishtar.numetal.xyz/api/featured/llamapay-webhook
+# (events charge:pending + charge:confirmed; the handler verifies x-cc-webhook-signature HMAC, is
+#  idempotent on event.id, and always 200s on a verified event so LlamaPay's ≤3-day retries are safe).
 ```
 
 > **Edge rate limit (hardening 2026-06-21; REDACTED-ID 2026-06-30):** `wrangler.toml` declares a native
