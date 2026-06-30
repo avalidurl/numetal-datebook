@@ -22,8 +22,8 @@ describe("GDPR erasure cascades to coach-memory tables (audit HIGH)", () => {
     // Owner + linked wallet (FK), then accrue coach data keyed by that wallet (subject).
     await db.insert(owners).values({ id: OWNER }).run();
     await db.insert(ownerWallets).values({ ownerId: OWNER, address: ADDR, chainFamily: "evm", network: "eip155:84532" }).run();
-    await recordEpisode(db, { subject: ADDR, kind: "advice", content: "Q: hi\nA: hello" });
-    await recordFeedback(db, { subject: ADDR, kind: "debrief", body: "We matched and met; she went quiet after I overshared about my ex." });
+    await recordEpisode(db, env, { subject: ADDR, kind: "advice", content: "Q: hi\nA: hello" });
+    await recordFeedback(db, env, { subject: ADDR, kind: "debrief", body: "We matched and met; she went quiet after I overshared about my ex." });
     await db.insert(reflections).values({ subject: ADDR.toLowerCase(), summary: "You go formal under vulnerability.", cites: "[1]" }).run();
     await db.insert(userFacts).values({ subject: ADDR.toLowerCase(), fact: "prefers slow burn" }).run();
 
