@@ -10,13 +10,21 @@ import { z } from "zod";
 import { chaperone, type GuardFn } from "../chaperone";
 import { egressFilter } from "../xmtp/egress";
 import { ishtarReply, looksLikeSystemLeak, ISHTAR_PROMPT_ANCHORS, type ChatMode } from "../chat/ishtar";
+import {
+  DRAFT_CONFIRM_HINT,
+  NO_DRAFT_YET,
+  extractHeartDoc,
+  looksLikeSubmit,
+  wantsDocDraft,
+  type HeartDocDraft,
+} from "../chat/heartdoc";
 import { intentGate, OFFTOPIC_WARNING } from "../chat/intent";
 import { crisisResponse, detectCrisis, recordCrisisEvent } from "../safety/crisis";
 import { MINOR_REDIRECT, detectMinor, recordMinorEvent } from "../safety/age";
 import { and, desc, eq } from "drizzle-orm";
 import { db as makeDb, type DB } from "../db/client";
 import { chatMessages, chatTopups, events, heartFiles, ownerWallets, owners } from "../db/schema";
-import { seal } from "../crypto/box";
+import { open, seal } from "../crypto/box";
 import { getNumetalPriceUsd, numetalBuyQuote, readNumetalUsd } from "../economics/numetal";
 import type { Env } from "../env";
 import {
@@ -36,6 +44,7 @@ import { accrueBuyback } from "../economics/reserve";
 import { recordEpisode, recordFeedback } from "../coach/memory";
 import { makeX402Provider, SKUS, x402Challenge } from "../payments/x402";
 import { timingSafeEqualStr } from "../util/timing";
+import { docReadyEmail, resendSend } from "../newsletter/resend";
 
 export const chatRoutes = new Hono<{ Bindings: Env }>();
 
@@ -213,6 +222,27 @@ chatRoutes.post("/chat", async (c) => {
   if (inV.verdict !== "allow" && inV.verdict !== "sanitize")
     return c.json({ error: "message held by the chaperone", reason: inV.reason }, 422);
 
+  // (a1) chat→floor bridge: SUBMIT. If the human confirms ("submit") in coach mode, load the dating
+  // doc Ishtar last composed in THIS conversation and route it through the EXISTING submitDatingDoc()
+  // — which owns the $NUMETAL floor + 18+ + chaperone-admission gates (none duplicated here). No model
+  // call, so no credit is charged. The draft was stashed (sealed) as a role:"draft" row last turn.
+  if (mode === "coach" && looksLikeSubmit(message)) {
+    const draft = await loadPendingDraft(db, c.env, address);
+    if (!draft) return c.json({ ok: true, reply: NO_DRAFT_YET, mode, via: "doc_submit" });
+    const sub = await submitDatingDoc(db, c.env, { address, heart: draft });
+    // Clear the stashed draft on a successful submit so a later bare "submit" can't re-fire it.
+    if (sub.code === 200) await db.delete(chatMessages).where(and(eq(chatMessages.address, address), eq(chatMessages.role, "draft"))).run();
+    const reply =
+      sub.code === 200
+        ? (sub.body.message as string)
+        : `I couldn't send it yet: ${(sub.body.error as string) || "the floor turned it away"}.`;
+    return c.json({ ...sub.body, ok: true, reply, mode, via: "doc_submit" }, sub.code as 200 | 400 | 402 | 403 | 413 | 422);
+  }
+
+  // (a2) chat→floor bridge: DRAFT intent — only in coach mode does Ishtar get the heart-doc emit
+  // contract (so she attaches a parseable block the route intercepts post-generation, below).
+  const draftDoc = mode === "coach" && wantsDocDraft(message);
+
   // (b) spend a free-quota message or a paid credit; 402 if neither.
   const charge = await chargeOne(db, c.env, address);
   if (!charge.ok) return c.json({ error: "no credits — top up to keep talking", balance: charge.balance, topup: "/api/chat/topup" }, 402);
@@ -220,10 +250,30 @@ chatRoutes.post("/chat", async (c) => {
   // (c) generate, refunding a paid credit if the model/gateway fails.
   let reply: string;
   try {
-    reply = await ishtarReply(db, c.env, { address, message, mode });
+    reply = await ishtarReply(db, c.env, { address, message, mode, draftDoc });
   } catch {
     if (charge.via === "paid") await addCredits(db, address, 1);
     return c.json({ error: "Ishtar is resting — try again shortly." }, 503);
+  }
+
+  // (c1) chat→floor bridge: capture a composed dating doc. When Ishtar attached a ```heartdoc``` block,
+  // pull it out of the RAW reply BEFORE the secret-shape egress filter runs (a long JSON blob trips it),
+  // stash the parsed draft (sealed, role:"draft") for the human's next-turn "submit", and replace the
+  // visible reply with her clean prose + a submit hint — the human never sees raw JSON. Best-effort.
+  let docDrafted = false;
+  if (draftDoc) {
+    const extracted = extractHeartDoc(reply);
+    if (extracted) {
+      try {
+        await db.delete(chatMessages).where(and(eq(chatMessages.address, address), eq(chatMessages.role, "draft"))).run();
+        await db.insert(chatMessages).values({ address, role: "draft", body: (await seal(c.env, JSON.stringify(extracted.draft))) ?? JSON.stringify(extracted.draft), mode }).run();
+        reply = extracted.cleaned + DRAFT_CONFIRM_HINT;
+        docDrafted = true;
+      } catch {
+        /* draft stash is best-effort; on failure the human just sees the (cleaned) prose */
+        reply = extracted.cleaned;
+      }
+    }
   }
 
   // (d) OUTPUT defenses, ALL fail-closed and independent of each other:
@@ -259,7 +309,7 @@ chatRoutes.post("/chat", async (c) => {
   }
 
   if (!safeReply) return c.json({ ok: true, reply: null, withheld: true, reason: withholdReason, via: charge.via, balance: charge.balance });
-  return c.json({ ok: true, reply: safeReply, mode, via: charge.via, balance: charge.balance });
+  return c.json({ ok: true, reply: safeReply, mode, via: charge.via, balance: charge.balance, ...(docDrafted ? { docDraft: "pending", submitHint: 'reply "submit" to send your dating doc' } : {}) });
 });
 
 /* ---- 4) balance -------------------------------------------------------------------------- */
@@ -360,6 +410,28 @@ export interface SubmitDocInput {
 }
 
 /**
+ * Load the dating doc Ishtar last composed for this wallet in the in-chat draft flow. It was stashed
+ * as the most-recent role:"draft" chat_messages row (sealed JSON). Returns the parsed draft, or null
+ * if none/undecodable. Out-of-band state — these rows are excluded from the model's context window.
+ */
+export async function loadPendingDraft(db: DB, env: Env, address: string): Promise<HeartDocDraft | null> {
+  const row = await db
+    .select({ body: chatMessages.body })
+    .from(chatMessages)
+    .where(and(eq(chatMessages.address, address), eq(chatMessages.role, "draft")))
+    .orderBy(desc(chatMessages.createdAt))
+    .get();
+  if (!row?.body) return null;
+  const json = (await open(env, row.body)) ?? row.body;
+  try {
+    const d = JSON.parse(json);
+    return d && typeof d === "object" && !Array.isArray(d) ? (d as HeartDocDraft) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Core of the chat→floor bridge — testable (guard injectable like admitWithCap). Returns an HTTP
  * {code, body}. Gates in order: 18+ attestation → paid $NUMETAL floor (read-only) → size → chaperone
  * (admission, fail-closed) → create/bind a HELD, wallet-bound owner + sealed heart revision.
@@ -432,6 +504,18 @@ export async function submitDatingDoc(
   }
 
   const hf = await db.insert(heartFiles).values({ ownerId, revision, bodyJson: (await seal(env, heartStr)) ?? "", status: "submitted" }).returning({ id: heartFiles.id }).get();
+
+  // Best-effort "doc ready" confirmation. NEVER blocks or fails the 200 — resendSend is fail-soft and
+  // never throws; the extra try/catch is belt-and-suspenders so a surprise throw can't sink the submit.
+  // Skipped (no-op) when no email was given or RESEND_API_KEY is unset.
+  if (input.email) {
+    try {
+      const mail = docReadyEmail({ displayName: input.displayName });
+      await resendSend(env, { to: input.email, subject: mail.subject, html: mail.html, text: mail.text });
+    } catch {
+      /* confirmation email is best-effort */
+    }
+  }
 
   return {
     code: 200,

@@ -1,5 +1,5 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { submitDatingDoc } from "../src/routes/chat";
 import { db as makeDb } from "../src/db/client";
@@ -84,5 +84,56 @@ describe("chat→floor bridge (submit-doc)", () => {
     expect(thin.code).toBe(400);
     const held = await submitDatingDoc(db, env, { address: ADDR, heart: HEART }, unsafeGuard);
     expect(held.code).toBe(422);
+  });
+});
+
+describe("chat→floor bridge: doc-ready confirmation email", () => {
+  beforeEach(async () => {
+    for (const t of ["heart_files", "owner_wallets", "owners", "chat_sessions", "chat_accounts", "chaperone_decisions"])
+      await env.DB.prepare(`DELETE FROM ${t}`).run();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  // RESEND_API_KEY is unset in the test env → resendSend would skip. Pass an env with the key so the
+  // send actually fires, and stub fetch to observe it. NEWSLETTER_FROM defaults to Ishtar.
+  const mailEnv = { ...env, RESEND_API_KEY: "re_test" } as unknown as Env;
+
+  it("fires a single transactional send with the right to + subject when an email is given", async () => {
+    const db = makeDb(env.DB);
+    await attest18(db, ADDR);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const r = await submitDatingDoc(db, mailEnv, { address: ADDR, heart: HEART, email: "lover@example.com" }, okGuard);
+    expect(r.code).toBe(200);
+
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    const emailCall = calls.find(([u]) => String(u).endsWith("/emails"));
+    expect(emailCall).toBeTruthy();
+    const body = JSON.parse(String(emailCall![1].body));
+    expect(body.to).toBe("lover@example.com");
+    expect(String(body.subject)).toMatch(/dating doc/i);
+  });
+
+  it("still returns 200 if the email send throws", async () => {
+    const db = makeDb(env.DB);
+    await attest18(db, ADDR);
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("resend exploded"); }));
+
+    const r = await submitDatingDoc(db, mailEnv, { address: ADDR, heart: HEART, email: "lover@example.com" }, okGuard);
+    expect(r.code).toBe(200);
+    expect(r.body.status).toBe("pending_verification");
+  });
+
+  it("attempts no send when no email is provided", async () => {
+    const db = makeDb(env.DB);
+    await attest18(db, ADDR);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const r = await submitDatingDoc(db, mailEnv, { address: ADDR, heart: HEART }, okGuard);
+    expect(r.code).toBe(200);
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(calls.some(([u]) => String(u).endsWith("/emails"))).toBe(false);
   });
 });

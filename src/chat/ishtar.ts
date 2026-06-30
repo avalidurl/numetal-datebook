@@ -4,7 +4,7 @@
  * caller chaperones both the human's input and Ishtar's reply (fail-closed) around this function.
  * Multi-turn context is the last few stored messages, kept short and bounded.
  */
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { DB } from "../db/client";
 import { chatMessages } from "../db/schema";
 import { open } from "../crypto/box";
@@ -14,6 +14,7 @@ import { buildPromptAnchors } from "../xmtp/egress";
 import { coachContext } from "../coach/reflect";
 import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
+import { HEARTDOC_ADDENDUM } from "./heartdoc";
 
 export type ChatMode = "chat" | "coach";
 
@@ -77,13 +78,15 @@ export const ISHTAR_PROMPT_ANCHORS = buildPromptAnchors(ISHTAR_SYSTEM + "\n\n" +
 export async function ishtarReply(
   db: DB,
   env: Env,
-  args: { address: string; message: string; mode: ChatMode },
+  args: { address: string; message: string; mode: ChatMode; draftDoc?: boolean },
 ): Promise<string> {
-  // Last few turns for context (oldest→newest), bounded.
+  // Last few turns for context (oldest→newest), bounded. Only real conversation turns — the
+  // chat→floor bridge stashes its composed dating-doc as a role:"draft" row (sealed JSON); that is
+  // out-of-band state, NOT dialogue, so it must never re-enter the model's context window here.
   const recent = await db
     .select({ role: chatMessages.role, body: chatMessages.body })
     .from(chatMessages)
-    .where(eq(chatMessages.address, args.address))
+    .where(and(eq(chatMessages.address, args.address), inArray(chatMessages.role, ["user", "assistant"])))
     .orderBy(desc(chatMessages.createdAt))
     .limit(6)
     .all();
@@ -95,7 +98,10 @@ export async function ishtarReply(
   // In coach mode, inject what Ishtar has learned about THIS person (their cited lovemap) — the
   // evidence-grounded self-knowledge a stateless LLM can't have. Empty until the reflection job runs.
   const coachAddendum = args.mode === "coach" ? COACH_ADDENDUM + (await coachContext(db, args.address)) : "";
-  const system = ISHTAR_SYSTEM + (coachAddendum ? "\n\n" + coachAddendum : "");
+  // When the human asked Ishtar to compose their dating doc (chat→floor bridge), teach the emit
+  // contract so she attaches a parseable ```heartdoc``` block the route intercepts. Coach mode only.
+  const docAddendum = args.draftDoc && args.mode === "coach" ? HEARTDOC_ADDENDUM : "";
+  const system = ISHTAR_SYSTEM + (coachAddendum ? "\n\n" + coachAddendum : "") + docAddendum;
   const messages = [{ role: "system", content: system }, ...history, { role: "user", content: args.message }];
 
   // paid:true — the credit/free-quota system is the spend gate here; the AI Gateway dollar cap is
