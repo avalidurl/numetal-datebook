@@ -45,6 +45,8 @@ export interface Env {
   MIN_DOC_USD?: string; // paid human floor: min USD of $NUMETAL a wallet must hold to submit a dating doc (default 50; "0" disables)
   BASE_RPC_URL?: string; // override the public Base RPC used for the $NUMETAL perk read
   NUMETAL_CA?: string; // override the $NUMETAL contract address
+  NUMETAL_PRICE_TTL_MIN?: string; // price-oracle snapshot freshness in minutes (default 60)
+  NUMETAL_MIN_LIQ_USD?: string; // drop a price quote whose pool liquidity is below this USD floor (default 500)
   // Cloudflare Access (operator email gate) — vars, not secrets.
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
