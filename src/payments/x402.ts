@@ -17,6 +17,10 @@ export const SKUS: Record<string, Sku> = {
   date_brief: { id: "date_brief", priceUsd: "$10.00", route: "/api/premium/date-brief" },
   priority_cycle: { id: "priority_cycle", priceUsd: "$1.00", route: "/api/premium/priority-cycle" },
   chat_topup: { id: "chat_topup", priceUsd: "$1.00", route: "/api/chat/topup" },
+  // The Window (REDACTED-ID): pay-to-be-seen public dating-doc slot, 24h, 10 live max.
+  // priceUsd is the catalog/challenge default; the live price is a runtime settings knob
+  // ('featured_price_usd'), read in the route so it changes without a redeploy.
+  featured_slot: { id: "featured_slot", priceUsd: "$50.00", route: "/api/featured/post" },
 };
 
 // Staging defaults (testnet only, no key). eip155:84532 = Base Sepolia.
