@@ -176,12 +176,12 @@ featuredRoutes.post("/featured/post", async (c) => {
   if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
 
   const db = makeDb(c.env.DB);
-  const r = await claimAndPublishFeatured(db, c.env, parsed.data, c.req.header("x-payment"));
+  const r = await claimAndPublishFeatured(db, c.env, parsed.data, c.req.header("payment-signature") ?? c.req.header("x-payment")); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
   switch (r.kind) {
     case "full":
       return c.json({ error: "the window is full — all featured slots are taken; try again later", capReached: true }, 409);
     case "challenge":
-      return x402Challenge({ sku: SKUS.featured_slot!, network: makeX402Provider(c.env).network, payTo: c.env.PAY_TO, orderId: r.orderId });
+      return x402Challenge(c.env, SKUS.featured_slot!, c.env.PAY_TO, r.orderId);
     case "unpaid":
       return c.json({ error: "payment not verified", reason: r.reason }, 402);
     case "blocked":
