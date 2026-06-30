@@ -1,0 +1,19 @@
+title = "numetal-datebook gitleaks config"
+
+# Use the full default ruleset, then allowlist known false positives below.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "False positives: public client-side keys, a public CF Access audience, intentional red-team test fixtures, and local-only .claude tooling. Real secrets never live in these — they go via `wrangler secret put`."
+paths = [
+  # wrangler.toml holds only public vars by design (ACCESS_AUD is a public CF Access audience tag);
+  # real secrets are pushed with `wrangler secret put`, never committed here.
+  '''(^|/)wrangler\.toml$''',
+  # bundled client-side JS — Privy app-id + Amplitude key are PUBLIC client keys (shipped to browsers).
+  '''(^|/)public/claim\.js$''',
+  # red-team test that PLANTS fake secrets to verify the egress filter redacts them.
+  '''(^|/)test/redteam-chat-egress\.test\.ts$''',
+  # local-only agent worktrees / tooling — never part of the published repo.
+  '''(^|/)\.claude/''',
+]
