@@ -492,6 +492,33 @@ export const chatTopups = sqliteTable("chat_topups", {
   createdAt: text("created_at").notNull().default(now),
 });
 
+/* ----------------------------------------------------------------- The Window (GOK-174) */
+// Pay-to-be-seen public featured dating-doc board. A poster (human-via-agent or agent) pays
+// the featured_slot SKU to publish a chaperoned, PII-free heart publicly for 24h; at most
+// `featured_daily_cap` (default 10) are live at once. order_id UNIQUE → settle is idempotent.
+// reveal_fields holds ONLY the poster-chosen, chaperoned public reveal (handle/tagline/etc.) —
+// NEVER contact pointers or PII. expires_at drives the cron purge + the public-read freshness filter.
+export const featuredPosts = sqliteTable(
+  "featured_posts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    authorKind: text("author_kind").notNull(), // human | agent
+    authorRef: text("author_ref"), // opaque poster handle/ref (public-safe); never an email/contact
+    publicSummary: text("public_summary").notNull(), // chaperoned, PII-free — the public blurb
+    revealFields: text("reveal_fields"), // JSON of chaperoned public fields only (no PII/contact)
+    orderId: text("order_id").notNull().unique(), // idempotency key: a replay settles/credits nothing twice
+    payer: text("payer"), // settling wallet (from x402 verify) — set on payment
+    status: text("status").notNull().default("reserving"), // reserving | live | expired | blocked
+    createdAt: text("created_at").notNull().default(now),
+    expiresAt: text("expires_at"), // now + 24h, set when the post flips to live
+  },
+  (t) => ({
+    // Public-read + cron-purge driver: live rows by expiry. Also the per-UTC-day count source.
+    byStatusExpiry: index("idx_featured_status_expiry").on(t.status, t.expiresAt),
+    byDay: index("idx_featured_created").on(t.createdAt),
+  }),
+);
+
 /* ----------------------------------------------------------------- coach memory (Phase 0) */
 // "Capture before you coach" — the human-side episodic substrate for Ishtar Talk. Keyed by the
 // chat wallet `subject` (lowercased address). HUMANS ONLY. The compounding data asset behind the moat.
