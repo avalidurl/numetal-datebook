@@ -238,6 +238,7 @@ export async function reserveHumanSlot(
   },
 ): Promise<ReserveOutcome> {
   const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
+  const priceUsd = await featuredPriceUsd(db); // runtime knob — what the human is actually charged
   // The order id is server-authoritative + high-entropy (finding #2): a uuid the client can't predict
   // or forge, so it can't enumerate another poster's status (IDOR) or collide order rows.
   const orderId = deps?.orderId ?? `featured:human:${crypto.randomUUID()}`;
@@ -306,7 +307,7 @@ export async function reserveHumanSlot(
   const cancelUrl = WINDOW_PAGE_URL;
   const charge = deps?.createCharge
     ? await deps.createCharge(orderId, redirectUrl, cancelUrl)
-    : await createLlamapayCharge(env, { orderId, amount: "50.00", currency: "USD", redirectUrl, cancelUrl });
+    : await createLlamapayCharge(env, { orderId, amount: priceUsd, currency: "USD", redirectUrl, cancelUrl });
   if (!charge.ok || !charge.hostedUrl) {
     // Free the just-claimed slot so a charge failure can't brick it (mark expired — auditable, keeps the row).
     await env.DB.prepare("UPDATE featured_posts SET status='expired' WHERE id=?1 AND status='reserving'").bind(claim.id).run();
@@ -326,11 +327,20 @@ async function slotOrdinal(env: Env, postId: number): Promise<number> {
   return Math.max(1, Number(r?.c ?? 1));
 }
 
+/** The live featured-slot price in USD ("X.XX") — a runtime knob ('featured_price_usd') read in the
+ * route so it changes WITHOUT a redeploy (the SKU's $50 is only the catalog default). Normalized to
+ * digits+dot and required positive, else the $50 default. Governs the human (LlamaPay) charge + receipt. */
+async function featuredPriceUsd(db: DB): Promise<string> {
+  const raw = (await getSetting(db, "featured_price_usd", "50.00")).replace(/[^0-9.]/g, "");
+  return raw && Number(raw) > 0 ? raw : "50.00";
+}
+
 /** Build the shared TR-100 receipt input for a row, then render it. */
 async function buildReceiptForRow(
   env: Env,
   row: { id: number; author_kind: string; author_ref: string | null; public_summary: string; payment_ref: string | null; paid_at: string | null; expires_at: string | null; charge_hosted_url: string | null; order_id: string },
   cap: number,
+  priceUsd: string,
 ): Promise<{ receipt: ReceiptInput; html: string; document: string }> {
   const slotOf = await slotOrdinal(env, row.id);
   const paidAt = row.paid_at ?? new Date().toISOString();
@@ -343,7 +353,7 @@ async function buildReceiptForRow(
     authorKind: row.author_kind === "agent" ? "agent" : "human",
     handle: row.author_ref,
     publicSummary: row.public_summary,
-    amountUsd: "50.00",
+    amountUsd: priceUsd,
     paidAt,
     windowFrom: paidAt,
     windowTo,
@@ -456,6 +466,7 @@ export async function handleLlamapayEvent(
   const expiresAt = new Date(Date.now() + TTL_MS).toISOString();
   const paymentRef = `llamapay:${event.data.id}`;
   const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
+  const priceUsd = await featuredPriceUsd(db); // the price in effect when this payment confirmed
   const reserveFloor = new Date(Date.now() - RESERVE_TTL_MS).toISOString();
 
   // Flip to live. For a still-'reserving' row this is an unconditional-on-status flip. For an 'expired'
@@ -494,7 +505,7 @@ export async function handleLlamapayEvent(
       .prepare(
         "INSERT OR IGNORE INTO featured_orphaned_payments (order_id, llamapay_payment_id, email_sealed, amount, received_at) VALUES (?1, ?2, ?3, ?4, ?5)",
       )
-      .bind(orderId, event.data.id, row.email_sealed ?? null, "50.00", paidAt)
+      .bind(orderId, event.data.id, row.email_sealed ?? null, priceUsd, paidAt)
       .run();
     await env.DB
       .prepare("UPDATE featured_posts SET status='orphaned', paid_at=?2, payment_ref=?3 WHERE id=?1 AND status IN ('expired','reserving')")
@@ -507,7 +518,7 @@ export async function handleLlamapayEvent(
 
   // First (winning) flip only: accrue buyback once. (No 18+ wallet to attest — the human attested
   // over18:true at reserve; the slot is bound to the LlamaPay payment, not a wallet.)
-  await accrueBuyback(db, env, orderId, 50).catch(() => {});
+  await accrueBuyback(db, env, orderId, Number(priceUsd)).catch(() => {});
 
   // Mint + email the TR-100 receipt (best-effort; never fails the 200). Record the send outcome on the
   // row (finding #7) so GET /status can report emailSent.
@@ -518,6 +529,7 @@ export async function handleLlamapayEvent(
         env,
         { ...row, payment_ref: paymentRef, paid_at: paidAt, expires_at: expiresAt },
         cap,
+        priceUsd,
       );
       const email = await open(env, row.email_sealed);
       if (email) {
@@ -561,7 +573,8 @@ export async function getFeaturedStatus(env: Env, orderId: string): Promise<Feat
   if (status !== "live") return { status, emailSent };
   const db = makeDb(env.DB);
   const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
-  const built = await buildReceiptForRow(env, row, cap);
+  const priceUsd = await featuredPriceUsd(db);
+  const built = await buildReceiptForRow(env, row, cap, priceUsd);
   return { status, emailSent, receipt: built.receipt, receiptHtml: built.html };
 }
 
