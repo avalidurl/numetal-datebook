@@ -8,9 +8,12 @@ importers:
 
   .:
     dependencies:
-      '@persona/sdk-node':
-        specifier: 0.3.1
-        version: 0.3.1
+      '@x402/evm':
+        specifier: ^2.17.0
+        version: 2.17.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@x402/fetch':
+        specifier: ^2.17.0
+        version: 2.17.0
       drizzle-orm:
         specifier: ^0.38.0
         version: 0.38.4(@cloudflare/workers-types@4.20260613.1)(react@18.3.1)
@@ -47,10 +50,6 @@ packages:
 
   '@adraffy/ens-normalize@1.11.1':
     resolution: {integrity: sha512-nhCBV3quEgesuf7c7KYfperqSS14T8bYuvJ8PcLJp6znkZpFc0AuW4qBtr8eKVyPPe/8RSr7sglCWPU5eaxwKQ==}
-
-  '@cloudflare/blindrsa-ts@0.4.6':
-    resolution: {integrity: sha512-n+CAo1hM78qkiouXB0Io1pPVBFKIaJqU7FqdCDNtBAB7q2bBpQOifv7Om3Jln/nx+IhjQAjlDjp8la3e9Yg9Bw==}
-    engines: {node: '>=24'}
 
   '@cloudflare/kv-asset-handler@0.3.4':
     resolution: {integrity: sha512-YLPHc8yASwjNkmcDMQMY35yiWjoKAKnhUbPRszBRS0YgH+IXtsMp61j+yTcnCE3oO2DgP0U3iejLC8FTtKDC8Q==}
@@ -1131,10 +1130,6 @@ packages:
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
 
-  '@persona/sdk-node@0.3.1':
-    resolution: {integrity: sha512-ipBj0ZUe+99JjH+rUie6FNQZT+A9FveWeaz4J8YXGEqF5lHJ2xicXTMrdnZARCzO5wFhP190H0PqhANlBZMSOA==}
-    engines: {node: '>=24'}
-
   '@petamoriken/float16@3.9.3':
     resolution: {integrity: sha512-8awtpHXCx/bNpFt4mt2xdkgtgVvKqty8VbjHI/WWWQuEw+KLzFot3f4+LkQY9YmOtq7A5GdOnqoIC8Pdygjk2g==}
 
@@ -1319,6 +1314,15 @@ packages:
 
   '@vitest/utils@2.1.9':
     resolution: {integrity: sha512-v0psaMSkNJ3A2NMrUEHFRzJtDPFn+/VWZ5WxImB21T9fjucJRmS7xCS3ppEnARb9y11OAzaD+P2Ps+b+BGX5iQ==}
+
+  '@x402/core@2.17.0':
+    resolution: {integrity: sha512-BBooe9Kewl5KLaKadElFwhZzZ+n/X/m2djzGtc7OY51D8fk2vHTVvDZtBFEJYdJxtQoUZMKX73hew0ss81FENQ==}
+
+  '@x402/evm@2.17.0':
+    resolution: {integrity: sha512-MjeouRdVJ1Y20Ikk03RHlnyOuo2FRkh0Nnrxt8aku2qt5fr5M7U8pUGn5iR6aFfRK3xlh48bp0Kypv1zjKuegw==}
+
+  '@x402/fetch@2.17.0':
+    resolution: {integrity: sha512-iy6ar1JTgs4gzdlc2q2Z7nuL5keBkQhoD4v5niVlTwLoivVvHnAA0p/wK5WTWRrJ1b+el8pthkjFS0Jc3nMIIg==}
 
   abitype@1.2.3:
     resolution: {integrity: sha512-Ofer5QUnuUdTFsBRwARMoWKOH1ND5ehwYhJ3OJ/BQO+StkwQjHw0XyVh4vDttzHB7QOFhPHa/o413PJ82gU/Tg==}
@@ -1759,9 +1763,6 @@ packages:
   simple-swizzle@0.2.4:
     resolution: {integrity: sha512-nAu1WFPQSMNr2Zn9PGSZK9AGn4t/y97lEm+MXTtUDwfP0ksAIX4nO+6ruD9Jwut4C49SB1Ws+fbXsm/yScWOHw==}
 
-  sjcl@1.0.9:
-    resolution: {integrity: sha512-dWM71tkSHxe7zEZj0/COjtJdmErIxp7UMp8a6D4xx8dTTtJLc4lFL+HAX8s6lvASyQQ2iYMHwa7rhhQq7MT5MA==}
-
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
@@ -1992,10 +1993,6 @@ packages:
 snapshots:
 
   '@adraffy/ens-normalize@1.11.1': {}
-
-  '@cloudflare/blindrsa-ts@0.4.6':
-    dependencies:
-      sjcl: 1.0.9
 
   '@cloudflare/kv-asset-handler@0.3.4':
     dependencies:
@@ -2628,10 +2625,6 @@ snapshots:
 
   '@noble/hashes@1.8.0': {}
 
-  '@persona/sdk-node@0.3.1':
-    dependencies:
-      '@cloudflare/blindrsa-ts': 0.4.6
-
   '@petamoriken/float16@3.9.3': {}
 
   '@poppinss/colors@4.1.6':
@@ -2779,6 +2772,24 @@ snapshots:
       '@vitest/pretty-format': 2.1.9
       loupe: 3.2.1
       tinyrainbow: 1.2.0
+
+  '@x402/core@2.17.0':
+    dependencies:
+      zod: 3.25.76
+
+  '@x402/evm@2.17.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)':
+    dependencies:
+      '@x402/core': 2.17.0
+      viem: 2.52.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
+      zod: 3.25.76
+    transitivePeerDependencies:
+      - bufferutil
+      - typescript
+      - utf-8-validate
+
+  '@x402/fetch@2.17.0':
+    dependencies:
+      '@x402/core': 2.17.0
 
   abitype@1.2.3(typescript@5.9.3)(zod@3.25.76):
     optionalDependencies:
@@ -3299,8 +3310,6 @@ snapshots:
     dependencies:
       is-arrayish: 0.3.4
     optional: true
-
-  sjcl@1.0.9: {}
 
   source-map-js@1.2.1: {}
 

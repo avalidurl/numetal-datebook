@@ -42,7 +42,7 @@ import {
 } from "../economics/chatcredits";
 import { accrueBuyback } from "../economics/reserve";
 import { recordEpisode, recordFeedback } from "../coach/memory";
-import { makeX402Provider, SKUS, x402Challenge } from "../payments/x402";
+import { makeX402Provider, SKUS, x402Challenge, encodeX402Header } from "../payments/x402";
 import { timingSafeEqualStr } from "../util/timing";
 import { docReadyEmail, resendSend } from "../newsletter/resend";
 
@@ -126,8 +126,8 @@ chatRoutes.post("/chat/topup", async (c) => {
   const sku = SKUS.chat_topup!;
   const provider = makeX402Provider(c.env);
   const orderId = `chattopup:${parsed.data.ref}`;
-  const paymentHeader = c.req.header("x-payment");
-  if (!paymentHeader) return x402Challenge({ sku, network: provider.network, payTo: c.env.PAY_TO, orderId });
+  const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
+  if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
 
   const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
   if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
@@ -156,6 +156,8 @@ chatRoutes.post("/chat/topup", async (c) => {
   }
   await attest18(db, v.payer); // over18 confirmed above → recorded
   const { token, expiresAt } = await mintSession(db, v.payer, "topup");
+  // x402 v2 settlement confirmation — full v2 clients read this PAYMENT-RESPONSE header after a successful settle.
+  if (v.tx) c.header("PAYMENT-RESPONSE", encodeX402Header({ success: true, transaction: v.tx, network: v.network, payer: v.payer }));
   return c.json({ ok: true, credited: !!first, sessionToken: token, expiresAt, address: v.payer.toLowerCase(), ...(await getBalance(db, c.env, v.payer)) });
 });
 
