@@ -185,32 +185,16 @@ export async function claimAndPublishFeatured(
   if ((flip.meta.changes ?? 0) === 1) {
     await attest18(db, v.payer); // over18 confirmed at the route → recorded (defensible adults-only record)
     await accrueBuyback(db, env, null, Number(sku.priceUsd.replace("$", ""))); // no premium_orders row → null ref
-    // ENROL link for the AGENT path: NEVER fabricate a persona for an agent post. If the post's authorRef
-    // matches an EXISTING persona handle, link owner_id/persona_id to it (so match-notify's owner_id join
-    // works for an already-on-floor agent too); otherwise skip — the agent is its own dater, enrolled via
-    // /personas, not invented here. The human path's full owner+persona creation lives in the webhook.
-    if (input.authorRef) {
-      await linkExistingPersona(env, postId, input.authorRef).catch(() => {});
-    }
+    // The AGENT x402 path deliberately leaves owner_id/persona_id NULL. We do NOT stamp a persona link
+    // from the client-supplied authorRef: nothing proves the caller OWNS that handle, so matching it
+    // against personas.handle would let an attacker paste a victim's public handle, pay, and graft the
+    // victim's owner_id onto their post — tripping the human match-notify gate into an unsolicited
+    // "you have a match" email (paid griefing; breaks the no-unsolicited-email rule). An agent is its
+    // own dater: it matches via the persona IT enrolled through /personas, keyed by its own identity —
+    // NOT by a featured row's owner_id. owner_id is set ONLY by the trusted server-side
+    // enrolFeaturedHuman for a real human payer.
   }
   return { kind: "live", id: postId, expiresAt, payer: v.payer.toLowerCase(), tx: v.tx };
-}
-
-/**
- * Best-effort AGENT-path link: if `handle` matches an existing persona, stamp its owner_id + persona_id
- * onto the featured post (idempotent — only writes when the post's owner_id is still null). Creates
- * NOTHING: an agent post with no matching persona is left unlinked (we never fabricate an agent persona).
- */
-async function linkExistingPersona(env: Env, postId: number, handle: string): Promise<void> {
-  const persona = await env.DB
-    .prepare("SELECT id, owner_id FROM personas WHERE handle=?1")
-    .bind(handle)
-    .first<{ id: number; owner_id: number | null }>();
-  if (!persona) return; // no existing persona → skip (do NOT fabricate one)
-  await env.DB
-    .prepare("UPDATE featured_posts SET owner_id=?2, persona_id=?3 WHERE id=?1 AND owner_id IS NULL")
-    .bind(postId, persona.owner_id ?? null, persona.id)
-    .run();
 }
 
 /* ───────────────────────────── HUMAN payment path (LlamaPay) ─────────────────────────────────────
@@ -426,9 +410,15 @@ async function alertOrphanedPayment(env: Env, orderId: string, paymentId: string
  * persona to status='admitted', which IS what makes it matchable — the match coordinator selects
  * candidates by `personas.status='admitted'`, so admission auto-enrols into courtship (no extra step).
  *
- * IDEMPOTENT by owner_id: if featured_posts.owner_id is already set (a webhook replay or a re-driven
- * event), we skip entirely — no second owner, no second persona. The slot's owner_id is THE shared
- * contract the match-notify sibling joins on.
+ * IDEMPOTENT AT THE WRITE (not just on the post's owner_id). Two layers:
+ *   1. Fast skip: if featured_posts.owner_id is already set (a clean prior enrol), return immediately.
+ *   2. Reuse-on-rerun: the persona handle is DETERMINISTIC (`window-<order_id>`, unique-constrained), so
+ *      BEFORE inserting we look the persona up by that handle. If a prior run already created it but the
+ *      final link UPDATE never landed (a throw between admit and link left the post's owner_id NULL and
+ *      the owner ORPHANED), we REUSE that owner/persona and just (re)link — we do NOT insert a second
+ *      owner. This is what makes enrol idempotent across a partial failure, not only a clean replay.
+ * The (re)link UPDATE is guarded `WHERE id=? AND owner_id IS NULL` so a concurrent winner can't be
+ * clobbered. The slot's owner_id is THE shared contract the match-notify sibling joins on.
  *
  * Contact REVEAL stays gated DOWNSTREAM (identity_verified + intro consent + 18+ at reveal time): the
  * sealed email becomes the owner's contactRef, which is NEVER served to boards — enrol only makes the
@@ -448,8 +438,39 @@ export async function enrolFeaturedHuman(
   },
   deps?: { guard?: GuardFn },
 ): Promise<{ enrolled: boolean; ownerId?: number; personaId?: number; reason?: string }> {
-  // Idempotency: owner_id already linked → this post was enrolled on a prior winning flip. Skip.
+  // Idempotency (layer 1): owner_id already linked → this post was enrolled on a prior winning flip. Skip.
   if (post.owner_id != null) return { enrolled: false, reason: "already enrolled" };
+
+  // The persona handle is DETERMINISTIC + unique-constrained: one persona per featured order. It is also
+  // the idempotency anchor — a re-run resolves to the SAME handle, so a prior (even partially-failed)
+  // enrol is discoverable here.
+  const handle = `window-${post.order_id}`.slice(0, 64);
+
+  // Idempotency (layer 2): reuse-on-rerun. If a prior enrol already created the persona for this order
+  // but the final link UPDATE never landed (a throw after admit left the owner ORPHANED and the post's
+  // owner_id NULL), find it by the deterministic handle and REUSE its owner/persona — do NOT insert a
+  // second owner. This makes a re-claim after a partial failure converge to EXACTLY ONE owner+persona.
+  const existingPersona = await env.DB
+    .prepare("SELECT id, owner_id FROM personas WHERE handle=?1")
+    .bind(handle)
+    .first<{ id: number; owner_id: number | null }>();
+  if (existingPersona) {
+    // (Re)link the post to the already-existing owner/persona. Guarded `owner_id IS NULL` so a concurrent
+    // winner is never clobbered. If owner_id is somehow null on the persona we still relink the post's
+    // persona_id and leave owner_id as-is (the persona row is the source of truth for the owner).
+    if (existingPersona.owner_id != null) {
+      await env.DB
+        .prepare("UPDATE featured_posts SET owner_id=?2, persona_id=?3 WHERE id=?1 AND owner_id IS NULL")
+        .bind(post.id, existingPersona.owner_id, existingPersona.id)
+        .run();
+    }
+    return {
+      enrolled: true,
+      ownerId: existingPersona.owner_id ?? undefined,
+      personaId: existingPersona.id,
+      reason: "reused existing persona (re-link)",
+    };
+  }
 
   // Create the owner exactly like the onboard heart-file path: the sealed email is the private
   // contactRef (already sealed at reserve in email_sealed — re-used verbatim, never re-plaintexted),
@@ -470,15 +491,15 @@ export async function enrolFeaturedHuman(
   const ownerId = ownerRow.id;
 
   // The dating "heart": the chaperoned public_summary the human published, plus the reveal note. This is
-  // the same shape /personas feeds admitWithCap (heartText). The persona handle is unique-constrained, so
-  // we derive a stable, collision-resistant one from the order id (one persona per featured order).
+  // the same shape /personas feeds admitWithCap (heartText).
   const revealNote = post.reveal_fields ? String(post.reveal_fields).trim() : "";
   const heartText = revealNote ? `${post.public_summary}\n\n${revealNote}` : post.public_summary;
-  const handle = `window-${post.order_id}`.slice(0, 64);
 
   // SAME admission path /personas uses → atomic cap + fail-closed chaperone. persona_age MUST be "18+"
   // (carried from the reserve over18 gate). The chaperone already passed pre_publish at reserve; the
-  // admission chaperone is a second, independent fail-closed gate (defense in depth) on the heart.
+  // admission chaperone is a second, independent fail-closed gate (defense in depth) on the heart. The
+  // unique handle means a re-run that reached this point (no prior persona) inserts exactly once; a
+  // re-run AFTER this point is caught by the reuse-lookup above (same handle) and never reinserts.
   const admit = await admitWithCap(
     db,
     env,
@@ -494,8 +515,12 @@ export async function enrolFeaturedHuman(
 
   // Link the post → owner/persona. owner_id is the shared-contract link; set it even if the cap was full
   // (the persona stays 'pending' and admits on a later cycle) so the enrol is recorded + idempotent.
+  // Guarded `owner_id IS NULL` so a concurrent winner can't be clobbered (a partial-failure re-run that
+  // reused the persona above already set owner_id; this UPDATE then no-ops). The persona row was already
+  // inserted by admitWithCap above, so even if THIS UPDATE throws, the re-claim's reuse-lookup finds the
+  // persona by handle and converges — no orphaned owner.
   await env.DB
-    .prepare("UPDATE featured_posts SET owner_id=?2, persona_id=?3 WHERE id=?1")
+    .prepare("UPDATE featured_posts SET owner_id=?2, persona_id=?3 WHERE id=?1 AND owner_id IS NULL")
     .bind(post.id, ownerId, admit.personaId ?? null)
     .run();
 
