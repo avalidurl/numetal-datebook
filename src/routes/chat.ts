@@ -16,7 +16,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db as makeDb, type DB } from "../db/client";
 import { chatMessages, chatTopups, heartFiles, ownerWallets, owners } from "../db/schema";
 import { seal } from "../crypto/box";
-import { readNumetalUsd } from "../economics/numetal";
+import { getNumetalPriceUsd, readNumetalUsd } from "../economics/numetal";
 import type { Env } from "../env";
 import {
   addCredits,
@@ -353,7 +353,8 @@ export async function submitDatingDoc(
   // read → 0 → gated. "0" disables (e.g. tests). Same oracle the free-quota perk already trusts.
   const minUsd = Number(env.MIN_DOC_USD ?? "50");
   if (minUsd > 0) {
-    const { usdHeld } = await readNumetalUsd(input.address, { rpcUrl: env.BASE_RPC_URL, contract: env.NUMETAL_CA });
+    const priceUsd = await getNumetalPriceUsd(db, env); // cached, cross-checked, one-sided-smoothed (anti pump-to-pass)
+    const { usdHeld } = await readNumetalUsd(input.address, { rpcUrl: env.BASE_RPC_URL, contract: env.NUMETAL_CA, priceUsd });
     if (usdHeld < minUsd)
       return {
         code: 402,
