@@ -14,6 +14,9 @@ paths = [
   '''(^|/)public/claim\.js$''',
   # red-team test that PLANTS fake secrets to verify the egress filter redacts them.
   '''(^|/)test/redteam-chat-egress\.test\.ts$''',
+  # The Window / LlamaPay tests use fake fixture keys (llamapay_sk_test_123, whsec_test_*) to
+  # exercise the charge-auth + webhook-signature paths. Real keys go via `wrangler secret put`.
+  '''(^|/)test/window-llamapay\.test\.ts$''',
   # local-only agent worktrees / tooling — never part of the published repo.
   '''(^|/)\.claude/''',
 ]
