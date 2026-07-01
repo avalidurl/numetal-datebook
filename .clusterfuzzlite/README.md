@@ -1,25 +1,26 @@
-# ClusterFuzzLite
+# ClusterFuzzLite / OSS-Fuzz build integration (JavaScript / Jazzer.js)
 
-Continuous coverage-guided fuzzing (Jazzer.js) run in GitHub Actions — the observable upgrade to a
-hand-rolled nightly jazzer cron. Reuses the same `fuzz/*.fuzz.ts` targets as `pnpm fuzz:jazzer`.
+`Dockerfile` + `build.sh` are a valid **OSS-Fuzz build integration** for this repo's Jazzer.js targets:
+`build.sh` installs pnpm deps, esbuild-bundles each `fuzz/*.fuzz.ts` target → CJS (`module.exports.fuzz`),
+registers it via `compile_javascript_fuzzer`, and ships `fuzz/seeds/<name>/` as its seed corpus.
 
-- **`Dockerfile`** — OSS-Fuzz `base-builder-javascript` image + this repo.
-- **`build.sh`** — installs pnpm deps, esbuild-bundles each `fuzz/*.fuzz.ts` target → CJS
-  (`module.exports.fuzz`), registers it via `compile_javascript_fuzzer`, and ships
-  `fuzz/seeds/<name>/` as that fuzzer's seed corpus.
-- **`../.github/workflows/cflite_pr.yml`** — on every PR, fuzzes **only the code changed in that PR**
-  (`mode: code-change`, 5 min) and **fails the check on a new crash**.
-- **`../.github/workflows/cflite_batch.yml`** — nightly (+ manual) 30-min batch campaign over all targets.
-- Property-based (fast-check) fuzzing stays in `../.github/workflows/fuzz.yml` (`pnpm fuzz`, blocking).
+## ⚠️ The ClusterFuzzLite GitHub Action cannot fuzz JavaScript (as of 2026-07)
+The `google/clusterfuzzlite/actions/{build_fuzzers,run_fuzzers}@v1` CIFUZZ path **cannot fuzz a JS project**:
+- OSS-Fuzz's `helper.py` auto-sets `SANITIZER=none` for `language: javascript`, and its `SANITIZERS`
+  constant includes `none`.
+- But **CIFUZZ's `config_utils.py` uses a stricter list** — `['address','memory','undefined','coverage']`,
+  **missing `none`** — and does not special-case JS. So: `address`/`memory`/`undefined` are rejected
+  (`ERROR: JavaScript projects cannot be fuzzed with sanitizers`), and `none` is rejected by CIFUZZ
+  (`Invalid SANITIZER: none`). No `sanitizer` value works → the Action can't run.
 
-Current targets: `redactPII`, `parsePaymentHeader`, `llamapay-webhook`. Add a `fuzz/<name>.fuzz.ts`
-(+ optional `fuzz/seeds/<name>/`) and it's picked up automatically by both `build.sh` and `pnpm fuzz:jazzer`.
+**What we run instead:** the coverage-guided Jazzer.js layer runs directly in
+`../.github/workflows/fuzz.yml` (`pnpm fuzz:jazzer`, nightly + a growing cached corpus, crash → red build)
+— continuous coverage-guided fuzzing in CI, minus ClusterFuzzLite's dashboard/dedup wrapper. Property-based
+(fast-check) fuzzing blocks every PR in the same file.
 
-## Corpus & crash storage
-Uses the **GitHub Actions cache** by default — works on private repos with no extra setup. For a
-persistent/shareable corpus + published HTML coverage reports, add a `storage-repo` (a separate git repo)
-and a `PERSONAL_ACCESS_TOKEN` repo secret to the build/run steps (see the ClusterFuzzLite docs) and a
-`cflite_cron.yml` with `mode: coverage`. Optional.
+**These files stay** because they *do* work on the full OSS-Fuzz continuous service (which uses `helper.py`,
+not CIFUZZ) — relevant if this repo is ever open-sourced + onboarded. For a hosted dashboard on a private
+repo, the practical options are commercial (Code Intelligence CI Fuzz — makers of Jazzer.js — or Mayhem).
 
-## Local equivalent
-`pnpm fuzz:jazzer` runs the same targets locally (via `fuzz/run-jazzer.sh`, esbuild + jazzer).
+## Local
+`pnpm fuzz:jazzer` runs the same targets via `fuzz/run-jazzer.sh` (esbuild + jazzer).
