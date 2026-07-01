@@ -66,4 +66,31 @@ describe("x402 settle-then-persist", () => {
     const ord = await db.select().from(premiumOrders).where(eq(premiumOrders.orderId, "o_ok")).get();
     expect(ord?.status).toBe("fulfilled");
   });
+
+  it("SEC#1/#3: a retry short-circuits BEFORE settle — verify() runs once, a fulfilled order is never flipped to failed", async () => {
+    const db = makeDb(env.DB);
+    await seedOrder(db, "o_idem");
+    let verifyCalls = 0;
+    // A shared counter across both provider instances so we can prove settle is attempted exactly once.
+    const counting = (verified: boolean): PaymentProvider => ({
+      network: "eip155:84532",
+      facilitator: "mock",
+      async verify() {
+        verifyCalls++;
+        return verified ? { verified: true, payer: "0xpayer", tx: "0xtx", amountUsdc: "5" } : { verified: false, raw: "authorization already spent" };
+      },
+    });
+    const r1 = await settleAndPersist(db, env, counting(true), { orderId: "o_idem", sku, payTo: "0xpay" }, "PAY-N1");
+    expect(r1.ok).toBe(true);
+    // The retry re-signs a FRESH authorization (new nonce) — on mainnet provider.verify() would settle a
+    // SECOND on-chain transfer. The idempotency guard must short-circuit BEFORE verify(): even a provider
+    // that WOULD verify true is never called (no double-charge), and a false (already-spent) result must
+    // NOT flip the fulfilled order to 'failed'.
+    const r2 = await settleAndPersist(db, env, counting(false), { orderId: "o_idem", sku, payTo: "0xpay" }, "PAY-N2");
+    expect(r2.ok).toBe(true); // short-circuited to the prior success
+    expect(verifyCalls).toBe(1); // settle attempted exactly once — no double-charge
+    const ord = await db.select().from(premiumOrders).where(eq(premiumOrders.orderId, "o_idem")).get();
+    expect(ord?.status).toBe("fulfilled"); // NOT flipped to failed (#3)
+    expect(await db.select().from(paymentReceipts).where(eq(paymentReceipts.orderId, "o_idem")).all()).toHaveLength(1);
+  });
 });

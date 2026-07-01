@@ -34,10 +34,21 @@ export async function setSetting(db: DB, key: string, value: string): Promise<vo
     .run();
 }
 
-async function spend(db: DB, day: string, callerRef?: string, tier?: string): Promise<number> {
+async function spend(
+  db: DB,
+  day: string,
+  callerRef?: string,
+  tier?: string,
+  scope?: { excludeChat?: boolean; onlyChat?: boolean },
+): Promise<number> {
   const conds = [eq(inferenceCosts.day, day)];
   if (callerRef) conds.push(eq(inferenceCosts.callerRef, callerRef));
   if (tier) conds.push(eq(inferenceCosts.tier, tier));
+  // SEC-2026-07-01(#8): the matchmaking (global) cap must not be drained by public chat, and chat needs
+  // its OWN ceiling. `excludeChat` drops chat:* spend from the matchmaking denominator; `onlyChat` sums
+  // just chat:* spend for chat's dedicated cap. All chat inference is callerRef 'chat:<addr>'.
+  if (scope?.excludeChat) conds.push(sql`${inferenceCosts.callerRef} NOT LIKE 'chat:%'`);
+  if (scope?.onlyChat) conds.push(sql`${inferenceCosts.callerRef} LIKE 'chat:%'`);
   const r = await db
     .select({ s: sql<number>`coalesce(sum(${inferenceCosts.usd}), 0)` })
     .from(inferenceCosts)
@@ -77,9 +88,11 @@ export async function assertWithinBudget(
     return;
   }
 
-  // t2: global cap first, then per-agent (system is exempt from the per-agent cap).
+  // t2: global cap first, then per-agent (system is exempt from the per-agent cap). The global cap is the
+  // MATCHMAKING budget; chat spend is EXCLUDED (#8) so a public-chat flood can never fail-close the gambit
+  // (chat is paid:true → it bypasses this cap entirely, so its ledgered spend must not count against it).
   const globalCap = Number(await getSetting(db, "daily_budget_usd", env.DAILY_BUDGET_USD));
-  const globalSpent = await spend(db, day);
+  const globalSpent = await spend(db, day, undefined, undefined, { excludeChat: true });
   if (globalSpent >= globalCap) throw new BudgetExceeded("global", globalSpent, globalCap);
 
   if (!isSystem(opts.callerRef)) {
@@ -89,4 +102,17 @@ export async function assertWithinBudget(
     const agentSpent = await spend(db, day, opts.callerRef);
     if (agentSpent >= agentCap) throw new BudgetExceeded("agent", agentSpent, agentCap);
   }
+}
+
+/**
+ * SEC-2026-07-01(#8): venue-wide daily CHAT ceiling. Chat inference is tier t2 with paid:true, so it
+ * bypasses assertWithinBudget entirely — without a dedicated ceiling a sybil free-floor flood runs the
+ * venue's inference spend unbounded (and its ledgered spend used to fail-close matchmaking; now excluded).
+ * Enforced in the chat route BEFORE the model call. Cap = 'chat_daily_budget_usd' (defaults to the global
+ * daily budget), an INDEPENDENT bucket from matchmaking.
+ */
+export async function chatSpendExceeded(db: DB, env: Env): Promise<boolean> {
+  const cap = Number(await getSetting(db, "chat_daily_budget_usd", env.DAILY_BUDGET_USD));
+  const spent = await spend(db, utcDay(), undefined, undefined, { onlyChat: true });
+  return spent >= cap;
 }

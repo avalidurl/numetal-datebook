@@ -24,6 +24,20 @@ export async function settleAndPersist(
   ctx: OrderCtx,
   paymentHeader: string,
 ): Promise<{ ok: boolean; receiptId?: number; reason: string }> {
+  // SEC-2026-07-01(#1,#3): idempotency MUST precede settle. provider.verify() performs the irreversible
+  // on-chain CDP /settle on mainnet; a retried order carrying a FRESHLY-signed EIP-3009 authorization
+  // (new nonce) would settle a SECOND transfer — and the post-settle receipt insert (onConflictDoNothing
+  // on order_id) then silently no-ops, so the payer is double-charged with no incremental receipt/credit.
+  // A retry whose authorization is already spent would instead flip an already-fulfilled order to
+  // 'failed'. Both are closed by short-circuiting BEFORE any settle: if this order already has a settled
+  // receipt, return the prior success and never re-verify. (Mirrors the featured live-status pre-check.)
+  const prior = await db
+    .select({ id: paymentReceipts.id })
+    .from(paymentReceipts)
+    .where(eq(paymentReceipts.orderId, ctx.orderId))
+    .get();
+  if (prior) return { ok: true, receiptId: prior.id, reason: "already settled" };
+
   const v = await provider.verify(paymentHeader, ctx.sku, ctx.payTo);
   if (!v.verified) {
     await db

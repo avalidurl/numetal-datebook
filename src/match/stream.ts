@@ -104,6 +104,8 @@ export class StreamCoordinator implements DurableObject {
          WHERE c.state='courting' AND EXISTS (
            SELECT 1 FROM personas px JOIN owners ox ON ox.id=px.owner_id
            WHERE px.id IN (c.a_id,c.b_id) AND ox.public_chatter=1)
+           AND NOT EXISTS (
+             SELECT 1 FROM personas pz WHERE pz.id IN (c.a_id,c.b_id) AND pz.status<>'admitted')
          ORDER BY c.turn_count ASC LIMIT 8`,
       ).all()
     ).results as Array<{ id: number; a_id: number; b_id: number; turn_count: number }>;

@@ -41,6 +41,7 @@ import {
   resolveSession,
 } from "../economics/chatcredits";
 import { accrueBuyback } from "../economics/reserve";
+import { chatSpendExceeded } from "../economics/budget";
 import { recordEpisode, recordFeedback } from "../coach/memory";
 import { makeX402Provider, SKUS, x402Challenge, encodeX402Header } from "../payments/x402";
 import { timingSafeEqualStr } from "../util/timing";
@@ -129,10 +130,22 @@ chatRoutes.post("/chat/topup", async (c) => {
   const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
   if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
 
+  const db = makeDb(c.env.DB);
+  // SEC-2026-07-01(#2): idempotency BEFORE settle. provider.verify() performs the irreversible on-chain
+  // CDP /settle on mainnet; a retry carrying a freshly-signed authorization (new nonce) would settle a
+  // SECOND USDC transfer, then the chat_topups insert below no-ops on order_id → double-charge with no
+  // extra credit. If this order already settled, re-issue a session for the recorded payer and return —
+  // never re-verify.
+  const priorTopup = await db.select({ payer: chatTopups.payer }).from(chatTopups).where(eq(chatTopups.orderId, orderId)).get();
+  if (priorTopup?.payer) {
+    await attest18(db, priorTopup.payer);
+    const { token, expiresAt } = await mintSession(db, priorTopup.payer, "topup");
+    return c.json({ ok: true, credited: false, sessionToken: token, expiresAt, address: priorTopup.payer.toLowerCase(), ...(await getBalance(db, c.env, priorTopup.payer)) });
+  }
+
   const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
   if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
 
-  const db = makeDb(c.env.DB);
   const dollars = Number(sku.priceUsd.replace("$", ""));
   const credits = creditsPerUsd(c.env) * dollars;
   // Idempotent settle: first insert wins; a replay credits nothing twice.
@@ -244,6 +257,13 @@ chatRoutes.post("/chat", async (c) => {
   // (a2) chat→floor bridge: DRAFT intent — only in coach mode does Ishtar get the heart-doc emit
   // contract (so she attaches a parseable block the route intercepts post-generation, below).
   const draftDoc = mode === "coach" && wantsDocDraft(message);
+
+  // (a3) SEC-2026-07-01(#8): venue-wide chat spend ceiling. Chat inference is paid:true (it bypasses the
+  // matchmaking budget), so without this a sybil free-floor flood runs the venue's inference spend
+  // unbounded. Independent of matchmaking (which now excludes chat). Checked BEFORE chargeOne so a rested
+  // turn costs the user nothing; resets at UTC midnight.
+  if (await chatSpendExceeded(db, c.env))
+    return c.json({ error: "Ishtar is resting — the day's conversations are full. Try again tomorrow.", via: "chat_budget", ...(await getBalance(db, c.env, address)) }, 503);
 
   // (b) spend a free-quota message or a paid credit; 402 if neither.
   const charge = await chargeOne(db, c.env, address);

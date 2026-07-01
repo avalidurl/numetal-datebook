@@ -64,14 +64,35 @@ describe("Privy+Didit escalation tier", () => {
     const status = async () => ((await (await call("GET", `/api/escalations/${coupleId}/status`)).json()) as { reveal_ready: boolean }).reveal_ready;
     // o1 verified + 18+; only one verified → not ready
     await db.update(owners).set({ tier: "identity_verified" }).where(eq(owners.id, o1)).run();
-    await db.insert(identityVerifications).values({ ownerId: o1, provider: "didit", status: "approved", ageOver18: 1 }).run();
+    await db.insert(identityVerifications).values({ ownerId: o1, provider: "didit", status: "verified", ageOver18: 1 }).run();
     expect(await status()).toBe(false);
     // H1: o2 verified but NOT 18+ → STILL not ready. Tier alone must never reach reveal (minor-reveal gate).
     await db.update(owners).set({ tier: "identity_verified" }).where(eq(owners.id, o2)).run();
-    await db.insert(identityVerifications).values({ ownerId: o2, provider: "didit", status: "approved", ageOver18: 0 }).run();
+    await db.insert(identityVerifications).values({ ownerId: o2, provider: "didit", status: "verified", ageOver18: 0 }).run();
     expect(await status()).toBe(false);
     // o2 records an 18+ pass → both verified AND both adult → ready.
-    await db.insert(identityVerifications).values({ ownerId: o2, provider: "didit", status: "approved", ageOver18: 1 }).run();
+    await db.insert(identityVerifications).values({ ownerId: o2, provider: "didit", status: "verified", ageOver18: 1 }).run();
+    expect(await status()).toBe(true);
+  });
+
+  // SEC-2026-07-01(#6): the 18+ gate must bind to a status='verified' row. A stale/declined/expired
+  // verification that happens to carry ageOver18=1 must NEVER satisfy the adult gate.
+  it("SEC#6: a NON-verified identity row with ageOver18=1 does not satisfy the adult gate", async () => {
+    const db = makeDb(env.DB);
+    for (const ownerId of [o1, o2]) {
+      await db.insert(introConsents).values({ coupleId, ownerId, consentKind: "contact_reveal", status: "accepted" }).run();
+      await db.update(owners).set({ tier: "identity_verified" }).where(eq(owners.id, ownerId)).run();
+    }
+    const status = async () => ((await (await call("GET", `/api/escalations/${coupleId}/status`)).json()) as { reveal_ready: boolean }).reveal_ready;
+    // o1 is a genuine verified adult.
+    await db.insert(identityVerifications).values({ ownerId: o1, provider: "didit", status: "verified", ageOver18: 1 }).run();
+    // o2's ONLY 18+ signal is on a FAILED verification (e.g. a declined re-check that still parsed an age).
+    // owners.tier may still read identity_verified from an earlier pass — the age flag must bind to a
+    // VERIFIED row, not merely to any row that carries ageOver18=1.
+    await db.insert(identityVerifications).values({ ownerId: o2, provider: "didit", status: "failed", ageOver18: 1 }).run();
+    expect(await status()).toBe(false); // NOT ready — o2 has no verified adult row
+    // A subsequent genuine verified-adult pass for o2 → ready.
+    await db.insert(identityVerifications).values({ ownerId: o2, provider: "didit", status: "verified", ageOver18: 1 }).run();
     expect(await status()).toBe(true);
   });
 

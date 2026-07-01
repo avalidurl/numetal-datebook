@@ -182,6 +182,41 @@ describe("ENROL-ON-FEATURE — featured humans become matchable personas", () =>
     }
   });
 
+  it("SEC#7: on `sanitize`, raw PII in reveal_fields is redacted before it reaches the public board", async () => {
+    const db = makeDb(env.DB);
+    const payProvider: PaymentProvider = {
+      network: "eip155:84532",
+      facilitator: "mock",
+      async verify() {
+        return { verified: true, payer: "0xAgentPayer", tx: "0xTX", amountUsdc: "50" };
+      },
+    };
+    // Clean summary, but a reveal field carrying a raw phone + email. The phone trips leakHold (it's in
+    // PII_SCAN) so the pre_publish chaperone returns `sanitize`; redactPII redacts both spans. The
+    // PUBLISHED reveal must be redacted — pre-fix reveal_fields was stored verbatim and served publicly.
+    const out = await claimAndPublishFeatured(
+      db,
+      lpEnv(),
+      {
+        authorKind: "agent",
+        authorRef: "bot_" + rnd(),
+        publicSummary: "seeks a pen-pal who argues in footnotes",
+        revealFields: { contact: "call me at +1-555-867-5309 or leak@example.com" },
+        ref: "agentref_" + rnd(),
+      },
+      "0xPAY",
+      { provider: payProvider, guard: okGuard },
+    );
+    expect(out.kind).toBe("live");
+    if (out.kind === "live") {
+      const row = await env.DB.prepare("SELECT reveal_fields FROM featured_posts WHERE id=?1").bind(out.id).first<{ reveal_fields: string | null }>();
+      const rf = row?.reveal_fields ?? "";
+      expect(rf).not.toContain("555-867-5309"); // the raw phone did NOT reach the public board
+      expect(rf).not.toContain("leak@example.com"); // nor the raw email
+      expect(rf).toContain("[redacted"); // redaction placeholder present
+    }
+  });
+
   it("FINDING 1: an AGENT post whose authorRef equals an existing (victim) handle does NOT stamp that persona's owner_id/persona_id (anti-spoof)", async () => {
     const db = makeDb(env.DB);
     // Seed a VICTIM persona+owner already on the floor (a real dater with a publicly-known handle).
