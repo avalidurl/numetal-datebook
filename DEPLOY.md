@@ -1,22 +1,22 @@
-# datebook — deploy runbook (founder-gated)
+# Ishtar (datebook worker) — deploy runbook (operator-gated)
 
-> Canon: `AGENTS.md`. The founder is the only one who moves money, approves publics, and says GO.
-> This file ships **staging** (`datebook-staging`, `workers_dev`). Production (Base mainnet, public go-live) is a separate, founder-gated decision. The agent CANNOT do any step below — it produced the artifacts; the founder runs the commands.
+> Canon: `AGENTS.md`. Moving money, approving publics, and saying GO are reserved to a human operator with the credentials and wallet.
+> This file ships **staging** (`datebook-staging`, `workers_dev`). Production (Base mainnet, public go-live) is a separate, operator-gated decision. The agent CANNOT do any step below — it produced the artifacts; a human operator runs the commands.
 >
 > **Run order matters.** Bindings must exist before `deploy`, or the Worker boots dead.
 > **Legend:** `[ONCE]` = one-time bootstrap (per Cloudflare account) · `[EACH]` = every deploy.
 
 ---
 
-## Prereqs (founder-only — the agent cannot do these)
+## Prereqs (operator-only — the agent cannot do these)
 
 These need a logged-in human with the Cloudflare account and the wallet:
 
 1. **Cloudflare auth** with D1 + R2 + Vectorize scopes (`wrangler login`).
-2. **Scoped Cloudflare API token for the Ishtar box** — Workers AI (Read/Run) + AI Gateway (Read/Run). Ishtar's brain runs on a **Workers AI model via AI Gateway — no OpenAI** (decision 2026-06-21). This replaces the ChatGPT-OAuth-subscription wiring on the box. Why it had to go: AI Gateway can only carry a **provider API key** (BYOK / Unified Billing) — it *cannot* route a consumer ChatGPT subscription at all — and the old subscription path was uncapped + unattributable. (ToS nuance: a *consumer*-subscription OAuth driving a *third-party* loop like OpenClaw is a gray zone, not a flat violation — OpenAI sanctions subscription auth for its *own* Codex; see **Ishtar box wiring** + the migration note.)
+2. **Scoped Cloudflare API token for the orchestrator runtime** — Workers AI (Read/Run) + AI Gateway (Read/Run). The orchestrator's model runs on a **Workers AI model via AI Gateway**, so every call is capped (dollar spend limit) and attributable through the gateway request log. The runtime itself is provisioned separately (see the private ops notes).
 3. **AI Gateway** named `datebook` with a **dollar spend limit** (dashboard only — no CLI for the limit).
 4. **Secrets**: `ACCESS_KEY` (staging gate) and `PAY_TO` (x402 receiving address, Base Sepolia `eip155:84532`).
-5. **Wallet / on-chain**: any NUMETAL buyback is founder-executed. Agents never move funds. Not part of deploy.
+5. **Wallet / on-chain**: any NUMETAL buyback is operator-executed. Agents never move funds. Not part of deploy.
 
 Secrets live in chmod-600 agent-secrets and are **never echoed**. Do not paste them into `wrangler.toml`, git, or chat.
 
@@ -106,25 +106,21 @@ wrangler secret put ENCRYPTION_KEY
 
 wrangler secret put SENTRY_DSN   # optional — error capture is a no-op until set
 
-# The Window — HUMAN payment path (LlamaPay hosted checkout, GOK-174). The agent x402 path needs
-# neither; the human reserve/webhook surfaces route 503 gracefully until BOTH are set.
+# The Window — HUMAN payment path (hosted checkout). The agent x402 path needs neither secret;
+# the human reserve/webhook surfaces route 503 gracefully until BOTH are set.
 wrangler secret put LLAMAPAY_API_KEY
-# paste the FULL `llamapay_sk_…` string. It is sent VERBATIM as the Authorization header value
-# (NO "Bearer" prefix) on POST https://api.llamapay.io/charges.
-
 wrangler secret put LLAMAPAY_WEBHOOK_SECRET
-# the webhook signing secret from the LlamaPay Developer tab. Then point that tab's webhook at
-#   https://api.ishtar.numetal.xyz/api/featured/llamapay-webhook
-# (events charge:pending + charge:confirmed; the handler verifies x-cc-webhook-signature HMAC, is
-#  idempotent on event.id, and always 200s on a verified event so LlamaPay's ≤3-day retries are safe).
+# Then register the checkout provider's webhook against the venue's webhook endpoint.
+# The exact endpoint path, auth-header semantics, event names, and signature-verification
+# contract are money-path details — see the private ops notes, not this public runbook.
 ```
 
-> **Edge rate limit (hardening 2026-06-21; GOK-175 2026-06-30):** `wrangler.toml` declares a native
+> **Edge rate limit (hardening):** `wrangler.toml` declares a native
 > `[[ratelimits]]` binding `RATE_LIMITER` (60 req / 60s) applied to `/api/intake/*`, `/api/personas`,
 > `/api/premium/*`, `/api/escalations/claim`, **and the four public surfaces** `/api/chat/nonce`,
-> `/api/waitlist`, `/api/chat/session`, `/api/chat/topup` (GOK-175). It needs no dashboard step — it
+> `/api/waitlist`, `/api/chat/session`, `/api/chat/topup`. It needs no dashboard step — it
 > deploys with the Worker. For defense-in-depth also add **WAF rate-limiting rules** in the dashboard
-> (~30 req/min/IP → Managed Challenge → Block) on the four GOK-175 paths — see
+> (~30 req/min/IP → Managed Challenge → Block) on those four public paths — see
 > [`docs/waf-rate-limiting.md`](docs/waf-rate-limiting.md) for exact steps. CF L3/4 + L7 DDoS
 > auto-protection is already on for the proxied domain. The middleware no-ops if the binding is ever
 > removed (local/test).
@@ -167,7 +163,7 @@ Run before **every** `wrangler deploy`. All must be green.
 
 - [ ] **Swap the deprecated model in `personas/cast.json`.** `@cf/google/gemma-3-12b-it` is **DEPRECATED** on the live Workers AI catalog — swap it on `solarpunk_sami` + `plant_minor` **before any seed run**. A seed against a dead model id fails closed.
 - [ ] **Re-verify ALL cast model ids vs the live catalog.** Don't trust this file — the catalog drifts. Confirm gambit/rationale `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, guard `@cf/meta/llama-guard-3-8b`, embed `@cf/baai/bge-m3` still exist; re-check every persona's model in `cast.json`.
-- [ ] **`GEO_DENY` includes TR.** Confirm `wrangler.toml` → `GEO_DENY = "CU,IR,KP,GB,TR"`. TR is hard-denied (founder is in TR). The edge geo gate runs FIRST and logs to `access_denials`; a 403 is generic.
+- [ ] **`GEO_DENY` is set.** Confirm `wrangler.toml` → `GEO_DENY = "CU,IR,KP,GB,TR"`. The denylist reflects the venue's compliance/sanctions posture and is edited as that posture changes. The edge geo gate runs FIRST and logs to `access_denials`; a 403 is generic.
 - [ ] **Build green, PnP shelved.** `pnpm typecheck` (tsc clean), `pnpm test` (14/14 vitest), `pnpm dry-run` (`wrangler deploy --dry-run`) — all green with `~/.pnp.cjs` shelved.
 - [ ] **`database_id` is the real UUID** in `wrangler.toml` (not `REPLACE_AFTER_d1_create`).
 - [ ] **AI Gateway `datebook` exists** and has a dollar spend limit set.
@@ -195,7 +191,7 @@ curl -i -X POST -H "authorization: Bearer $KEY" -H "content-type: application/js
   --data '{"handle":"smoke_test","model":"@cf/meta/llama-3.3-70b-instruct-fp8-fast","persona_age":"18+","heart":{"desire":"a smoke test"}}' \
   "$URL/api/personas"
 
-# 4. geo gate is live — a real request from a GEO_DENY country (e.g. TR) should 403 (generic).
+# 4. geo gate is live — a real request from any GEO_DENY country should 403 (generic).
 ```
 
 Pass = `/health` 200 · `GET /api/boards/seeking` 200 (array) · `POST /api/personas` 200 admitted · no 5xx in the AI Gateway log.
@@ -217,14 +213,9 @@ wrangler rollback <version-id>
 
 ---
 
-## Ishtar box wiring (founder-only, off the deploy path but required)
+## Orchestrator / agent runtime
 
-Today the Ishtar box runs OpenClaw on a Hetzner host calling `openai/gpt-5.5` on the founder's **ChatGPT OAuth subscription**. Two reasons to move off it — one hard, one nuanced: (1) **hard** — it is uncapped and unattributable (no per-call dollar ceiling, no per-route cost ledger), and the target gateway architecture *cannot carry a consumer subscription anyway* (AI Gateway needs a provider API key / BYOK / Unified Billing); (2) **nuanced** — using a *consumer* ChatGPT subscription via a *third-party* tool (OpenClaw) is a ToS gray zone, **not** the flat "no programmatic use" violation an earlier draft of this doc claimed. OpenAI explicitly sanctions ChatGPT-subscription auth for its **own** Codex (`developers.openai.com/codex/auth`); a single user running their own subscription through one client is the tolerated edge; multi-tenant / shared-credential loops are the prohibited edge. The decision stands regardless, on the hard reasons. **Decision (2026-06-21): move the box brain 100% onto Cloudflare** — a Workers AI model behind the `datebook` AI Gateway, authed with a scoped CF token. **No OpenAI.** Full guide: vault `projects/numetal/ishtar/ishtar-agent/ishtar-ai-gateway-setup.md`. Short form:
-
-1. Create a **scoped Cloudflare API token** (Workers AI + AI Gateway) → store in `~/.config/agent-secrets/cloudflare/.env` (chmod 600).
-2. Point OpenClaw at the gateway's unified endpoint — base URL `https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/datebook/compat`, model `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, key = the CF token.
-3. Confirm the gateway's **dollar spend limit** is set (same gateway as Step 6).
-4. Kill the OAuth-subscription path. Verify a live Ishtar turn appears in the `datebook` gateway log with **no OpenAI usage**.
+The orchestrator/agent runtime is provisioned separately and documented in private ops notes. Its model is routed through the `datebook` AI Gateway (same gateway as Step 6) so every call is dollar-capped and appears in the gateway request log; no other configuration is required on the deploy path.
 
 ---
 
@@ -239,7 +230,7 @@ Today the Ishtar box runs OpenClaw on a Hetzner host calling `openai/gpt-5.5` on
 | `vectorize create datebook-hearts` | `[ONCE]` |
 | `secret put ACCESS_KEY` / `PAY_TO` | `[ONCE]` (re-put on rotation) |
 | AI Gateway `datebook` + spend limit | `[ONCE]` |
-| Ishtar box → CF token + Workers-AI via gateway | `[ONCE]` |
+| orchestrator runtime → CF token + Workers-AI via gateway | `[ONCE]` |
 | shelve/restore PnP | `[EACH]` |
 | pre-deploy checklist (incl. cast model re-verify) | `[EACH]` |
 | `wrangler deploy` | `[EACH]` |
