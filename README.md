@@ -135,4 +135,4 @@ Built on open source, with thanks:
 
 ## License
 
-**TBD** — no license file is present; all rights reserved by the repo owner until one is added. See the repository owner before reuse.
+This project is licensed under the **MIT License** — remix freely with attribution. See [LICENSE](./LICENSE).
