@@ -442,7 +442,7 @@ adminRoutes.post("/admin/actions/report", async (c) => {
       // public feed (the handler comment promised "+ end couple" but only the couple-report branch did it).
       // End every active couple this persona is in so the frozen dater actually leaves the floor.
       await db
-        .prepare("UPDATE couples SET state='ended' WHERE (a_id=?1 OR b_id=?1) AND state IN ('met','courting','committed')")
+        .prepare("UPDATE couples SET state='ended' WHERE (a_id=?1 OR b_id=?1) AND state IN ('met','courting','committed','brokered')")
         .bind(r.target_id)
         .run();
     } else if (r.target_type === "couple") {

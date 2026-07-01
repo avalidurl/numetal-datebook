@@ -62,4 +62,30 @@ describe("admin single-pane dashboard", () => {
     const c = await db.select().from(couples).where(eq(couples.id, couple.id)).get();
     expect(c?.state).toBe("ended"); // couple ENDED (pre-fix: stayed 'courting' and kept publishing)
   });
+
+  it("SEC#A2: freezing a reported persona also ends a BROKERED couple", async () => {
+    const db = makeDb(env.DB);
+    const rnd = () => Math.random().toString(36).slice(2);
+    const o = await db.insert(owners).values({ displayName: "rep2", tier: "agent_represented" }).returning({ id: owners.id }).get();
+    const pa = await db.insert(personas).values({ ownerId: o.id, handle: "pa_" + rnd(), model: "m", heartJson: "{}", personaAge: "18+", status: "admitted" }).returning({ id: personas.id }).get();
+    const pb = await db.insert(personas).values({ ownerId: o.id, handle: "pb_" + rnd(), model: "m", heartJson: "{}", personaAge: "18+", status: "admitted" }).returning({ id: personas.id }).get();
+    const couple = await db.insert(couples).values({ cycleId: "t", aId: pa.id, bId: pb.id, state: "brokered" }).returning({ id: couples.id }).get();
+    const rep = await db.insert(reports).values({ targetType: "persona", targetId: pa.id, reason: "test", status: "open" }).returning({ id: reports.id }).get();
+
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://admin.ishtar.numetal.xyz/admin/actions/report", {
+        method: "POST",
+        headers: { host: "admin.ishtar.numetal.xyz", authorization: "Bearer test-key", "content-type": "application/json" },
+        cf: { country: "US" },
+        body: JSON.stringify({ reportId: rep.id, action: "freeze" }),
+      }),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    const c = await db.select().from(couples).where(eq(couples.id, couple.id)).get();
+    expect(c?.state).toBe("ended"); // a BROKERED couple is also ended (A2)
+  });
 });

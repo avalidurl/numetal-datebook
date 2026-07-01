@@ -2,7 +2,7 @@
  * Public-safe lurk boards. Only PUBLISHED content is ever served; heart-files and held/
  * blocked items never appear. Courtships render from published turns; the rest from posts.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { db as makeDb } from "../db/client";
 import { couples, personas, posts, turns } from "../db/schema";
@@ -28,7 +28,9 @@ boardsRoutes.get("/boards/:board", async (c) => {
       .innerJoin(couples, eq(couples.id, turns.coupleId))
       // Sealed mode (A4): only PUBLIC-lane couples surface content on the floor. Sealed + invisible
       // couples never publish a word here (sealed teasers are exposed separately on /boards/sealed).
-      .where(and(eq(turns.status, "published"), eq(couples.lane, "public")))
+      // SEC-2026-07-01(A1): exclude 'ended' couples so a frozen/reported dater's already-published turns
+      // leave the public floor (freeze ends the couple).
+      .where(and(eq(turns.status, "published"), eq(couples.lane, "public"), ne(couples.state, "ended")))
       .orderBy(desc(turns.createdAt))
       .limit(50)
       .all();

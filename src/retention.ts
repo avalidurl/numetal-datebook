@@ -22,5 +22,11 @@ export async function sweepRetention(env: Env): Promise<{ deleted: number }> {
   // independent of the general retention window (red-team M5). Sessions are also consumed in ~15 min.
   const relayCutoff = new Date(Date.now() - 7 * 86_400_000).toISOString();
   const rs = await env.DB.prepare("DELETE FROM relay_sessions WHERE created_at < ?1").bind(relayCutoff).run();
-  return { deleted: (e.meta.changes ?? 0) + (i.meta.changes ?? 0) + (a.meta.changes ?? 0) + (x.meta.changes ?? 0) + (cm.meta.changes ?? 0) + (rs.meta.changes ?? 0) };
+  // SEC-2026-07-01(E1): The Window sealed emails on orphaned/expired featured rows have NO owner link
+  // (owner_id is set only on a winning enrol), so eraseOwner can't reach them — they would survive a GDPR
+  // erasure indefinitely. Give them a time-based deletion path: scrub the receipt email on aged featured
+  // rows (the TR-100 was long sent) and purge aged orphaned-payment rows outright.
+  const fp = await env.DB.prepare("UPDATE featured_posts SET email_sealed=NULL WHERE email_sealed IS NOT NULL AND created_at < ?1").bind(cutoff).run();
+  const fo = await env.DB.prepare("DELETE FROM featured_orphaned_payments WHERE received_at < ?1").bind(cutoff).run();
+  return { deleted: (e.meta.changes ?? 0) + (i.meta.changes ?? 0) + (a.meta.changes ?? 0) + (x.meta.changes ?? 0) + (cm.meta.changes ?? 0) + (rs.meta.changes ?? 0) + (fp.meta.changes ?? 0) + (fo.meta.changes ?? 0) };
 }

@@ -162,7 +162,10 @@ export async function claimAndPublishFeatured(
   // public payload: the summary AND every reveal value (a clean summary can't smuggle an explicit
   // reveal field). On `sanitize` the redacted text is what we publish.
   const revealText = input.revealFields ? Object.values(input.revealFields).map(String).join("\n") : "";
-  const screenText = revealText ? `${input.publicSummary}\n${revealText}` : input.publicSummary;
+  // SEC-2026-07-01(F1): author_ref is served publicly by listFeatured but was NOT in the screened text,
+  // so an agent could smuggle raw PII (email/phone/contact handle, ≤80 chars) through it. Screen it too,
+  // and redact it on the flip below. (The human path forces author_ref NULL, so this is the agent vector.)
+  const screenText = [input.publicSummary, revealText, input.authorRef].filter(Boolean).join("\n");
   const verdict = await chaperone(
     db,
     env,
@@ -191,11 +194,14 @@ export async function claimAndPublishFeatured(
         ? JSON.stringify(input.revealFields)
         : null;
   const paymentRef = v.tx ? `x402:${v.tx}` : null;
+  // SEC-2026-07-01(F1): redact any PII shape in author_ref before it goes public (a normal handle has no
+  // PII shape → unchanged). Belt to the screenText screen above.
+  const publishedAuthorRef = input.authorRef ? redactPII(input.authorRef).redacted : null;
   const flip = await env.DB
     .prepare(
-      "UPDATE featured_posts SET status='live', payer=?2, expires_at=?3, public_summary=?4, payment_ref=?5, paid_at=?6, reveal_fields=?7 WHERE id=?1 AND status='reserving'",
+      "UPDATE featured_posts SET status='live', payer=?2, expires_at=?3, public_summary=?4, payment_ref=?5, paid_at=?6, reveal_fields=?7, author_ref=?8 WHERE id=?1 AND status='reserving'",
     )
-    .bind(postId, v.payer.toLowerCase(), expiresAt, publishedSummary, paymentRef, paidAt, publishedReveal)
+    .bind(postId, v.payer.toLowerCase(), expiresAt, publishedSummary, paymentRef, paidAt, publishedReveal, publishedAuthorRef)
     .run();
   if ((flip.meta.changes ?? 0) === 1) {
     await attest18(db, v.payer); // over18 confirmed at the route → recorded (defensible adults-only record)

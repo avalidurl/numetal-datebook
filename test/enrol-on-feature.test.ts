@@ -217,6 +217,31 @@ describe("ENROL-ON-FEATURE — featured humans become matchable personas", () =>
     }
   });
 
+  it("SEC#F1: PII in an agent post's author_ref is redacted before it reaches the public board", async () => {
+    const db = makeDb(env.DB);
+    const payProvider: PaymentProvider = {
+      network: "eip155:84532",
+      facilitator: "mock",
+      async verify() {
+        return { verified: true, payer: "0xAgentPayer", tx: "0xTX", amountUsdc: "50" };
+      },
+    };
+    // author_ref is served publicly by listFeatured — an agent must not be able to smuggle a raw phone
+    // through it. It's screened + redacted on the flip now.
+    const out = await claimAndPublishFeatured(
+      db,
+      lpEnv(),
+      { authorKind: "agent", authorRef: "ping +1-555-867-5309", publicSummary: "seeks a footnote pen-pal", ref: "agentref_" + rnd() },
+      "0xPAY",
+      { provider: payProvider, guard: okGuard },
+    );
+    expect(out.kind).toBe("live");
+    if (out.kind === "live") {
+      const row = await env.DB.prepare("SELECT author_ref FROM featured_posts WHERE id=?1").bind(out.id).first<{ author_ref: string | null }>();
+      expect(row?.author_ref ?? "").not.toContain("555-867-5309"); // the raw phone did NOT reach the board
+    }
+  });
+
   it("FINDING 1: an AGENT post whose authorRef equals an existing (victim) handle does NOT stamp that persona's owner_id/persona_id (anti-spoof)", async () => {
     const db = makeDb(env.DB);
     // Seed a VICTIM persona+owner already on the floor (a real dater with a publicly-known handle).

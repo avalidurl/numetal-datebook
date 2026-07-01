@@ -258,16 +258,19 @@ chatRoutes.post("/chat", async (c) => {
   // contract (so she attaches a parseable block the route intercepts post-generation, below).
   const draftDoc = mode === "coach" && wantsDocDraft(message);
 
-  // (a3) SEC-2026-07-01(#8): venue-wide chat spend ceiling. Chat inference is paid:true (it bypasses the
-  // matchmaking budget), so without this a sybil free-floor flood runs the venue's inference spend
-  // unbounded. Independent of matchmaking (which now excludes chat). Checked BEFORE chargeOne so a rested
-  // turn costs the user nothing; resets at UTC midnight.
-  if (await chatSpendExceeded(db, c.env))
-    return c.json({ error: "Ishtar is resting — the day's conversations are full. Try again tomorrow.", via: "chat_budget", ...(await getBalance(db, c.env, address)) }, 503);
-
   // (b) spend a free-quota message or a paid credit; 402 if neither.
   const charge = await chargeOne(db, c.env, address);
   if (!charge.ok) return c.json({ error: "no credits — top up to keep talking", balance: charge.balance, topup: "/api/chat/topup" }, 402);
+
+  // (a3) SEC-2026-07-01(#8, B1 fix): the venue-wide chat ceiling gates the FREE tier ONLY. A paid turn
+  // (the user just spent a credit) is ALWAYS served — else a sybil free-flood exhausting the shared
+  // bucket would 503 legitimate paying users (a self-inflicted DoS). Bounds free-flood inference cost
+  // without punishing payers. Checked AFTER chargeOne; a blocked free turn ran no model (no cost added).
+  if (charge.via !== "paid" && (await chatSpendExceeded(db, c.env)))
+    return c.json(
+      { error: "Ishtar is resting — the day's free conversations are full. Top up to keep talking, or try tomorrow.", via: "chat_budget", topup: "/api/chat/topup", ...(await getBalance(db, c.env, address)) },
+      503,
+    );
 
   // (c) generate, refunding a paid credit if the model/gateway fails.
   let reply: string;
