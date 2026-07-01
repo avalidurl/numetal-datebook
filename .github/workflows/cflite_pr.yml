@@ -16,7 +16,6 @@ jobs:
         with:
           language: javascript
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          sanitizer: address
       - name: Run Fuzzers (only the code changed in this PR)
         id: run
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
@@ -24,4 +23,3 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fuzz-seconds: 300
           mode: code-change
-          sanitizer: address

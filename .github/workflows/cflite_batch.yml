@@ -13,7 +13,6 @@ jobs:
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
           language: javascript
-          sanitizer: address
       - name: Run Fuzzers (30 min, whole corpus)
         id: run
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
@@ -21,4 +20,3 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fuzz-seconds: 1800
           mode: batch
-          sanitizer: address
