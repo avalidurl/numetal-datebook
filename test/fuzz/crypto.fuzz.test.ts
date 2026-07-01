@@ -59,4 +59,17 @@ describe("fuzz: crypto round-trips (seal/open, match tokens)", () => {
       { numRuns: 600 },
     );
   });
+
+  // SEC-2026-07-01 fuzz-finding regressions:
+  it("SEC#3: flipping the token's LAST base64url char (malleability) is now rejected → null", async () => {
+    const tok = await mintMatchToken(e, 4242, 3600);
+    expect((await verifyMatchToken(e, tok))?.ownerId).toBe(4242);
+    const flipped = tok.slice(0, -1) + (tok.endsWith("A") ? "B" : "A");
+    expect(await verifyMatchToken(e, flipped)).toBeNull(); // canonical-sig-string compare closes the padding-bit malleability
+  });
+
+  it("SEC#2: minting with no signing key throws a CLEAR error, not a cryptic WebCrypto DataError", async () => {
+    const noKey = { ...(env as any), NOTIFY_TOKEN_SECRET: "", ENCRYPTION_KEY: "" } as unknown as Parameters<typeof mintMatchToken>[0];
+    await expect(mintMatchToken(noKey, 1)).rejects.toThrow(/signing key missing/i);
+  });
 });

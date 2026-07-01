@@ -181,9 +181,14 @@ function tokenKey(env: Env): string {
 }
 
 async function hmac(env: Env, signingInput: string): Promise<Uint8Array> {
+  const secret = tokenKey(env);
+  // SEC-2026-07-01 (fuzz #2): fail closed with a CLEAR error when no signing key is configured, instead
+  // of a cryptic WebCrypto "HMAC key length (0)" DataError. Prod always sets ENCRYPTION_KEY; this guards a
+  // misconfig — mintMatchToken surfaces it loudly, verifyMatchToken catches it → null (fail-closed).
+  if (!secret) throw new Error("match-token signing key missing: set NOTIFY_TOKEN_SECRET or ENCRYPTION_KEY");
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(tokenKey(env)),
+    new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
@@ -208,21 +213,19 @@ export async function verifyMatchToken(env: Env, token: string): Promise<{ owner
   const parts = (token ?? "").split(".");
   if (parts.length !== 3 || parts[0] !== "v1") return null;
   const [, body64, sig64] = parts as [string, string, string];
-  let expected: Uint8Array;
+  let expectedSig: string;
   try {
-    expected = await hmac(env, `v1.${body64}`);
+    expectedSig = b64urlEncode(await hmac(env, `v1.${body64}`));
   } catch {
     return null;
   }
-  let got: Uint8Array;
-  try {
-    got = b64urlDecode(sig64);
-  } catch {
-    return null;
-  }
-  if (got.length !== expected.length) return null;
+  // SEC-2026-07-01 (fuzz #3): compare the CANONICAL base64url sig STRING, not decoded bytes. base64url's
+  // final char carries padding bits, so a byte-compare accepts non-canonical variants → token malleability
+  // (multiple sig strings verify to the same owner). Requiring the exact canonical sig closes it. Lengths
+  // match by construction for a genuine token; constant-time char compare (return only after the full loop).
+  if (sig64.length !== expectedSig.length) return null;
   let diff = 0;
-  for (let i = 0; i < expected.length; i++) diff |= got[i]! ^ expected[i]!; // constant-time compare
+  for (let i = 0; i < expectedSig.length; i++) diff |= sig64.charCodeAt(i) ^ expectedSig.charCodeAt(i);
   if (diff !== 0) return null;
   let payload: { o?: unknown; exp?: unknown };
   try {
