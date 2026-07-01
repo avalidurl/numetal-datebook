@@ -66,10 +66,15 @@ export function parsePaymentHeader(header: string): { to?: string; value?: strin
   const payload = (obj.payload ?? {}) as Record<string, unknown>;
   const auth = (payload.authorization ?? obj.authorization ?? payload ?? {}) as Record<string, unknown>;
   const accepted = (obj.accepted ?? {}) as Record<string, unknown>; // v2 payload carries the chosen requirement here
-  const network = (obj.network ?? payload.network ?? accepted.network) as string | undefined;
-  const to = auth.to as string | undefined;
-  const value = auth.value != null ? String(auth.value) : undefined;
-  const nonce = (auth.nonce ?? obj.nonce) as string | undefined;
+  // SEC-2026-07-01 (fuzz finding): coerce to string|undefined. A payload with a NON-string field (e.g.
+  // {"authorization":{"to":2}}) otherwise returned `to` as a number, breaking the {to?:string} contract
+  // and later throwing on terms.to.toLowerCase() (contained by verify's try/catch, but fragile). A
+  // non-string to/network/nonce is invalid → undefined → verify fails closed on its !terms.to guard.
+  const asStr = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  const network = asStr(obj.network ?? payload.network ?? accepted.network);
+  const to = asStr(auth.to);
+  const value = auth.value != null ? String(auth.value) : undefined; // amount may be numeric in some payloads → String()
+  const nonce = asStr(auth.nonce ?? obj.nonce);
   return { to, value, nonce, network };
 }
 

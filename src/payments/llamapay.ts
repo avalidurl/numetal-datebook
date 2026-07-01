@@ -112,7 +112,17 @@ export async function verifyLlamapayWebhook(
     // Parse only after the signature is good.
     const body = JSON.parse(rawBody) as { event?: LlamapayEvent };
     const event = body.event;
-    if (!event || typeof event.id !== "string" || typeof event.type !== "string" || !event.data) {
+    // SEC-2026-07-01 (fuzz finding): require event.data to be a non-null OBJECT with a string `id`, not
+    // merely truthy — a validly-signed body with data:"_0" (a truthy string) otherwise passed as a valid
+    // event, breaking the LlamapayEvent contract (event.data.id is the payment-ref / dedup key downstream).
+    if (
+      !event ||
+      typeof event.id !== "string" ||
+      typeof event.type !== "string" ||
+      typeof event.data !== "object" ||
+      event.data === null ||
+      typeof (event.data as { id?: unknown }).id !== "string"
+    ) {
       return { ok: false, reason: "malformed event payload" };
     }
     return { ok: true, event };
