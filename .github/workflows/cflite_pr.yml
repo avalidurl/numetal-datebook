@@ -15,6 +15,7 @@ jobs:
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
           language: javascript
+          sanitizer: none # JS/Jazzer.js has no memory sanitizer; default 'address' is rejected
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run Fuzzers (only the code changed in this PR)
         id: run
@@ -23,3 +24,4 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fuzz-seconds: 300
           mode: code-change
+          sanitizer: none
