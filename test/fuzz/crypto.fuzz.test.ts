@@ -11,7 +11,7 @@ describe("fuzz: crypto round-trips (seal/open, match tokens)", () => {
   // Supply a token secret (prod always has ENCRYPTION_KEY/NOTIFY_TOKEN_SECRET). FUZZ FINDING 2026-07-01:
   // mintMatchToken throws a raw WebCrypto DataError when the HMAC key is empty — a Phase-2 hardening
   // target (fail closed with a clear error / assert the key at init), tracked in the fuzzing plan.
-  const e = { ...(env as any), NOTIFY_TOKEN_SECRET: "fuzz-notify-secret-0123456789abcdef" } as unknown as Parameters<typeof seal>[0];
+  const e = { ...(env as any), NOTIFY_TOKEN_SECRET: "fuzz-notify-secret-0123456789abcdef" } as unknown as Parameters<typeof seal>[0]; // gitleaks:allow — fake fixture, not a real secret
 
   it("seal → open round-trips for arbitrary strings", async () => {
     await fc.assert(
