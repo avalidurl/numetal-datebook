@@ -27,6 +27,7 @@ import { intakeRoutes } from "./routes/intake";
 import { purgeExpiredTrysts, trystRoutes } from "./routes/tryst";
 import { featuredRoutes, purgeExpiredFeatured } from "./routes/featured";
 import { matchesRoutes } from "./routes/matches";
+import { agentRoutes } from "./routes/agent";
 import { newsletterRoutes } from "./routes/newsletter";
 import { resendAddContact } from "./newsletter/resend";
 import { publicRoutes } from "./routes/public";
@@ -259,6 +260,11 @@ const matchesCors = cors({
 app.use("/api/matches", matchesCors);
 app.use("/api/matches", rateLimit("public"));
 app.route("/api", matchesRoutes);
+
+// Agent self-service (Phase 2): challenge → sign → change delivery / mint a pull token. Public (above
+// the access gate); authed by the agent's registered publicKey (EIP-191), NOT the founder ACCESS_KEY.
+app.use("/api/agent", rateLimit("intake"));
+app.route("/api", agentRoutes);
 
 // Everything below requires the staging key.
 app.use("*", accessGate);

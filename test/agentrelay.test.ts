@@ -4,6 +4,7 @@ import {
   isSafeDeliveryUrl,
   sendAgentRelay,
   signRelayBody,
+  verifyRelaySignature,
   type AgentRelayPayload,
 } from "../src/agentrelay/outbound";
 
@@ -52,6 +53,19 @@ describe("agent-relay: signature", () => {
     expect(a).toMatch(/^[0-9a-f]{64}$/);
     expect(a).toBe(b);
     expect(a).not.toBe(c);
+  });
+});
+
+describe("agent-relay: consumer verifier (the reference an agent reimplements)", () => {
+  it("round-trips: a signed body verifies; a tampered body / wrong secret / bad sig / no header do not", async () => {
+    const body = JSON.stringify({ v: 1, kind: "match", ownerId: 9, url: "https://x/y", ts: 2, nonce: "z" });
+    const secret = "supersecretsupersecret";
+    const header = `sha256=${await signRelayBody(secret, body)}`;
+    expect(await verifyRelaySignature(secret, body, header)).toBe(true);
+    expect(await verifyRelaySignature(secret, body + " ", header)).toBe(false); // tampered body
+    expect(await verifyRelaySignature("wrong-secret-wrong", body, header)).toBe(false);
+    expect(await verifyRelaySignature(secret, body, "sha256=deadbeef")).toBe(false);
+    expect(await verifyRelaySignature(secret, body, null)).toBe(false);
   });
 });
 
