@@ -1,0 +1,24 @@
+name: cflite-batch
+on:
+  schedule:
+    - cron: "0 6 * * *" # nightly 06:00 UTC — coverage-guided batch over all targets
+  workflow_dispatch:
+permissions: read-all
+jobs:
+  Batch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build Fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: javascript
+          sanitizer: address
+      - name: Run Fuzzers (30 min, whole corpus)
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 1800
+          mode: batch
+          sanitizer: address
