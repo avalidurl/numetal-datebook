@@ -1,0 +1,49 @@
+name: fuzz
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * *" # nightly 06:00 UTC — coverage-guided campaign
+  workflow_dispatch:
+
+jobs:
+  # Fast + BLOCKING on every PR/push: the property-based (fast-check) suite in the miniflare harness.
+  property:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+        with:
+          version: 9
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: property-based fuzz (fast-check) — must pass
+        run: pnpm fuzz
+
+  # Nightly + manual only: coverage-guided jazzer.js with a persisted, growing corpus. A crash
+  # artifact fails the job (a real finding); the corpus is cached so the search deepens over time.
+  coverage-guided:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+        with:
+          version: 9
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: restore/persist the growing fuzz corpus
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: coverage-guided fuzz (jazzer.js, 5 min/target)
+        run: pnpm fuzz:jazzer 300
