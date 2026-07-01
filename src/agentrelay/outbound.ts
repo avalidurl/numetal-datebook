@@ -111,6 +111,31 @@ export async function signRelayBody(secret: string, body: string): Promise<strin
 }
 
 /**
+ * Reference verifier for the AGENT side (any runtime — OpenClaw / Hermes / Claude / Codex / custom):
+ * recompute the HMAC over the RAW request body and constant-time-compare to the `x-ishtar-signature:
+ * sha256=<hex>` header. Exported so agents (and tests) have a canonical implementation to copy — it is
+ * ~5 lines in any language. Returns false on any shape mismatch; NEVER throws.
+ */
+export async function verifyRelaySignature(
+  secret: string,
+  rawBody: string,
+  signatureHeader: string | null | undefined,
+): Promise<boolean> {
+  const got = (signatureHeader ?? "").trim().replace(/^sha256=/i, "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(got)) return false;
+  let expected: string;
+  try {
+    expected = await signRelayBody(secret, rawBody);
+  } catch {
+    return false;
+  }
+  if (got.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= got.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
  * Deliver a signed match notification to the owner's agent webhook. Fail-soft: returns {ok:false,reason}
  * for a disabled channel, an unsafe URL, a weak secret, or any transport error, and NEVER throws.
  */
