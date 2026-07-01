@@ -19,3 +19,4 @@ missions/
 fuzz/corpus/
 fuzz/*.fuzz.cjs
 crash-*
+.schemathesis/
