@@ -11,3 +11,6 @@ claim-app/dist
 __pycache__/
 bench/heartbench/__pycache__/
 bench/heartbench/results/
+
+# Internal work-orders — private ops notes, not for the public repo
+missions/
