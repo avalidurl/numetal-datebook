@@ -14,3 +14,8 @@ bench/heartbench/results/
 
 # Internal work-orders — private ops notes, not for the public repo
 missions/
+
+# fuzzing working artifacts (seeds are committed under fuzz/seeds/)
+fuzz/corpus/
+fuzz/*.fuzz.cjs
+crash-*

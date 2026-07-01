@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "fuzz": "vitest run test/fuzz",
+    "fuzz:jazzer": "bash fuzz/run-jazzer.sh",
     "safety-gate": "python3 bench/heartbench/safety_gate.py",
     "db:generate": "drizzle-kit generate",
     "cf-typegen": "wrangler types"
@@ -25,6 +27,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.6.0",
     "@cloudflare/workers-types": "4.20260613.1",
+    "@jazzer.js/core": "^4.0.0",
     "drizzle-kit": "^0.30.0",
     "fast-check": "^4.8.0",
     "typescript": "^5.7.0",
