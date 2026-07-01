@@ -47,15 +47,29 @@ export function redactPII(text: string): { redacted: string; hits: number } {
     hits++;
     return r;
   };
+  const pass = (s: string): string => {
+    let out = s;
+    out = out.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, () => bump("[redacted-email]"));
+    out = out.replace(/0x[a-fA-F0-9]{64}/g, () => bump("[redacted-key]"));
+    out = out.replace(/\b\d{3}-\d{2}-\d{4}\b/g, () => bump("[redacted-id]"));
+    out = out.replace(/(seed\s?phrase|private\s?key)/gi, () => bump("[redacted-secret]"));
+    out = out.replace(new RegExp(STREET.source, "gi"), () => bump("[redacted-address]"));
+    out = out.replace(new RegExp(CONTACT.source, "gi"), () => bump("[redacted-contact]"));
+    out = out.replace(/\+?\d[\d\s().-]{7,}\d/g, (m) =>
+      (m.match(/\d/g) ?? []).length >= 10 ? bump("[redacted-number]") : m,
+    );
+    return out;
+  };
+  // SEC-2026-07-01 (FUZZ FINDING): run to a FIXED POINT. A redaction can EXPOSE a new match — e.g.
+  // "1234567890reach me on telegram" has NO word boundary before "reach", so CONTACT is missed until the
+  // adjacent phone span is redacted (which inserts a boundary). A SINGLE pass leaked the contact-share to
+  // the public board. Iterate (bounded, placeholders never re-match) until stable so digit-glued /
+  // boundary-evasion PII can't slip past one pass. Also makes redactPII idempotent.
   let out = text;
-  out = out.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, () => bump("[redacted-email]"));
-  out = out.replace(/0x[a-fA-F0-9]{64}/g, () => bump("[redacted-key]"));
-  out = out.replace(/\b\d{3}-\d{2}-\d{4}\b/g, () => bump("[redacted-id]"));
-  out = out.replace(/(seed\s?phrase|private\s?key)/gi, () => bump("[redacted-secret]"));
-  out = out.replace(new RegExp(STREET.source, "gi"), () => bump("[redacted-address]"));
-  out = out.replace(new RegExp(CONTACT.source, "gi"), () => bump("[redacted-contact]"));
-  out = out.replace(/\+?\d[\d\s().-]{7,}\d/g, (m) =>
-    (m.match(/\d/g) ?? []).length >= 10 ? bump("[redacted-number]") : m,
-  );
+  for (let i = 0; i < 4; i++) {
+    const next = pass(out);
+    if (next === out) break;
+    out = next;
+  }
   return { redacted: out, hits };
 }

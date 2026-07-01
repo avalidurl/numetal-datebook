@@ -52,7 +52,7 @@ export interface VerifiedPayment {
  * MUST independently confirm the signed TERMS match what it requires (red-team C3/H8). Best-effort
  * across x402 payload shapes; returns null if it can't extract value + to (→ fail-closed).
  */
-function parsePaymentHeader(header: string): { to?: string; value?: string; nonce?: string; network?: string } | null {
+export function parsePaymentHeader(header: string): { to?: string; value?: string; nonce?: string; network?: string } | null {
   let obj: Record<string, unknown> | null = null;
   for (const decode of [() => atob(header), () => header]) {
     try {
