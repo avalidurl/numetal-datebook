@@ -159,6 +159,30 @@ export const ownerWallets = sqliteTable(
   }),
 );
 
+/* ----------------------------------------------------------------- agent delivery webhooks */
+// Per-owner generic match-delivery webhook (migration 0025). The agent-relay notify channel POSTs a
+// SIGNED come-look payload (matches magic-link; NO PII, never contact) to the owner's OWN agent webhook,
+// and the agent relays to its human in whatever app it lives in — Ishtar holds NO chat-app creds. `url`
+// and `secret` are SEALED at rest (crypto/box, like contact_ref). One row per owner; OFF venue-wide
+// until AGENT_RELAY_ENABLED, and canSend is false without an active row → safe roll-forward, no backfill.
+export const ownerDeliveries = sqliteTable(
+  "owner_deliveries",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    ownerId: integer("owner_id").notNull().references(() => owners.id),
+    url: text("url").notNull(), // SEALED https webhook URL (the agent's inbound)
+    secret: text("secret").notNull(), // SEALED per-owner HMAC shared secret the agent verifies with
+    status: text("status").notNull().default("active"), // active | disabled
+    verifiedAt: text("verified_at"), // set after a reachability probe (Phase 2); nullable
+    createdAt: text("created_at").notNull().default(now),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => ({
+    uniq: uniqueIndex("uniq_owner_deliveries_owner").on(t.ownerId),
+    byOwner: index("idx_owner_deliveries_owner").on(t.ownerId, t.status),
+  }),
+);
+
 /* ----------------------------------------------------------------- boards / posts */
 export const posts = sqliteTable(
   "posts",

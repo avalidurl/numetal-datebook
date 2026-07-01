@@ -21,6 +21,7 @@ import type { Env } from "../env";
 import { open } from "../crypto/box";
 import { resendSend } from "../newsletter/resend";
 import { isXmtpAddress, sendXmtpDM, xmtpConfigured } from "../xmtp/outbound";
+import { agentRelayConfigured, isSafeDeliveryUrl, sendAgentRelay, type AgentRelayPayload } from "../agentrelay/outbound";
 
 /** The owner being notified. `contactRef` is the SEALED contact pointer (may be an "email:" / raw email). */
 export interface NotifyOwner {
@@ -29,6 +30,7 @@ export interface NotifyOwner {
   contactRef?: string | null; // sealed (enc:v1:…) or legacy plaintext; opened by the email adapter
   alertChannels?: string | null; // CSV of enabled channel names; null/empty → ['email']
   wallet?: string | null; // XMTP-reachable EVM wallet (0x…) resolved by the dispatcher; null = email-only owner
+  delivery?: { url: string; secret: string } | null; // resolved agent-relay webhook (opened); null = none
 }
 
 /** The message a channel delivers. `url` is the "come look" link (the matches page magic-link). */
@@ -99,6 +101,37 @@ const xmtpChannel: NotifyChannel = {
   },
 };
 
+/* --------------------------------------------------------------------- agent-relay (generic, BYO agent)
+ *
+ * The runtime-agnostic delivery channel: Ishtar holds NO chat-app creds. On a match it POSTs a SIGNED
+ * "come look" payload (the matches magic-link — NO PII, never contact) to the owner's OWN agent webhook,
+ * and the agent (OpenClaw / Hermes / Claude / Codex / custom) verifies the HMAC and relays to its human
+ * in whatever app it lives in. OFF venue-wide until AGENT_RELAY_ENABLED; canSend is false without a
+ * resolved delivery webhook, so the dispatcher never selects it and notify falls back to email.
+ */
+const agentRelayChannel: NotifyChannel = {
+  name: "agent-relay",
+  canSend(env, owner) {
+    return agentRelayConfigured(env) && owner.delivery != null && isSafeDeliveryUrl(owner.delivery.url);
+  },
+  async send(env, owner, msg) {
+    const d = owner.delivery;
+    if (!d) return { ok: false, reason: "no delivery webhook" };
+    // kind is 'match' (the only live notify kind); the agent treats the body as untrusted DATA.
+    const payload: AgentRelayPayload = {
+      v: 1,
+      kind: "match",
+      ownerId: owner.id,
+      url: msg.url,
+      subject: msg.subject,
+      text: msg.text,
+      ts: Math.floor(Date.now() / 1000),
+      nonce: crypto.randomUUID(),
+    };
+    return sendAgentRelay(env, d.url, d.secret, payload);
+  },
+};
+
 /* --------------------------------------------------------------------- STUB channels (fill these later)
  * Each stub is a no-op that returns {ok:false, reason:'not-implemented'} and reports canSend=false, so
  * the dispatcher never selects it (and never records a phantom send). A future branch implements the
@@ -131,6 +164,7 @@ const signalChannel = makeStub("signal");
 export const channelRegistry: Record<string, NotifyChannel> = {
   email: emailChannel,
   xmtp: xmtpChannel,
+  "agent-relay": agentRelayChannel,
   telegram: telegramChannel,
   imessage: imessageChannel,
   whatsapp: whatsappChannel,
@@ -296,6 +330,31 @@ export async function resolveOwnerWallet(
   }
 }
 
+/**
+ * Resolve the owner's ACTIVE agent-relay delivery webhook: the newest active owner_deliveries row,
+ * open() the sealed url + secret, and re-validate the URL against the SSRF guard (defense in depth — a
+ * URL safe at registration is re-checked at send). Returns {url,secret} or null. NEVER throws.
+ */
+export async function resolveOwnerDelivery(
+  d1: D1Database,
+  env: Env,
+  ownerId: number,
+): Promise<{ url: string; secret: string } | null> {
+  try {
+    const row = (await d1
+      .prepare("SELECT url, secret FROM owner_deliveries WHERE owner_id = ?1 AND status = 'active' ORDER BY id DESC LIMIT 1")
+      .bind(ownerId)
+      .first()) as { url: string | null; secret: string | null } | null;
+    if (!row?.url || !row?.secret) return null;
+    const url = await open(env, row.url);
+    const secret = await open(env, row.secret);
+    if (!url || !secret || !isSafeDeliveryUrl(url)) return null;
+    return { url, secret };
+  } catch {
+    return null; // owner_deliveries absent or query failed → no agent-relay (email fallback)
+  }
+}
+
 /* --------------------------------------------------------------------- the dispatcher */
 
 /**
@@ -331,6 +390,7 @@ export async function notifyOwner(
       contactRef: owner.contact_ref,
       alertChannels: owner.alert_channels,
       wallet: await resolveOwnerWallet(d1, owner.id, owner.wallet),
+      delivery: await resolveOwnerDelivery(d1, env, owner.id),
     };
 
     const ref = String(payload.coupleId ?? "");

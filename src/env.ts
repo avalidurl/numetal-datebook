@@ -63,6 +63,11 @@ export interface Env {
   // NOT here — it lives only in the listener process (src/xmtp/README.md); this Worker only POSTs to it.
   XMTP_OUTBOUND_URL?: string; // the listener's send endpoint, e.g. https://xmtp-listener.internal/send
   XMTP_OUTBOUND_TOKEN?: string; // optional bearer the listener requires (Authorization: Bearer …)
+  // Agent-relay (generic, runtime-agnostic match delivery). "1"/"true" turns the agent-relay notify
+  // channel on venue-wide; OFF by default → canSend=false everywhere → no per-owner webhook is ever
+  // POSTed and notify falls back to email. The venue holds NO chat-app creds; the owner's agent (any
+  // runtime) receives a signed come-look webhook and relays to its human in whatever app it lives in.
+  AGENT_RELAY_ENABLED?: string;
   // Newsletter (Resend). All optional → the newsletter is dark (no-op) until set.
   RESEND_API_KEY?: string; // re_… secret; sends from the verified numetal.xyz domain
   RESEND_AUDIENCE_ID?: string; // the Resend audience newsletter subscribers are added to
