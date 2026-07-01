@@ -37,10 +37,20 @@ export async function revealReady(db: DB, coupleId: number): Promise<boolean> {
   if (verified.length < ids.length) return false;
   // H1: tier alone is not enough — require a recorded 18+ result for BOTH owners. A provider that
   // reported verified-but-not-adult must NEVER reach contact reveal. The age flag is the gate.
+  // SEC-2026-07-01(#6): the ageOver18=1 row MUST also be status='verified'. Without the status
+  // predicate a stale/declined/expired verification that happened to carry ageOver18=1 would satisfy
+  // the adult gate, letting an owner whose CURRENT verification is not adult (or not verified) reach
+  // contact reveal. Binding age to a verified row closes the minor-safety hole.
   const adult = await db
     .select({ ownerId: identityVerifications.ownerId })
     .from(identityVerifications)
-    .where(and(inArray(identityVerifications.ownerId, ids), eq(identityVerifications.ageOver18, 1)))
+    .where(
+      and(
+        inArray(identityVerifications.ownerId, ids),
+        eq(identityVerifications.status, "verified"),
+        eq(identityVerifications.ageOver18, 1),
+      ),
+    )
     .all();
   const adultSet = new Set(adult.map((a) => a.ownerId));
   if (!ids.every((i) => adultSet.has(i))) return false;

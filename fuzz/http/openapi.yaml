@@ -1,0 +1,469 @@
+openapi: 3.1.0
+info:
+  title: Ishtar / datebook-staging — public HTTP surface (fuzz spec)
+  version: 0.1.0
+  description: >
+    MINIMAL, hand-authored OpenAPI 3.1 spec for schemathesis HTTP fuzzing of the
+    Hono Cloudflare Worker in this repo. Request shapes are transcribed from the
+    zod schemas in src/routes/*. This is a FUZZ TARGET spec, not a public contract:
+    it deliberately declares the wide set of statuses the worker legitimately
+    returns under `wrangler dev` (where ACCESS_KEY and PAY_TO are unset), so
+    schemathesis only flags TRUE server errors.
+
+    Config note for a local run: with no PAY_TO the money paths answer 503
+    ("payments not configured"); with no ACCESS_KEY the access-gated
+    /api/premium path answers 403. Those are documented below as expected. A 500
+    or an unexpected auth-bypass is a FINDING.
+
+servers:
+  - url: http://127.0.0.1:8787
+
+tags:
+  - name: public
+    description: Geo-gated only, no credential.
+  - name: chat
+    description: Public paid chat (wallet session self-auth).
+  - name: featured
+    description: The Window — pay-to-be-seen board (agent x402 + human LlamaPay).
+  - name: intake
+    description: Onboarding / heart-file intake (access-gated).
+  - name: premium
+    description: x402 paid SKUs (access-gated + payment).
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Founder ACCESS_KEY (operator gate) — required by access-gated routes.
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+paths:
+  /api/featured:
+    get:
+      tags: [featured, public]
+      operationId: getFeatured
+      summary: Public read of the live featured board (no PII, no credential).
+      responses:
+        "200":
+          description: The live, non-expired featured cards.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  featured:
+                    type: array
+                    items:
+                      type: object
+                required: [featured]
+        "403":
+          description: Geo-denied (jurisdiction in GEO_DENY) or unknown geo.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/chat/nonce:
+    post:
+      tags: [chat]
+      operationId: chatNonce
+      summary: Mint a single-use SIWE sign-in nonce. Handler ignores the body.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: A fresh nonce.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nonce: { type: string }
+                  expiresInSeconds: { type: integer }
+                required: [nonce, expiresInSeconds]
+        "403":
+          description: Geo-denied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/chat/session:
+    post:
+      tags: [chat]
+      operationId: chatSession
+      summary: Wallet-signature sign-in (SIWE). Consumes a nonce on success.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address:
+                  type: string
+                  pattern: "^0x[0-9a-fA-F]{40}$"
+                message:
+                  type: string
+                  minLength: 20
+                  maxLength: 600
+                signature:
+                  type: string
+                  pattern: "^0x[0-9a-fA-F]+$"
+              required: [address, message, signature]
+      responses:
+        "200":
+          description: Session issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  sessionToken: { type: string }
+        "400":
+          description: Malformed body / message missing a server nonce.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Signature/nonce rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: Geo-denied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/chat/topup:
+    post:
+      tags: [chat]
+      operationId: chatTopup
+      summary: >
+        x402 top-up. No X-PAYMENT header → 402 challenge. Missing PAY_TO → 503.
+      parameters:
+        - in: header
+          name: X-PAYMENT
+          required: false
+          schema: { type: string }
+          description: v1 x402 payment authorization (base64 JSON).
+        - in: header
+          name: PAYMENT-SIGNATURE
+          required: false
+          schema: { type: string }
+          description: v2 x402 payment signature (base64 JSON).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ref:
+                  type: string
+                  minLength: 8
+                  maxLength: 100
+                over18:
+                  type: boolean
+              required: [ref]
+      responses:
+        "200":
+          description: Credited / session issued (only on a verified payment).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Missing/short ref, or over18 not confirmed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "402":
+          description: Payment required (x402 challenge) or not verified.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "403":
+          description: Geo-denied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: PAY_TO unset — payments not configured (expected under dev).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/intake/heart-file:
+    post:
+      tags: [intake]
+      operationId: onboardHeartFile
+      summary: >
+        Onboarding heart-file intake (the real "/api/onboard"; the task's
+        /api/onboard path is NOT mounted in src/index.ts). Access-gated: without
+        an ACCESS_KEY Bearer this returns 403.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName: { type: string, maxLength: 120 }
+                homeMarket:
+                  type: string
+                  enum: [bay_area, nyc, other]
+                activeMarket:
+                  type: string
+                  enum: [bay_area, nyc, remote]
+                availableFor: { type: string, maxLength: 120 }
+                researchOptin:
+                  type: string
+                  enum: [none, aggregate, full]
+                contactRef: { type: string, maxLength: 200 }
+              additionalProperties: true
+      responses:
+        "200":
+          description: Heart-file accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Malformed body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: >
+            Access-gated (no valid ACCESS_KEY Bearer) OR geo-denied/unknown-geo
+            fail-closed for /api/intake/*. Expected under dev with no key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/onboard:
+    post:
+      tags: [intake]
+      operationId: onboardAlias
+      summary: >
+        NOT MOUNTED — no /api/onboard handler exists in src/index.ts. Included
+        because the task enumerated it; the worker falls through to notFound.
+        Kept in the spec so the 404 contract is fuzzed (must NOT 5xx).
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "403":
+          description: Access-gated / geo — this path sits below the access gate.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such route.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/featured/reserve:
+    post:
+      tags: [featured]
+      operationId: featuredReserve
+      summary: >
+        Human LlamaPay reservation of a featured slot. Public (above the access
+        gate). Missing LlamaPay config surfaces as a charge failure, not a 5xx.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                authorKind:
+                  type: string
+                  const: human
+                publicSummary:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                reveal:
+                  type: string
+                  maxLength: 400
+                email:
+                  type: string
+                  pattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+                  maxLength: 200
+                over18:
+                  type: boolean
+                  const: true
+              required: [authorKind, publicSummary, email, over18]
+      responses:
+        "200":
+          description: Reservation outcome (reserved / full / squatting / charge_failed).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Malformed body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: Geo-denied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Board full / outstanding unpaid reservation for this IP.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "422":
+          description: Charge could not be created (e.g. LlamaPay blocked/rejected).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "503":
+          description: >
+            LlamaPay unconfigured — {"ok":false,"code":"llamapay_unconfigured"}.
+            Expected under dev (no LLAMAPAY_API_KEY). A legitimate 5xx, not a bug.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/featured/llamapay-webhook:
+    post:
+      tags: [featured]
+      operationId: featuredLlamapayWebhook
+      summary: >
+        LlamaPay/Coinbase-Commerce webhook. HMAC-signed body; unsigned/forged →
+        401. Not configured → 503. Must fail CLOSED (no unauthenticated write).
+      parameters:
+        - in: header
+          name: X-CC-Webhook-Signature
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Verified event accepted (idempotent).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          description: Missing/invalid signature (fail-closed).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: Geo-denied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Webhook secret unset — not configured (expected under dev).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/premium/compatibility-report:
+    post:
+      tags: [premium]
+      operationId: compatibilityReport
+      summary: >
+        x402 paid compatibility report. Access-gated (Bearer) AND payment-gated.
+        No key → 403; keyed but no PAY_TO → 503; keyed+configured, no payment →
+        402 challenge.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: X-PAYMENT
+          required: false
+          schema: { type: string }
+        - in: header
+          name: PAYMENT-SIGNATURE
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ownerId:
+                  type: integer
+                  minimum: 1
+                coupleId:
+                  type: integer
+                  minimum: 1
+              required: [ownerId]
+      responses:
+        "200":
+          description: Report generated (comped owner) or after settled payment.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Malformed body (ownerId required).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "402":
+          description: Payment required (x402 challenge) or not verified.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "403":
+          description: Access-gated (no valid ACCESS_KEY Bearer) or geo-denied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: PAY_TO unset — payments not configured (expected under dev).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }

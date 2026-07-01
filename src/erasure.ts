@@ -13,6 +13,8 @@ import {
   coachFeedback,
   episodes,
   escalationInvites,
+  featuredOrphanedPayments,
+  featuredPosts,
   heartFiles,
   identityVerifications,
   introConsents,
@@ -82,6 +84,19 @@ export async function eraseOwner(db: DB, env: Env, ownerId: number): Promise<Era
   await db.delete(numetalPerks).where(eq(numetalPerks.ownerId, ownerId)).run();
   await db.delete(ownerWallets).where(eq(ownerWallets.ownerId, ownerId)).run();
   await env.DB.prepare("DELETE FROM relay_sessions WHERE owner_id=?1").bind(ownerId).run(); // raw table (migration 0008)
+  // SEC-2026-07-01(#5): The Window left the human's sealed email behind. featured_posts.email_sealed (the
+  // receipt email) and featured_orphaned_payments.email_sealed (the refund email) were never reached by
+  // erasure. Resolve THIS owner's featured order ids first, drop the orphaned-payment rows, then scrub the
+  // sealed email + owner/persona linkage + author ref and expire the post off the public board.
+  const featured = await db.select({ orderId: featuredPosts.orderId }).from(featuredPosts).where(eq(featuredPosts.ownerId, ownerId)).all();
+  const featuredOrderIds = featured.map((f) => f.orderId);
+  if (featuredOrderIds.length)
+    await db.delete(featuredOrphanedPayments).where(inArray(featuredOrphanedPayments.orderId, featuredOrderIds)).run();
+  await db
+    .update(featuredPosts)
+    .set({ emailSealed: null, ownerId: null, personaId: null, authorRef: null, status: "expired" })
+    .where(eq(featuredPosts.ownerId, ownerId))
+    .run();
   // Tombstone the owner: drop the contact pointer + display name, mark erased.
   await db
     .update(owners)

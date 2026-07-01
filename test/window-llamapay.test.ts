@@ -124,20 +124,24 @@ describe("The Window — LlamaPay human path", () => {
 
     it("returns 'full' when the board is full (no charge created)", async () => {
       const db = makeDb(env.DB);
-      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
+      await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
+      // Deterministic: seed the single slot with a WARM (just-created) 'reserving' occupant directly, instead
+      // of depending on a first reserve's charge/warmth timing (the source of a rare cross-run flake). Still
+      // exercises the real invariant — a warm reservation counts toward the cap — via the slot-count query.
+      await env.DB
+        .prepare("INSERT INTO featured_posts (author_kind, public_summary, order_id, status, created_at) VALUES ('human','held','featured:human:occupant','reserving',?1)")
+        .bind(new Date().toISOString())
+        .run();
       const charge = chargeStub();
-      const a = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
-      expect(a.kind).toBe("reserved");
-      // The slot is warm-reserving (NOT yet paid). The second reserve (different IP) must see it → full.
       const b = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
       expect(b.kind).toBe("full");
-      expect(charge.calls).toHaveLength(1); // no charge for the rejected poster
+      expect(charge.calls).toHaveLength(0); // a full board NEVER charges the rejected poster
     });
 
     // FINDING #5: a FULL board must reject WITHOUT calling the chaperone (claim precedes chaperone).
     it("FINDING #5: a full board returns 409 WITHOUT invoking the chaperone guard", async () => {
       const db = makeDb(env.DB);
-      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
+      await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
       const charge = chargeStub();
       // Fill the only slot.
       const a = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
@@ -154,7 +158,7 @@ describe("The Window — LlamaPay human path", () => {
     // FINDING #5 (cont.): a chaperone block AFTER the claim must RELEASE the slot.
     it("FINDING #5: a chaperone block releases the just-claimed slot (cap freed)", async () => {
       const db = makeDb(env.DB);
-      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
+      await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
       const charge = chargeStub();
       const blocked = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: s12Guard, createCharge: charge.fn });
       expect(blocked.kind).toBe("blocked");
@@ -186,7 +190,7 @@ describe("The Window — LlamaPay human path", () => {
     // ─── THE cap-regression test: a warm reserving row MUST be counted (the created_at format bug) ───
     it("REGRESSION: cap=1, two DISTINCT posters, NO payment between → the 2nd returns full (warm reservation counted)", async () => {
       const db = makeDb(env.DB);
-      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
+      await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
       const charge = chargeStub();
       const first = await reserveHumanSlot(db, lpEnv(), reserveInput(), freshIp(), { guard: okGuard, createCharge: charge.fn });
       expect(first.kind).toBe("reserved"); // slot held, unpaid
@@ -313,7 +317,7 @@ describe("The Window — LlamaPay human path", () => {
     // ROOM → re-features.
     it("FINDING #3: confirmed webhook for an EXPIRED order, board FULL → featured_orphaned_payments + status orphaned + alert", async () => {
       const db = makeDb(env.DB);
-      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
+      await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
       // The payer reserved, then their reservation expired (e.g. they paid late).
       const inp = reserveInput();
       const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: chargeStub().fn });
@@ -348,7 +352,7 @@ describe("The Window — LlamaPay human path", () => {
 
     it("FINDING #3: confirmed webhook for an EXPIRED order, board has ROOM → re-features (expired→live)", async () => {
       const db = makeDb(env.DB);
-      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','5')").run();
+      await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('featured_daily_cap','5')").run();
       const inp = reserveInput();
       const reserved = await reserveHumanSlot(db, lpEnv(), inp, freshIp(), { guard: okGuard, createCharge: chargeStub().fn });
       if (reserved.kind !== "reserved") throw new Error("setup");

@@ -438,6 +438,13 @@ adminRoutes.post("/admin/actions/report", async (c) => {
   } else if (action === "freeze") {
     if (r.target_type === "persona") {
       await db.prepare("UPDATE personas SET status='frozen', reject_reason='reported' WHERE id=?1").bind(r.target_id).run();
+      // SEC-2026-07-01(#9): freezing the persona alone left its live couple courting + published on the
+      // public feed (the handler comment promised "+ end couple" but only the couple-report branch did it).
+      // End every active couple this persona is in so the frozen dater actually leaves the floor.
+      await db
+        .prepare("UPDATE couples SET state='ended' WHERE (a_id=?1 OR b_id=?1) AND state IN ('met','courting','committed','brokered')")
+        .bind(r.target_id)
+        .run();
     } else if (r.target_type === "couple") {
       await db.prepare("UPDATE personas SET status='frozen', reject_reason='reported' WHERE id IN (SELECT a_id FROM couples WHERE id=?1 UNION SELECT b_id FROM couples WHERE id=?1)").bind(r.target_id).run();
       await db.prepare("UPDATE couples SET state='ended' WHERE id=?1").bind(r.target_id).run();

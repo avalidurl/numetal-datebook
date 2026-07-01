@@ -130,10 +130,11 @@ describe("match-token (HMAC, expiring)", () => {
 });
 
 describe("channel registry", () => {
-  it("exposes email plus the five stubs, and resolves by name", () => {
+  it("exposes email, xmtp, the generic agent-relay, plus the four stubs, and resolves by name", () => {
     expect(getChannel("email")?.name).toBe("email");
+    expect(getChannel("agent-relay")?.name).toBe("agent-relay");
     expect(Object.keys(channelRegistry).sort()).toEqual(
-      ["email", "imessage", "signal", "telegram", "whatsapp", "xmtp"].sort(),
+      ["agent-relay", "email", "imessage", "signal", "telegram", "whatsapp", "xmtp"].sort(),
     );
   });
 

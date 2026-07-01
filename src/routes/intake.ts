@@ -5,11 +5,13 @@
  */
 import { Hono } from "hono";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import { db as makeDb } from "../db/client";
-import { heartFiles, owners } from "../db/schema";
+import { heartFiles, ownerDeliveries, owners } from "../db/schema";
 import type { Env } from "../env";
 import { admitWithCap } from "../admission";
 import { seal } from "../crypto/box";
+import { isSafeDeliveryUrl } from "../agentrelay/outbound";
 import { registerEndpoint, verifyEndpoint } from "../identity/endpoints";
 
 export const intakeRoutes = new Hono<{ Bindings: Env }>();
@@ -29,6 +31,11 @@ const heartSchema = z.object({
   // Private contact pointer for founder-brokered intros (concierge model). NEVER served
   // to boards — only surfaced on the access-gated /admin "intros to broker" view.
   contactRef: z.string().max(200).optional(),
+  // OPTIONAL delivery preferences (agent-relay). The agent may select its notify channels and register
+  // its OWN delivery webhook; Ishtar holds no chat-app creds and POSTs a signed come-look to it. Email
+  // stays the always-on floor (dispatch.ts) regardless of what is selected here.
+  alertChannels: z.array(z.enum(["email", "agent-relay", "xmtp"])).max(5).optional(),
+  delivery: z.object({ url: z.string().url().max(400), secret: z.string().min(16).max(200) }).optional(),
   heart: z.record(z.unknown()),
 });
 
@@ -36,6 +43,10 @@ intakeRoutes.post("/intake/heart-file", async (c) => {
   const parsed = heartSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "invalid heart-file", issues: parsed.error.issues }, 400);
   const b = parsed.data;
+  // Reject an unsafe delivery URL BEFORE creating any row (SSRF: the venue would POST to it).
+  if (b.delivery && !isSafeDeliveryUrl(b.delivery.url)) {
+    return c.json({ error: "delivery.url must be a public https URL" }, 400);
+  }
   const heartStr = JSON.stringify(b.heart);
   if (heartStr.length > MAX_HEART_CHARS) return c.json({ error: `heart too large (max ${MAX_HEART_CHARS} chars)` }, 413);
   const db = makeDb(c.env.DB);
@@ -66,6 +77,25 @@ intakeRoutes.post("/intake/heart-file", async (c) => {
     })
     .returning({ id: heartFiles.id })
     .get();
+
+  // Optional: persist the agent's selected notify channels + its own delivery webhook (agent-relay).
+  // Ishtar holds NO chat-app creds — the webhook is the agent's inbound; url+secret sealed at rest.
+  if (b.alertChannels?.length) {
+    const csv = Array.from(new Set(b.alertChannels.map((s) => s.toLowerCase()))).join(",");
+    await db.update(owners).set({ alertChannels: csv }).where(eq(owners.id, owner.id)).run();
+  }
+  if (b.delivery) {
+    await db
+      .insert(ownerDeliveries)
+      .values({
+        ownerId: owner.id,
+        url: (await seal(c.env, b.delivery.url)) ?? b.delivery.url,
+        secret: (await seal(c.env, b.delivery.secret)) ?? b.delivery.secret,
+        status: "active",
+      })
+      .run();
+  }
+
   return c.json({ ownerId: owner.id, heartFileId: hf.id, tier: "agent_represented" });
 });
 

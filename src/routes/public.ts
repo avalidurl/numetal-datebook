@@ -71,7 +71,9 @@ export async function listCourtships(env: Env, limit = 50): Promise<CourtshipLin
      FROM turns t
      JOIN couples c ON c.id = t.couple_id
      JOIN personas p ON p.id = t.author_id
-     WHERE t.status = 'published' AND EXISTS (
+     -- SEC-2026-07-01(A1): a frozen/reported dater's couple is set to 'ended' (admin freeze) — exclude
+     -- ended couples so their already-published turns also drop off the public feed, not just new ones.
+     WHERE t.status = 'published' AND c.state != 'ended' AND EXISTS (
        SELECT 1 FROM personas px JOIN owners ox ON ox.id = px.owner_id
        WHERE px.id IN (c.a_id, c.b_id) AND ox.public_chatter = 1
      )

@@ -24,6 +24,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { db as makeDb, type DB } from "../db/client";
 import { chaperone, type GuardFn } from "../chaperone";
+import { redactPII } from "../chaperone/patterns";
 import { getSetting } from "../economics/budget";
 import { accrueBuyback } from "../economics/reserve";
 import { attest18 } from "../economics/chatcredits";
@@ -146,7 +147,10 @@ export async function claimAndPublishFeatured(
 
   // (c) x402 verify+settle (chat_topup template). The slot is already held, so a 402 challenge here
   // is safe — the held reservation expires on its own if the client never pays.
-  const sku = SKUS.featured_slot!;
+  // SEC-2026-07-01(#4): honor the runtime featured_price_usd knob on the AGENT path too (the human
+  // LlamaPay path already does). The catalog SKU's $50 is only a default; charging agents the static $50
+  // while humans are charged the knob price is a correctness/fairness bug.
+  const sku = { ...SKUS.featured_slot!, priceUsd: `$${await featuredPriceUsd(db)}` };
   const provider = deps?.provider ?? makeX402Provider(env);
   if (!paymentHeader) return { kind: "challenge", orderId };
 
@@ -158,7 +162,10 @@ export async function claimAndPublishFeatured(
   // public payload: the summary AND every reveal value (a clean summary can't smuggle an explicit
   // reveal field). On `sanitize` the redacted text is what we publish.
   const revealText = input.revealFields ? Object.values(input.revealFields).map(String).join("\n") : "";
-  const screenText = revealText ? `${input.publicSummary}\n${revealText}` : input.publicSummary;
+  // SEC-2026-07-01(F1): author_ref is served publicly by listFeatured but was NOT in the screened text,
+  // so an agent could smuggle raw PII (email/phone/contact handle, ≤80 chars) through it. Screen it too,
+  // and redact it on the flip below. (The human path forces author_ref NULL, so this is the agent vector.)
+  const screenText = [input.publicSummary, revealText, input.authorRef].filter(Boolean).join("\n");
   const verdict = await chaperone(
     db,
     env,
@@ -177,10 +184,24 @@ export async function claimAndPublishFeatured(
   const expiresAt = new Date(Date.now() + TTL_MS).toISOString();
   const paidAt = new Date().toISOString();
   const publishedSummary = verdict.text ?? input.publicSummary;
+  // SEC-2026-07-01(#7): on `sanitize` the chaperone flagged PII in the public payload — redact the reveal
+  // fields too (stored raw at reservation, served on the public board), not just the summary. On `allow`
+  // keep them verbatim.
+  const publishedReveal =
+    verdict.verdict === "sanitize"
+      ? redactReveal(input.revealFields)
+      : input.revealFields
+        ? JSON.stringify(input.revealFields)
+        : null;
   const paymentRef = v.tx ? `x402:${v.tx}` : null;
+  // SEC-2026-07-01(F1): redact any PII shape in author_ref before it goes public (a normal handle has no
+  // PII shape → unchanged). Belt to the screenText screen above.
+  const publishedAuthorRef = input.authorRef ? redactPII(input.authorRef).redacted : null;
   const flip = await env.DB
-    .prepare("UPDATE featured_posts SET status='live', payer=?2, expires_at=?3, public_summary=?4, payment_ref=?5, paid_at=?6 WHERE id=?1 AND status='reserving'")
-    .bind(postId, v.payer.toLowerCase(), expiresAt, publishedSummary, paymentRef, paidAt)
+    .prepare(
+      "UPDATE featured_posts SET status='live', payer=?2, expires_at=?3, public_summary=?4, payment_ref=?5, paid_at=?6, reveal_fields=?7, author_ref=?8 WHERE id=?1 AND status='reserving'",
+    )
+    .bind(postId, v.payer.toLowerCase(), expiresAt, publishedSummary, paymentRef, paidAt, publishedReveal, publishedAuthorRef)
     .run();
   if ((flip.meta.changes ?? 0) === 1) {
     await attest18(db, v.payer); // over18 confirmed at the route → recorded (defensible adults-only record)
@@ -305,11 +326,13 @@ export async function reserveHumanSlot(
     return { kind: "blocked", reason: verdict.reason };
   }
   const publishSummary = verdict.text ?? input.publicSummary;
+  // SEC-2026-07-01(#7): redact the reveal on `sanitize` too (stored raw at reservation, served publicly).
+  const publishReveal = verdict.verdict === "sanitize" && input.reveal ? redactPII(input.reveal).redacted : (input.reveal ?? null);
 
   // Seal the email at rest (crypto/box; no-op→plaintext only when ENCRYPTION_KEY is unset/dev). Persist
-  // the (possibly sanitized) summary alongside it.
+  // the (possibly sanitized) summary + reveal alongside it.
   const sealedEmail = (await seal(env, input.email)) ?? input.email;
-  await env.DB.prepare("UPDATE featured_posts SET email_sealed=?2, public_summary=?3 WHERE id=?1").bind(claim.id, sealedEmail, publishSummary).run();
+  await env.DB.prepare("UPDATE featured_posts SET email_sealed=?2, public_summary=?3, reveal_fields=?4 WHERE id=?1").bind(claim.id, sealedEmail, publishSummary, publishReveal).run();
 
   // Create the LlamaPay hosted charge. redirect_url returns to /window?order=<orderId> so the page
   // starts polling status; cancel_url returns to the board.
@@ -343,6 +366,18 @@ async function slotOrdinal(env: Env, postId: number): Promise<number> {
 async function featuredPriceUsd(db: DB): Promise<string> {
   const raw = (await getSetting(db, "featured_price_usd", "50.00")).replace(/[^0-9.]/g, "");
   return raw && Number(raw) > 0 ? raw : "50.00";
+}
+
+/**
+ * SEC-2026-07-01(#7): redact PII from every reveal value. Used when the chaperone returns `sanitize` —
+ * the reveal_fields are stored raw at reservation and served on the PUBLIC board, so a `sanitize` that
+ * only redacted the summary would still leak a raw contact/handle in a reveal field.
+ */
+function redactReveal(revealFields?: Record<string, unknown>): string | null {
+  if (!revealFields) return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(revealFields)) out[k] = redactPII(String(v)).redacted;
+  return JSON.stringify(out);
 }
 
 /** Build the shared TR-100 receipt input for a row, then render it. */
@@ -787,8 +822,12 @@ featuredRoutes.post("/featured/post", async (c) => {
   switch (r.kind) {
     case "full":
       return c.json({ error: "the window is full — all featured slots are taken; try again later", capReached: true }, 409);
-    case "challenge":
-      return x402Challenge(c.env, SKUS.featured_slot!, c.env.PAY_TO, r.orderId);
+    case "challenge": {
+      // SEC-2026-07-01(#4): advertise the live knob price, not the $50 catalog default, so the 402
+      // challenge amount matches what verify() now requires on the agent path.
+      const pricedSku = { ...SKUS.featured_slot!, priceUsd: `$${await featuredPriceUsd(db)}` };
+      return x402Challenge(c.env, pricedSku, c.env.PAY_TO, r.orderId);
+    }
     case "unpaid":
       return c.json({ error: "payment not verified", reason: r.reason }, 402);
     case "blocked":
