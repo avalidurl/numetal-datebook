@@ -4,13 +4,14 @@
  * (otherwise an embedding lingers and is invertible). Leaves only anonymized audit rows
  * (chaperone_decisions / events keyed by id, no PII) for safety/accountability.
  */
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, or } from "drizzle-orm";
 import type { DB } from "./db/client";
 import {
   agentEndpoints,
   chatMessages,
   chatTopups,
   coachFeedback,
+  couples,
   episodes,
   escalationInvites,
   featuredOrphanedPayments,
@@ -51,6 +52,12 @@ export async function eraseOwner(db: DB, env: Env, ownerId: number): Promise<Era
       .set({ heartJson: "", status: "frozen", rejectReason: "erased" })
       .where(eq(personas.ownerId, ownerId))
       .run();
+  }
+  // Dissolve any couples this owner is in. The reveal is already blocked (contactRef nulled + consents
+  // deleted below), but leaving a live couple row is untidy — end it so the connection is actually gone.
+  if (ps.length) {
+    const pidList = ps.map((p) => p.id);
+    await db.update(couples).set({ state: "ended" }).where(or(inArray(couples.aId, pidList), inArray(couples.bId, pidList))).run();
   }
   // Hard-delete the rows that exist solely to serve this person.
   await db.delete(heartFiles).where(eq(heartFiles.ownerId, ownerId)).run();

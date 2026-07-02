@@ -29,6 +29,7 @@ import { purgeExpiredTrysts, trystRoutes } from "./routes/tryst";
 import { featuredRoutes, purgeExpiredFeatured } from "./routes/featured";
 import { matchesRoutes } from "./routes/matches";
 import { agentRoutes } from "./routes/agent";
+import { connectionRoutes } from "./routes/connection";
 import { newsletterRoutes } from "./routes/newsletter";
 import { resendAddContact } from "./newsletter/resend";
 import { publicRoutes } from "./routes/public";
@@ -287,6 +288,11 @@ app.route("/api", matchesRoutes);
 // the access gate); authed by the agent's registered publicKey (EIP-191), NOT the founder ACCESS_KEY.
 app.use("/api/agent", rateLimit("intake"));
 app.route("/api", agentRoutes);
+
+// Self-serve "nuke it": an owner revokes a connection / erases their account via the per-owner
+// magic-link token (verifyMatchToken), NOT the founder key. Public, above the gate; hard-limited.
+app.use("/api/connection", rateLimit("claim"));
+app.route("/api", connectionRoutes);
 
 // Everything below requires the staging key.
 app.use("*", accessGate);
