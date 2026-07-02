@@ -36,6 +36,7 @@ import { publicRoutes } from "./routes/public";
 import { premiumRoutes } from "./routes/premium";
 import { experimentRoutes } from "./routes/experiment";
 import { reportRoutes } from "./routes/report";
+import { fuzzRoutes } from "./routes/fuzz";
 import { sweepRetention } from "./retention";
 import { runReflectionSweep } from "./coach/reflect";
 import { db as makeDb } from "./db/client";
@@ -293,6 +294,11 @@ app.route("/api", agentRoutes);
 // magic-link token (verifyMatchToken), NOT the founder key. Public, above the gate; hard-limited.
 app.use("/api/connection", rateLimit("claim"));
 app.route("/api", connectionRoutes);
+
+// Fuzzing ingest (CI → dashboard + #fuzzing): token-gated with FUZZ_INGEST_TOKEN, so it lives
+// ABOVE the operator access gate — GitHub Actions pushes results without the operator ACCESS_KEY.
+app.use("/api/fuzz/*", rateLimit("intake"));
+app.route("/", fuzzRoutes);
 
 // Everything below requires the staging key.
 app.use("*", accessGate);

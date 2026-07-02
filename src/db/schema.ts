@@ -672,3 +672,29 @@ export const coachFeedback = sqliteTable(
   },
   (t) => ({ bySubjectDay: index("idx_coach_feedback_subject_day").on(t.subject, t.day) }),
 );
+
+// Fuzzing results ingested from CI (fuzz.yml) → rendered in the admin console. See 0026_fuzz_runs.sql.
+export const fuzzRuns = sqliteTable(
+  "fuzz_runs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    repo: text("repo").notNull(),
+    job: text("job").notNull(), // property | coverage-guided
+    event: text("event"),
+    branch: text("branch"),
+    commitSha: text("commit_sha"),
+    conclusion: text("conclusion").notNull(),
+    crashes: integer("crashes").notNull().default(0),
+    corpusSize: integer("corpus_size"),
+    execCount: integer("exec_count"),
+    durationS: integer("duration_s"),
+    runUrl: text("run_url"),
+    runId: text("run_id"),
+    detail: text("detail"), // JSON
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({
+    byCreated: index("idx_fuzz_runs_created").on(t.createdAt),
+    uniqRun: uniqueIndex("idx_fuzz_runs_runid_job").on(t.runId, t.job),
+  }),
+);

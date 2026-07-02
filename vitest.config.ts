@@ -20,6 +20,7 @@ export default defineWorkersConfig(async () => {
             bindings: {
               TEST_MIGRATIONS: migrations,
               ACCESS_KEY: "test-key",
+              FUZZ_INGEST_TOKEN: "test-fuzz-token",
               PAY_TO: "0xtestpayto",
               X402_MODE: "staging",
               DIDIT_API_KEY: "",
