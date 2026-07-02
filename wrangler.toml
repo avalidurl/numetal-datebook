@@ -123,6 +123,11 @@ ACCESS_AUD = "7ed0477d11e5fda6a22390305c1c0136b0ff99c1ca02f10d92db3ea1541a3e80"
 # Persona Relay age-assurance (Phase-1 18+ gate). Set to the "Age 18+ Verified" Claim Type ID from
 # Persona Dashboard → Relay. Empty = the gate degrades gracefully (claim stays profile_claimed).
 PERSONA_CLAIM_TYPE = ""
+# Agent-relay match delivery. "1" turns ON the push channel: on a match the venue POSTs a SIGNED
+# come-look webhook to an owner's registered delivery webhook (the agent then relays to its human).
+# Opt-in per owner (needs an owner_deliveries row) and email stays the always-on floor → additive +
+# safe (inert until agents register webhooks). Proven live 2026-07-02. Set "0"/remove to disable.
+AGENT_RELAY_ENABLED = "1"
 # Experiment operator API (/api/exp/*) — a Bearer-gated PII-decrypt + operator surface. Keep "false"
 # for normal prod (the routes 404 regardless of the key); set "true" ONLY during a sanctioned
 # two-agent run, then flip back to "false" + redeploy.
