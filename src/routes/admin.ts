@@ -72,6 +72,7 @@ async function snapshot(env: Env): Promise<Row> {
     buyback_reserve_usdc: round(reserve),
     geo_denials_today: denials,
     waitlist: Number((await first("SELECT count(*) c FROM waitlist")).c ?? 0),
+    waitlist_by_kind: await list("SELECT kind, count(*) n FROM waitlist GROUP BY kind ORDER BY n DESC"),
     errors_today: errToday,
     errors_5xx_today: err5xxToday,
     errors_by_type_today: await list("SELECT type, count(*) n FROM error_events WHERE date(created_at)=date('now') GROUP BY type ORDER BY n DESC LIMIT 6"),
@@ -264,7 +265,7 @@ adminRoutes.get("/admin", async (c) => {
     card("revenue (usdc)", `$${s.revenue_usdc}`),
     card("buyback reserve", `$${s.buyback_reserve_usdc}`),
     card("geo denials today", String(s.geo_denials_today)),
-    card("waitlist (Phase 1)", `<b>${s.waitlist}</b> <small>human-intro signups</small>`),
+    card("waitlist (Phase 1)", `<b>${s.waitlist}</b> <small>signups</small><br><small>${kvline(s.waitlist_by_kind as Row[], "kind", "n")}</small>`),
     card("loop-closure", `rev $${s.revenue_usdc} <small>vs</small> $${s.spend_today_usd}/day`),
     card("spend by model", `<small>${kvline(s.spend_by_model_today as Row[], "model", "usd")}</small>`),
   ]));
