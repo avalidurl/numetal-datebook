@@ -2,8 +2,9 @@
  * Match → notify trigger glue.
  *
  * Called from the match coordinator the instant a NEW couple row is created. It resolves the couple's
- * two owners, keeps only the ones who are ENROLLED HUMANS (arrived via a featured post), and fires a
- * 'come look' match alert (notifyOwner) for each. Best-effort + fail-soft: it NEVER throws, so a notify
+ * two owners, keeps the ones who WANT a match alert — ENROLLED HUMANS (arrived via a featured post →
+ * email) OR owners who registered an agent-relay DELIVERY WEBHOOK (agent_represented → push) — and fires
+ * a 'come look' match alert (notifyOwner) for each. Best-effort + fail-soft: it NEVER throws, so a notify
  * problem can never abort or stall a match beat.
  *
  * ENROLLED-HUMAN GATE (shared contract with the sibling enrol branch):
@@ -70,6 +71,30 @@ async function enrolledHumanOwners(d1: D1Database, ownerIds: number[]): Promise<
 }
 
 /**
+ * Of these owner ids, which have registered an ACTIVE agent-relay delivery webhook (owner_deliveries)?
+ * This is how the AGENT-SERVED tier opts into match alerts: a pure agent_represented owner has no
+ * featured post, so the enrolled-human gate misses them — but if their agent registered a delivery
+ * webhook, they want the push. Feature-detect-safe: if owner_deliveries doesn't exist yet (pre-0025),
+ * the query throws → caught → skipped (matching unaffected).
+ */
+async function ownersWithDelivery(d1: D1Database, ownerIds: number[]): Promise<number[]> {
+  if (!ownerIds.length) return [];
+  const out: number[] = [];
+  for (const id of ownerIds) {
+    try {
+      const row = await d1
+        .prepare("SELECT 1 AS hit FROM owner_deliveries WHERE owner_id = ?1 AND status = 'active' LIMIT 1")
+        .bind(id)
+        .first();
+      if (row) out.push(id);
+    } catch {
+      /* owner_deliveries absent (pre-migration) → skip; matching unaffected */
+    }
+  }
+  return out;
+}
+
+/**
  * Fire match alerts for any enrolled human in a freshly-formed couple. Idempotent (notifyOwner keys on
  * the couple id), best-effort, never throws. Call it right after the couple row is inserted.
  */
@@ -77,8 +102,11 @@ export async function notifyMatchForCouple(env: Env, coupleId: number): Promise<
   try {
     const d1 = env.DB;
     const ownerIds = await coupleOwnerIds(d1, coupleId);
+    // Union: enrolled humans (email path) + owners with an agent-relay webhook (agent-served push path).
     const humans = await enrolledHumanOwners(d1, ownerIds);
-    for (const ownerId of humans) {
+    const withDelivery = await ownersWithDelivery(d1, ownerIds);
+    const targets = [...new Set([...humans, ...withDelivery])];
+    for (const ownerId of targets) {
       const url = await matchesUrl(env, ownerId);
       await notifyOwner(d1, env, ownerId, "match", { coupleId, matchesUrl: url });
     }
