@@ -73,6 +73,10 @@ export interface Env {
   RESEND_AUDIENCE_ID?: string; // the Resend audience newsletter subscribers are added to
   NEWSLETTER_FROM?: string; // e.g. "Ishtar <ishtar@numetal.xyz>" (default if unset)
   ALERT_WEBHOOK_URL?: string; // optional Slack-compatible webhook for real-time error alerts
+  // Fuzzing pipeline (CI → admin console + #fuzzing Slack). Ingest is token-gated with its own
+  // secret (NOT the operator ACCESS_KEY) so GitHub Actions can push without the operator key.
+  FUZZ_INGEST_TOKEN?: string; // Bearer required on POST /api/fuzz/ingest; ingest 401s until set
+  FUZZ_SLACK_WEBHOOK_URL?: string; // Slack incoming-webhook for #fuzzing; Slack fan-out dark until set
   SENTRY_DSN?: string; // optional — Workers Logs is the default sink; Sentry is extra parity
   // x402 mode: "mainnet" → real USDC via CDP; anything else → Base Sepolia testnet.
   X402_MODE?: string;

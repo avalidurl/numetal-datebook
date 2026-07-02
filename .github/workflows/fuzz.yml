@@ -21,6 +21,21 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: property-based fuzz (fast-check) — must pass
         run: pnpm fuzz
+      - name: report result → admin console + #fuzzing
+        if: always() && github.event_name != 'pull_request'
+        env:
+          INGEST_URL: ${{ secrets.FUZZ_INGEST_URL }}
+          INGEST_TOKEN: ${{ secrets.FUZZ_INGEST_TOKEN }}
+        run: |
+          [ -z "$INGEST_URL" ] && { echo "no FUZZ_INGEST_URL secret — skip report"; exit 0; }
+          curl -sS -m 20 -X POST "$INGEST_URL" \
+            -H "Authorization: Bearer $INGEST_TOKEN" -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg repo "$GITHUB_REPOSITORY" --arg conc "${{ job.status }}" \
+              --arg ev "$GITHUB_EVENT_NAME" --arg br "$GITHUB_REF_NAME" --arg sha "$GITHUB_SHA" \
+              --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg rid "$GITHUB_RUN_ID" \
+              '{repo:$repo,job:"property",event:$ev,branch:$br,commit_sha:$sha,conclusion:$conc,crashes:0,run_url:$url,run_id:$rid}')" \
+            || echo "report POST failed (non-fatal)"
 
   # Nightly + manual: coverage-guided Jazzer.js with a persisted, growing corpus. A crash artifact fails
   # the job (a real finding). NOTE: this is the working substitute for ClusterFuzzLite — the CIFUZZ
@@ -44,3 +59,21 @@ jobs:
           restore-keys: fuzz-corpus-
       - name: coverage-guided fuzz (jazzer.js, 5 min/target)
         run: pnpm fuzz:jazzer 300
+      - name: report result → admin console + #fuzzing
+        if: always()
+        env:
+          INGEST_URL: ${{ secrets.FUZZ_INGEST_URL }}
+          INGEST_TOKEN: ${{ secrets.FUZZ_INGEST_TOKEN }}
+        run: |
+          [ -z "$INGEST_URL" ] && { echo "no FUZZ_INGEST_URL secret — skip report"; exit 0; }
+          CORPUS=$(find fuzz/corpus -type f 2>/dev/null | wc -l | tr -d ' ')
+          CRASHES=$(find . -maxdepth 2 -name 'crash-*' 2>/dev/null | wc -l | tr -d ' ')
+          curl -sS -m 20 -X POST "$INGEST_URL" \
+            -H "Authorization: Bearer $INGEST_TOKEN" -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg repo "$GITHUB_REPOSITORY" --arg conc "${{ job.status }}" \
+              --arg ev "$GITHUB_EVENT_NAME" --arg br "$GITHUB_REF_NAME" --arg sha "$GITHUB_SHA" \
+              --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg rid "$GITHUB_RUN_ID" \
+              --argjson corpus "${CORPUS:-0}" --argjson crashes "${CRASHES:-0}" \
+              '{repo:$repo,job:"coverage-guided",event:$ev,branch:$br,commit_sha:$sha,conclusion:$conc,crashes:$crashes,corpus_size:$corpus,run_url:$url,run_id:$rid}')" \
+            || echo "report POST failed (non-fatal)"

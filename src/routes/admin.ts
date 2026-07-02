@@ -96,6 +96,8 @@ interface DetailData {
   chaperone_recent: Row[];
   geo_recent: Row[];
   errors_recent: Row[];
+  fuzz_recent: Row[];
+  fuzz_open_crashes: number;
 }
 
 async function detail(env: Env): Promise<DetailData> {
@@ -114,6 +116,8 @@ async function detail(env: Env): Promise<DetailData> {
     chaperone_recent: await list("SELECT target_type, target_id, stage, verdict, reason, created_at FROM chaperone_decisions ORDER BY id DESC LIMIT 20"),
     geo_recent: await list("SELECT country, region, route_class, reason, created_at FROM access_denials ORDER BY id DESC LIMIT 15"),
     errors_recent: await list("SELECT status, type, message, route, method, created_at FROM error_events ORDER BY id DESC LIMIT 20"),
+    fuzz_recent: await list("SELECT repo, job, event, conclusion, crashes, corpus_size, exec_count, duration_s, commit_sha, run_url, created_at FROM fuzz_runs ORDER BY id DESC LIMIT 15"),
+    fuzz_open_crashes: Number((await helpers(env).first("SELECT COALESCE(SUM(crashes),0) c FROM fuzz_runs WHERE created_at > datetime('now','-7 days')")).c ?? 0),
   };
 }
 
@@ -208,6 +212,8 @@ adminRoutes.get("/admin", async (c) => {
           ["MCP", "https://api.ishtar.numetal.xyz/mcp"],
           ["public stats", "https://api.ishtar.numetal.xyz/api/public/stats"],
           ["docs", "https://ishtar.numetal.xyz/docs"],
+          ["status (public)", "https://status.numetal.xyz"],
+          ["status · internal", "https://status.numetal.xyz/internal"],
         ]),
         linkGroup("chats / comms", [
           ["Slack", "https://app.slack.com/client"],
@@ -247,6 +253,7 @@ adminRoutes.get("/admin", async (c) => {
       ["The Floor + Talk to Ishtar", repoLink("numetal-datebook"), "CF Worker · datebook-staging", `<a href="https://api.ishtar.numetal.xyz/" target="_blank" rel="noopener">api.ishtar.numetal.xyz</a>`],
       ["Operator console (this page)", repoLink("numetal-datebook"), "CF Worker · datebook-staging", `<a href="https://admin.ishtar.numetal.xyz/admin" target="_blank" rel="noopener">admin.ishtar.numetal.xyz</a>`],
       ["The Heartbench + site", repoLink("ishtar-website"), "CF Worker · ishtar-site", `<a href="https://ishtar.numetal.xyz/" target="_blank" rel="noopener">ishtar.numetal.xyz</a>`],
+      ["Status / uptime", repoLink("numetal-status"), "CF Worker · numetal-status", `<a href="https://status.numetal.xyz/" target="_blank" rel="noopener">status.numetal.xyz</a> · <a href="https://status.numetal.xyz/internal" target="_blank" rel="noopener">/internal</a>`],
       ["operator (redacted)", repoLink("ishtar-operator"), "[redacted-runtime] · [redacted-host] (tailnet)", `<span class="mut">Slack only — no public URL</span>`],
       ['intern · "Pica" (Moltbook bot)', repoLink("ishtar-intern"), "[redacted-runtime] · [redacted-host] (tailnet)", `<span class="mut">Slack only — no public URL</span>`],
     ]) +
@@ -341,11 +348,26 @@ async function claimLink(){const e=document.getElementById('claimres');e.textCon
 async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!v)return;if(!confirm('Erase owner '+v+'? This cascade-deletes their personal data and drops their semantic vectors. Irreversible.'))return;toast('erasing owner '+v+'…');const j=await post('/admin/actions/erase',{ownerId:Number(v)});if(j.ok){toast('owner '+v+' erased ('+j.personasErased+' personas, '+j.vectorsDeleted+' vectors). reloading…');setTimeout(()=>location.reload(),1400);}else toast('error: '+(j.error||'failed'));}
 </script>`;
 
+  const fuzz = sec("§13", "fuzzing (CI)",
+    `<div class="bar" style="margin-bottom:.5rem">7-day crashes: <span class="${Number(d.fuzz_open_crashes) > 0 ? "bad" : "ok"}">${esc(String(d.fuzz_open_crashes))}</span> &nbsp;·&nbsp; results pushed from GitHub Actions → <code>#fuzzing</code> on Slack</div>`
+    + (d.fuzz_recent.length
+        ? tbl(["job", "result", "crashes", "corpus", "execs", "dur", "commit", "at"], d.fuzz_recent.map((r) => [
+            esc(String(r.job)),
+            r.run_url ? `<a href="${esc(String(r.run_url))}" target="_blank" rel="noopener">${st(r.conclusion)} ↗</a>` : st(r.conclusion),
+            Number(r.crashes) > 0 ? `<span class="bad">${esc(String(r.crashes))}</span>` : `<span class="mut">0</span>`,
+            esc(String(r.corpus_size ?? "—")),
+            esc(String(r.exec_count ?? "—")),
+            r.duration_s != null ? `${esc(String(r.duration_s))}s` : "—",
+            `<code>${esc(String(r.commit_sha ?? "").slice(0, 8))}</code>`,
+            `<span class="mut">${esc(String(r.created_at))}</span>`,
+          ]))
+        : `<p class="note">no runs ingested yet. CI POSTs to <code>/api/fuzz/ingest</code> (Bearer <code>FUZZ_INGEST_TOKEN</code>); set <code>FUZZ_SLACK_WEBHOOK_URL</code> to fan results into <code>#fuzzing</code>.</p>`));
+
   const footer = `<p class="note">raw snapshot: <a href="/admin.json">/admin.json</a> · settings &amp; cap are live (no redeploy) · every write is chaperoned · adult-only · text-only</p>`;
 
   return c.html(page({
     title: "ishtar · ops",
-    body: head + projectMap + launchpad + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + errors + footer + script,
+    body: head + projectMap + launchpad + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + errors + fuzz + footer + script,
   }));
 });
 

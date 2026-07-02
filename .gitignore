@@ -20,3 +20,5 @@ fuzz/corpus/
 fuzz/*.fuzz.cjs
 crash-*
 .schemathesis/
+.claude/settings.local.json
+CLAUDE.local.md
