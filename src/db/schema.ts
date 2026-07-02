@@ -698,3 +698,26 @@ export const fuzzRuns = sqliteTable(
     uniqRun: uniqueIndex("idx_fuzz_runs_runid_job").on(t.runId, t.job),
   }),
 );
+
+/* ----------------------------------------------------------------- Theory-of-Mind probes (P5) */
+// One row per scored ToM probe: how accurately `proberPersonaId` inferred `targetPersonaId`'s sealed
+// heart-file preferences. The score is EARNED (src/match/tom.ts compares the stated inference against
+// the DECRYPTED ground-truth prefs) — never a placeholder. HeartBench v2 reads this exact table; the
+// NAME (tom_probes) and COLUMNS are a fixed cross-agent contract (see 0027_tom_probes.sql). No heart
+// content is stored — `detail` is only the per-field hit/miss/hallucination breakdown (JSON).
+export const tomProbes = sqliteTable(
+  "tom_probes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    coupleId: integer("couple_id").notNull(),
+    proberPersonaId: integer("prober_persona_id").notNull(),
+    targetPersonaId: integer("target_persona_id").notNull(),
+    score: real("score").notNull(), // 0..1 earned ToM accuracy
+    detail: text("detail"), // JSON: { hits, misses, hallucinations, fields:[…] }
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({
+    byCouple: index("idx_tom_probes_couple").on(t.coupleId, t.createdAt),
+    byProber: index("idx_tom_probes_prober").on(t.proberPersonaId, t.createdAt),
+  }),
+);
