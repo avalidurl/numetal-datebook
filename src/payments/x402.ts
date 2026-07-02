@@ -17,6 +17,9 @@ export const SKUS: Record<string, Sku> = {
   date_brief: { id: "date_brief", priceUsd: "$10.00", route: "/api/premium/date-brief" },
   priority_cycle: { id: "priority_cycle", priceUsd: "$1.00", route: "/api/premium/priority-cycle" },
   chat_topup: { id: "chat_topup", priceUsd: "$1.00", route: "/api/chat/topup" },
+  // Agent-facing pay-per-answer (x402-native). Bare POST → 402; pay → one Ishtar answer. The endpoint
+  // the CDP Bazaar indexes on first mainnet settle. Small per-call price so agents can buy single answers.
+  agent_ask: { id: "agent_ask", priceUsd: "$0.10", route: "/api/chat/ask" },
   // The Window (REDACTED-ID): pay-to-be-seen public dating-doc slot, 24h, 10 live max.
   // priceUsd is the catalog/challenge default; the live price is a runtime settings knob
   // ('featured_price_usd'), read in the route so it changes without a redeploy.

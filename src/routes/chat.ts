@@ -43,7 +43,7 @@ import {
 import { accrueBuyback } from "../economics/reserve";
 import { chatSpendExceeded } from "../economics/budget";
 import { recordEpisode, recordFeedback } from "../coach/memory";
-import { makeX402Provider, SKUS, x402Challenge, encodeX402Header } from "../payments/x402";
+import { makeX402Provider, SKUS, x402Challenge, encodeX402Header, parsePaymentHeader } from "../payments/x402";
 import { timingSafeEqualStr } from "../util/timing";
 import { docReadyEmail, resendSend } from "../newsletter/resend";
 
@@ -335,6 +335,76 @@ chatRoutes.post("/chat", async (c) => {
 
   if (!safeReply) return c.json({ ok: true, reply: null, withheld: true, reason: withholdReason, via: charge.via, balance: charge.balance });
   return c.json({ ok: true, reply: safeReply, mode, via: charge.via, balance: charge.balance, ...(docDrafted ? { docDraft: "pending", submitHint: 'reply "submit" to send your dating doc' } : {}) });
+});
+
+/* ---- 3b) x402-native pay-per-answer (AGENTS; standard 402-on-the-resource) ----------------
+ * The endpoint the CDP Bazaar indexes: a BARE POST gets a spec-compliant v2 402 challenge; the agent
+ * signs the USDC payment and retries with the PAYMENT-SIGNATURE header + {message}, and gets one
+ * chaperoned Ishtar answer in the SAME 200. No session, no quota — pure pay-per-call, the way an agent
+ * wants it. Same intent + chaperone + crisis/minor envelope as /chat (can't be farmed as a general LLM).
+ * Replay-proof on the EIP-3009 payment nonce (never settles the same authorization twice). */
+const agentAskSchema = z.object({ message: z.string().min(1).max(2000), mode: z.enum(["chat", "coach"]).optional() });
+
+chatRoutes.post("/chat/ask", async (c) => {
+  if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
+  const sku = SKUS.agent_ask!;
+  const provider = makeX402Provider(c.env);
+  const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 / v1
+  // Bare hit → the standard v2 402 (what a generic x402 client + the Bazaar expect; resource = this route).
+  if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, "agentask");
+
+  const parsed = agentAskSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "send {message} (1-2000 chars) with your payment" }, 400);
+  const mode: ChatMode = parsed.data.mode ?? "chat";
+  const { message } = parsed.data;
+
+  const db = makeDb(c.env.DB);
+  // Anti-replay / anti double-settle: key on the signed authorization nonce, checked BEFORE verify()
+  // (mainnet verify SETTLES real USDC). A repeat of the SAME authorization is refused, never re-charged.
+  const terms = parsePaymentHeader(paymentHeader);
+  const orderId = `agentask:${terms?.nonce ?? "nononce"}`;
+  const prior = await db.select({ id: chatTopups.id }).from(chatTopups).where(eq(chatTopups.orderId, orderId)).get();
+  if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
+
+  const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
+  if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
+  // Record the settle (credits:0 — this SKU buys ONE answer, not quota). First insert wins (idempotent).
+  await db
+    .insert(chatTopups)
+    .values({ orderId, payer: v.payer.toLowerCase(), amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""), credits: 0, network: provider.network, nonce: v.nonce, settlementTx: v.tx })
+    .onConflictDoNothing()
+    .run();
+
+  // Safety envelope — same deterministic layers as /chat, in the same order.
+  const crisis = detectCrisis(message);
+  if (crisis.hit) {
+    await recordCrisisEvent(db, `x402:${v.payer}`, crisis);
+    return c.json({ ok: true, reply: crisisResponse(c.req.header("cf-ipcountry") || undefined), via: "crisis", safety: "crisis_support", paid: true });
+  }
+  if (detectMinor(message)) {
+    await recordMinorEvent(db, `x402:${v.payer}`);
+    return c.json({ ok: true, reply: MINOR_REDIRECT, via: "age_gate", safety: "adults_only", paid: true });
+  }
+  const intent = await intentGate(db, c.env, message, undefined, `x402:${v.payer}`);
+  if (!intent.onTopic) return c.json({ ok: true, reply: OFFTOPIC_WARNING, via: "off_topic", offTopic: true, scope: "dating", paid: true });
+  const inV = await chaperone(db, c.env, { stage: "chat_input", targetType: "chat_input", targetId: 0, text: message, callerRef: `x402:${v.payer}` });
+  if (inV.verdict !== "allow" && inV.verdict !== "sanitize") return c.json({ error: "message held by the chaperone", reason: inV.reason }, 422);
+
+  let reply: string;
+  try {
+    reply = await ishtarReply(db, c.env, { address: v.payer, message, mode, draftDoc: false });
+  } catch {
+    return c.json({ error: "Ishtar is resting — try again shortly." }, 503);
+  }
+
+  // Output defenses (egress scrub + prompt-leak backstop + chaperone), all fail-closed — same as /chat.
+  const egress = egressFilter(reply, ISHTAR_PROMPT_ANCHORS);
+  const leak = looksLikeSystemLeak(reply);
+  const outV = await chaperone(db, c.env, { stage: "chat_output", targetType: "chat_output", targetId: 0, text: reply, callerRef: `x402:${v.payer}` });
+  const safe = egress.safe && !leak && (outV.verdict === "allow" || outV.verdict === "sanitize") ? outV.text ?? reply : null;
+  if (v.tx) c.header("PAYMENT-RESPONSE", encodeX402Header({ success: true, transaction: v.tx, network: v.network, payer: v.payer }));
+  if (!safe) return c.json({ ok: true, reply: null, withheld: true, paid: true, payer: v.payer });
+  return c.json({ ok: true, reply: safe, mode, paid: true, payer: v.payer, tx: v.tx });
 });
 
 /* ---- 4) balance -------------------------------------------------------------------------- */
