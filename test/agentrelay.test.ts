@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentRelayConfigured,
   isSafeDeliveryUrl,
@@ -94,4 +94,11 @@ describe("agent-relay: send fail-soft (short-circuits before any fetch)", () => 
     expect(r.ok).toBe(false);
     expect(r.reason).toContain("secret");
   });
+  it("does not follow redirects — a 3xx is a failure, not a chased redirect (SSRF)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://169.254.169.254/" } })));
+    const r = await sendAgentRelay({ AGENT_RELAY_ENABLED: "1" }, "https://agent.example.com/h", "supersecretsupersecret", payload);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("302");
+  });
+  afterEach(() => vi.unstubAllGlobals());
 });

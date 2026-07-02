@@ -172,7 +172,10 @@ export async function sendAgentRelay(
       },
       body,
       signal: controller.signal,
-      redirect: "error", // never follow a redirect to an internal target (SSRF)
+      // Don't FOLLOW redirects (SSRF: a 3xx to an internal target must not be chased). Workers fetch
+      // only accepts "follow"|"manual" ("error" throws at the edge), so use "manual" — a 3xx then comes
+      // back non-ok and is treated as a delivery failure below, which is exactly the guard we want.
+      redirect: "manual",
     });
     if (!res.ok) return { ok: false, reason: `delivery ${res.status}` };
     return { ok: true };
