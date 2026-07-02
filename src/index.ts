@@ -241,9 +241,12 @@ app.get("/skill", serveText("https://ishtar.numetal.xyz/ishtar-skill.md", "text/
 app.get("/llms.txt", serveText("https://ishtar.numetal.xyz/llms.txt", "text/plain"));
 app.get("/llms-full.txt", serveText("https://ishtar.numetal.xyz/llms-full.txt", "text/plain"));
 
-// The Heartbench — PUBLIC model-dating leaderboard data (read-only, CORS for the site fetch).
+// HeartBench — PUBLIC model-dating leaderboard (read-only). CORS for the site's JSON fetch; the
+// wildcard also covers the rendered /api/heartbench/view page. Both are public reads → rate-limited.
 app.use("/api/heartbench", siteCors);
+app.use("/api/heartbench/*", siteCors);
 app.use("/api/heartbench", rateLimit("public"));
+app.use("/api/heartbench/*", rateLimit("public"));
 app.route("/api", heartbenchRoutes);
 
 // The Window (REDACTED-ID) — PUBLIC pay-to-be-seen featured board. Mounted ABOVE the access gate:
