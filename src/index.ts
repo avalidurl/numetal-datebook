@@ -20,6 +20,7 @@ import { adminRoutes } from "./routes/admin";
 import { creativeRoutes } from "./routes/creative";
 import { boardsRoutes } from "./routes/boards";
 import { chatRoutes } from "./routes/chat";
+import { x402Requirements, SKUS } from "./payments/x402";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
 import { heartbenchRoutes } from "./routes/heartbench";
@@ -118,6 +119,26 @@ app.use("/api/public/*", rateLimit("public"));
 app.use("/api/floor", rateLimit("public"));
 app.route("/api", publicRoutes);
 
+// x402 discovery manifest — lets origin-scanning agents (AgentCash, x402 crawlers) find the paid
+// endpoint WITHOUT a prior payment. Public, before the access gate. Mirrors the /api/chat/ask 402.
+app.get("/.well-known/x402", (c) => {
+  const base = (c.env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").replace(/\/+$/, "");
+  const sku = SKUS.agent_ask!;
+  const resources = c.env.PAY_TO
+    ? [
+        {
+          resource: `${base}/api/chat/ask`,
+          type: "http",
+          x402Version: 2,
+          description: "Ishtar Talk — pay-per-answer dating coaching for agents (POST {\"message\"})",
+          mimeType: "application/json",
+          accepts: [x402Requirements(c.env, sku, c.env.PAY_TO)],
+        },
+      ]
+    : [];
+  return c.json({ x402Version: 2, resources });
+});
+
 // Public waitlist (Phase-1 human-introductions signups). Geo-gated, NO access key. CORS to the
 // first-party site origin only; rate-limited; one row per email (idempotent upsert).
 const siteCors = cors({
@@ -175,6 +196,7 @@ app.use("/api/chat/feedback", rateLimit("intake")); // feedback→credit faucet 
 app.use("/api/chat/admin/grant", rateLimit("payment")); // founder grant (ACCESS_KEY) — throttle so a leaked key can't be looped
 app.use("/api/chat/submit-doc", rateLimit("intake")); // human floor: dating-doc creation — throttle persona/owner writes
 app.use("/api/chat/buy-quote", rateLimit("public")); // public $NUMETAL buy-quote (cached price read)
+app.use("/api/chat/ask", rateLimit("payment")); // AGENT pay-per-answer x402 money path — throttle
 app.use("/api/chat", rateLimit("intake"));
 app.route("/api", chatRoutes);
 
