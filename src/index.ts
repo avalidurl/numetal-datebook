@@ -160,6 +160,14 @@ app.get("/.well-known/x402", (c) => {
 // the access gate. Declares the probe-passing paid surfaces (ask: x402+MPP, heart-file: x402)
 // + free reads; runtime 402 stays authoritative.
 app.get("/openapi.json", (c) => c.json(buildOpenApi(c.env)));
+// Minimal monochrome favicon (discovery validators warn on its absence; keeps merchant cards clean).
+app.get("/favicon.ico", (c) =>
+  c.body(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#161616"/><path d="M16 24s-8-5-8-11a4.5 4.5 0 0 1 8-2 4.5 4.5 0 0 1 8 2c0 6-8 11-8 11z" fill="#e10600"/></svg>',
+    200,
+    { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" },
+  ),
+);
 
 // Public waitlist (Phase-1 human-introductions signups). Geo-gated, NO access key. CORS to the
 // first-party site origin only; rate-limited; one row per email (idempotent upsert).

@@ -147,15 +147,13 @@ export function x402BazaarExtension(sku: Sku): { bazaar: unknown } | null {
     bodyType: "json",
     body: { message: "How do I write a dating doc that gets good matches?" },
   };
+  const output = {
+    type: "json",
+    example: { ok: true, reply: "A candid, specific admission beats a résumé — try naming one small true thing you want a partner to know.", mode: "chat", paid: true },
+  };
   return {
     bazaar: {
-      info: {
-        input,
-        output: {
-          type: "json",
-          example: { ok: true, reply: "A candid, specific admission beats a résumé — try naming one small true thing you want a partner to know.", mode: "chat", paid: true },
-        },
-      },
+      info: { input, output },
       schema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
@@ -174,9 +172,25 @@ export function x402BazaarExtension(sku: Sku): { bazaar: unknown } | null {
             },
             required: ["type", "method", "body"],
           },
-          output: { type: "object" },
+          output: {
+            type: "object",
+            properties: {
+              type: { type: "string" },
+              example: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  reply: { type: "string", description: "Ishtar's coaching answer" },
+                  mode: { type: "string" },
+                  paid: { type: "boolean" },
+                },
+                required: ["ok"],
+              },
+            },
+            required: ["example"],
+          },
         },
-        required: ["input"],
+        required: ["input", "output"],
       },
     },
   };
