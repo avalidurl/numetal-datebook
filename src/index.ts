@@ -21,6 +21,7 @@ import { creativeRoutes } from "./routes/creative";
 import { boardsRoutes } from "./routes/boards";
 import { chatRoutes } from "./routes/chat";
 import { x402Requirements, SKUS } from "./payments/x402";
+import { buildOpenApi } from "./discovery/openapi";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
 import { heartbenchRoutes } from "./routes/heartbench";
@@ -153,6 +154,12 @@ app.get("/.well-known/x402", (c) => {
     : [];
   return c.json({ x402Version: 2, resources });
 });
+
+// OpenAPI 3.1 discovery document — the canonical machine-readable contract the x402 discovery
+// indexers (x402scan, mppscan, @agentcash/discovery) read at GET /openapi.json. Public, before
+// the access gate. Declares the probe-passing paid surfaces (ask: x402+MPP, heart-file: x402)
+// + free reads; runtime 402 stays authoritative.
+app.get("/openapi.json", (c) => c.json(buildOpenApi(c.env)));
 
 // Public waitlist (Phase-1 human-introductions signups). Geo-gated, NO access key. CORS to the
 // first-party site origin only; rate-limited; one row per email (idempotent upsert).
