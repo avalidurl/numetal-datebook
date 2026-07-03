@@ -367,6 +367,15 @@ chatRoutes.post("/chat/ask", async (c) => {
   const db = makeDb(c.env.DB);
   const orderId = isMpp ? `agentask:mpp:${mppCred!.challenge.id ?? "noid"}` : `agentask:${parsePaymentHeader(paymentHeader!)?.nonce ?? "nononce"}`;
 
+  // x402 fast-path: short-circuit a replayed authorization BEFORE provider.verify(), which would
+  // otherwise re-broadcast the same EIP-3009 nonce to the CDP facilitator (a doomed on-chain settle
+  // attempt — money-safe via the on-chain nonce, but wasteful). The insert-gate below is still the
+  // authoritative anti-replay for both rails; MPP dedups there (its tx hash isn't known until verify).
+  if (!isMpp) {
+    const prior = await db.select({ id: chatTopups.id }).from(chatTopups).where(eq(chatTopups.orderId, orderId)).get();
+    if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
+  }
+
   const v = isMpp ? await verifyMppPayment(c.env, mppCred!, sku) : await provider.verify(paymentHeader!, sku, c.env.PAY_TO);
   if (!v.verified || !v.payer) {
     // A 402 MUST carry a fresh challenge (both specs) — re-serve the dual-rail challenge, not a bare error.
