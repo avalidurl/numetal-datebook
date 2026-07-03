@@ -18,9 +18,11 @@ import { freeQuotaForUsd, getNumetalPriceUsd, readNumetalUsd, type PerkLevel } f
 const SESSION_TTL_DAYS = 30;
 const PERK_CACHE_HOURS = 24;
 
+// Messages granted per USD of chat top-up. Fractional allowed (7.5 → a $2 top-up = 15 messages);
+// the caller rounds the final credit grant. Default 7.5 ($2 = 15 msgs).
 export function creditsPerUsd(env: Env): number {
-  const n = Number(env.CHAT_CREDITS_PER_USD ?? "25");
-  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 25;
+  const n = Number(env.CHAT_CREDITS_PER_USD ?? "7.5");
+  return Number.isFinite(n) && n > 0 ? n : 7.5;
 }
 
 const lc = (a: string) => a.trim().toLowerCase();

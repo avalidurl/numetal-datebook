@@ -147,7 +147,7 @@ chatRoutes.post("/chat/topup", async (c) => {
   if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
 
   const dollars = Number(sku.priceUsd.replace("$", ""));
-  const credits = creditsPerUsd(c.env) * dollars;
+  const credits = Math.round(creditsPerUsd(c.env) * dollars); // e.g. 7.5 × $2 = 15 messages
   // Idempotent settle: first insert wins; a replay credits nothing twice.
   const first = await db
     .insert(chatTopups)

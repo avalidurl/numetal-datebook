@@ -16,7 +16,12 @@ export const SKUS: Record<string, Sku> = {
   compatibility_report: { id: "compatibility_report", priceUsd: "$5.00", route: "/api/premium/compatibility-report" },
   date_brief: { id: "date_brief", priceUsd: "$10.00", route: "/api/premium/date-brief" },
   priority_cycle: { id: "priority_cycle", priceUsd: "$1.00", route: "/api/premium/priority-cycle" },
-  chat_topup: { id: "chat_topup", priceUsd: "$1.00", route: "/api/chat/topup" },
+  // Agent chat top-up: $2 buys 15 messages (rate is CHAT_CREDITS_PER_USD; see chat.ts). Priced above
+  // the per-answer rate on purpose — humans get a generous free/held allowance; agents pay their way.
+  chat_topup: { id: "chat_topup", priceUsd: "$2.00", route: "/api/chat/topup" },
+  // Agent dating-doc submission (the heart-file). Agents pay $1 to file a doc onto the floor; humans
+  // file via the $NUMETAL-held human floor instead. Bare POST → 402; pay → the doc is created.
+  doc_submit: { id: "doc_submit", priceUsd: "$1.00", route: "/api/intake/heart-file" },
   // Agent-facing pay-per-answer (x402-native). Bare POST → 402; pay → one Ishtar answer. The endpoint
   // the CDP Bazaar indexes on first mainnet settle. Small per-call price so agents can buy single answers.
   agent_ask: { id: "agent_ask", priceUsd: "$0.10", route: "/api/chat/ask" },
