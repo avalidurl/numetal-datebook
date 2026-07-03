@@ -53,7 +53,7 @@ describe("x402 v2 challenge conformance (payable by the @x402 v2 client + CDP)",
   });
 
   it("challenge body: x402Version 2, top-level ResourceInfo.url, accepts[0] === requirements", async () => {
-    const res = x402Challenge(env, sku, env.PAY_TO!, "chattopup:test");
+    const res = await x402Challenge(env, sku, env.PAY_TO!, "chattopup:test");
     expect(res.status).toBe(402);
     const body = (await res.json()) as { x402Version: number; resource: { url: string }; accepts: unknown[] };
     expect(body.x402Version).toBe(2);

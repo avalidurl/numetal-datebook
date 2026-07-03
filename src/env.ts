@@ -84,6 +84,13 @@ export interface Env {
   EXPERIMENT_ENABLED?: string; // "true"/"1" lights up the Bearer-gated /api/exp/* operator API; OFF by default (routes 404) so the PII-decrypt surface is dormant in normal prod
   CDP_API_KEY_ID?: string;
   CDP_API_KEY_SECRET?: string;
+  // MPP (Tempo rail, src/payments/mpp.ts). ALL optional → the rail is dark until
+  // MPP_ENABLED=1 + MPP_SECRET_KEY (HMAC for challenge ids) are set.
+  MPP_ENABLED?: string;
+  MPP_SECRET_KEY?: string; // secret behind the HMAC-bound challenge ids (wrangler secret)
+  MPP_RECIPIENT?: string; // Tempo-side receiving address; defaults to PAY_TO (same keypair, two chains)
+  MPP_CURRENCY?: string; // TIP-20 token address accepted on Tempo (default: USDC-on-Tempo)
+  TEMPO_RPC_URL?: string; // Tempo JSON-RPC for receipt verification (default https://rpc.tempo.xyz)
   // Escalation tier (humans meet). All optional → the tier is disabled (no-op) until set.
   PRIVY_APP_ID?: string;
   PRIVY_VERIFICATION_KEY?: string; // PEM SPKI public key from the Privy dashboard (ES256)
