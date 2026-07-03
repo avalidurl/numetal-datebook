@@ -374,27 +374,31 @@ chatRoutes.post("/chat/ask", async (c) => {
     .values({ orderId, payer: v.payer.toLowerCase(), amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""), credits: 0, network: provider.network, nonce: v.nonce, settlementTx: v.tx })
     .onConflictDoNothing()
     .run();
+  // Money has moved: EVERY response from here on carries the receipt — the PAYMENT-RESPONSE header
+  // (what x402 clients parse) + payer/tx in the body. The safety/scope branches below refuse the
+  // ANSWER, never the settle, so omitting the receipt there misreports a real charge as unpaid.
+  if (v.tx) c.header("PAYMENT-RESPONSE", encodeX402Header({ success: true, transaction: v.tx, network: v.network, payer: v.payer }));
 
   // Safety envelope — same deterministic layers as /chat, in the same order.
   const crisis = detectCrisis(message);
   if (crisis.hit) {
     await recordCrisisEvent(db, `x402:${v.payer}`, crisis);
-    return c.json({ ok: true, reply: crisisResponse(c.req.header("cf-ipcountry") || undefined), via: "crisis", safety: "crisis_support", paid: true });
+    return c.json({ ok: true, reply: crisisResponse(c.req.header("cf-ipcountry") || undefined), via: "crisis", safety: "crisis_support", paid: true, payer: v.payer, tx: v.tx });
   }
   if (detectMinor(message)) {
     await recordMinorEvent(db, `x402:${v.payer}`);
-    return c.json({ ok: true, reply: MINOR_REDIRECT, via: "age_gate", safety: "adults_only", paid: true });
+    return c.json({ ok: true, reply: MINOR_REDIRECT, via: "age_gate", safety: "adults_only", paid: true, payer: v.payer, tx: v.tx });
   }
   const intent = await intentGate(db, c.env, message, undefined, `x402:${v.payer}`);
-  if (!intent.onTopic) return c.json({ ok: true, reply: OFFTOPIC_WARNING, via: "off_topic", offTopic: true, scope: "dating", paid: true });
+  if (!intent.onTopic) return c.json({ ok: true, reply: OFFTOPIC_WARNING, via: "off_topic", offTopic: true, scope: "dating", paid: true, payer: v.payer, tx: v.tx });
   const inV = await chaperone(db, c.env, { stage: "chat_input", targetType: "chat_input", targetId: 0, text: message, callerRef: `x402:${v.payer}` });
-  if (inV.verdict !== "allow" && inV.verdict !== "sanitize") return c.json({ error: "message held by the chaperone", reason: inV.reason }, 422);
+  if (inV.verdict !== "allow" && inV.verdict !== "sanitize") return c.json({ error: "message held by the chaperone", reason: inV.reason, paid: true, payer: v.payer, tx: v.tx }, 422);
 
   let reply: string;
   try {
     reply = await ishtarReply(db, c.env, { address: v.payer, message, mode, draftDoc: false });
   } catch {
-    return c.json({ error: "Ishtar is resting — try again shortly." }, 503);
+    return c.json({ error: "Ishtar is resting — try again shortly.", paid: true, payer: v.payer, tx: v.tx }, 503);
   }
 
   // Output defenses (egress scrub + prompt-leak backstop + chaperone), all fail-closed — same as /chat.
@@ -402,8 +406,7 @@ chatRoutes.post("/chat/ask", async (c) => {
   const leak = looksLikeSystemLeak(reply);
   const outV = await chaperone(db, c.env, { stage: "chat_output", targetType: "chat_output", targetId: 0, text: reply, callerRef: `x402:${v.payer}` });
   const safe = egress.safe && !leak && (outV.verdict === "allow" || outV.verdict === "sanitize") ? outV.text ?? reply : null;
-  if (v.tx) c.header("PAYMENT-RESPONSE", encodeX402Header({ success: true, transaction: v.tx, network: v.network, payer: v.payer }));
-  if (!safe) return c.json({ ok: true, reply: null, withheld: true, paid: true, payer: v.payer });
+  if (!safe) return c.json({ ok: true, reply: null, withheld: true, paid: true, payer: v.payer, tx: v.tx });
   return c.json({ ok: true, reply: safe, mode, paid: true, payer: v.payer, tx: v.tx });
 });
 

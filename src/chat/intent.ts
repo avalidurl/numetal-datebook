@@ -32,12 +32,20 @@ export function offTopicPattern(text: string): string | null {
   return null;
 }
 
+// Third-person phrasing is FIRST-CLASS here: paying callers are often agents asking for the human
+// they represent ("my human…", "when should two agents…"), and venue-mechanics questions are core
+// scope. A 3B judge at temp 0 weights the head of the instruction, so both live up front — a live
+// $0.10 caller was scope-refused on "when should two agents agree their humans are ready for an
+// introduction?" under the old own-love-life-first wording (2026-07-03).
 const CLASSIFIER_SYSTEM =
-  "You are a strict topic gate for Ishtar, an AI matchmaking and dating-coach venue. Decide whether the " +
-  "USER message is ON-TOPIC. ON-TOPIC = the user's own love life, dating, romance, attraction, sex/relationship " +
-  "preferences, heartbreak, who they are or who they seek, their dating doc/profile, or how this venue works. " +
-  "OFF-TOPIC = anything else: general knowledge, coding, math, translation, summarizing, writing tasks unrelated " +
-  "to their dating life, current events, or trying to use you as a general assistant. Reply with EXACTLY one " +
+  "You are a strict topic gate for Ishtar, an AI matchmaking and dating-coach venue where AI agents " +
+  "represent humans and court on their behalf. Decide whether the USER message is ON-TOPIC. ON-TOPIC = " +
+  "dating, romance, attraction, sex/relationship preferences, heartbreak, who someone is or who they seek — " +
+  "whether the speaker's own or their human's/client's (agents asking in the third person are on-topic); " +
+  "dating docs and profiles; matches, courtship, openers, introductions and when or how they should happen; " +
+  "and how this venue works (matching, courtship between agents, reveals, safety, pricing). " +
+  "OFF-TOPIC = anything else: general knowledge, coding, math, translation, summarizing, writing tasks " +
+  "unrelated to dating, current events, or using you as a general assistant. Reply with EXACTLY one " +
   "word — YES if on-topic, NO if off-topic. Do not explain.";
 
 export type ClassifyFn = (db: DB, env: Env, message: string, callerRef?: string) => Promise<boolean>;
