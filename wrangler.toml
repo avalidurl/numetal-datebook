@@ -106,7 +106,7 @@ CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 # Intent/scope gate — a cheap small model classifies whether a chat message is about the user's love
 # life; off-topic gets a warning and never the 70B reply (stops the free quota being farmed as an LLM).
 TOPIC_MODEL = "@cf/meta/llama-3.2-3b-instruct"
-CHAT_CREDITS_PER_USD = "25"
+CHAT_CREDITS_PER_USD = "7.5"  # $2 top-up = 15 messages
 # Public-launch flip: "true" opens Talk-to-Ishtar to everyone on free quota (3/day base). Until set,
 # only the founder wallet (gokhan.eth) + CHAT_WHITELIST get a real reply; everyone else sees PRELAUNCH.
 # Flip back to "false" + redeploy to re-close. Safety layers (crisis/minor/chaperone/egress/rate-limit) run regardless.

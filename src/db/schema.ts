@@ -741,3 +741,16 @@ export const revealPayments = sqliteTable(
   },
   (t) => ({ byCoupleOwner: uniqueIndex("idx_reveal_payments_couple_owner").on(t.coupleId, t.ownerId) }),
 );
+
+// Agent dating-doc submission payments (x402 $1 per doc). order_id UNIQUE (keyed on the payment nonce)
+// = anti-replay so a signed authorization never settles twice. See src/payments/x402.ts doc_submit.
+export const intakePayments = sqliteTable("intake_payments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  orderId: text("order_id").notNull().unique(),
+  payer: text("payer"),
+  amountUsdc: text("amount_usdc").notNull(),
+  network: text("network").notNull(),
+  nonce: text("nonce"),
+  settlementTx: text("settlement_tx"),
+  createdAt: text("created_at").notNull().default(now),
+});

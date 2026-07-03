@@ -24,7 +24,7 @@ import { x402Requirements, SKUS } from "./payments/x402";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
 import { heartbenchRoutes } from "./routes/heartbench";
-import { intakeRoutes } from "./routes/intake";
+import { heartFileHandler, intakeRoutes } from "./routes/intake";
 import { purgeExpiredTrysts, trystRoutes } from "./routes/tryst";
 import { featuredRoutes, purgeExpiredFeatured } from "./routes/featured";
 import { matchesRoutes } from "./routes/matches";
@@ -123,6 +123,10 @@ const revealCors = cors({
 app.use("/api/escalations/reveal", revealCors);
 app.post("/api/escalations/reveal", rateLimit("claim"), revealHandler); // bilateral reveal (Privy-auth, gated on revealReady; $20/side x402 unlock; held until Didit verifies both)
 app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback (HMAC-auth)
+// Agent dating-doc submission — PUBLIC (above the access gate): a BYO agent can't hold the founder
+// ACCESS_KEY, so the $1 x402 payment is the write authorization (bare POST → 402; pay → doc filed).
+// Downstream chaperone + admission still gate the doc; $1/write is the anti-flood floor. PAY_TO unset → free.
+app.post("/api/intake/heart-file", rateLimit("intake"), heartFileHandler);
 
 // Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed
 // + the "watch the floor" live feed (/api/floor, REDACTED-ID). All rate-limited as public reads.

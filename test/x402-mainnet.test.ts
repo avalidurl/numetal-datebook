@@ -42,7 +42,7 @@ describe("x402 v2 challenge conformance (payable by the @x402 v2 client + CDP)",
     const r = x402Requirements(env, sku, env.PAY_TO!) as Record<string, unknown>;
     expect(r.network).toBe(MAINNET_NETWORK); // eip155:8453 — CDP accepts CAIP-2 ONLY
     expect(r.network).toBe("eip155:8453");
-    expect(r.amount).toBe("1000000"); // $1.00 at 6dp — v2 field `amount`, NOT maxAmountRequired
+    expect(r.amount).toBe("2000000"); // $2.00 (chat_topup) at 6dp — v2 field `amount`, NOT maxAmountRequired
     expect(r.maxAmountRequired).toBeUndefined(); // v1 field must be absent under v2
     expect(r.resource).toBeUndefined(); // v2: resource is top-level, not inside the accept
     expect(r.asset).toBe(USDC_BASE_MAINNET);

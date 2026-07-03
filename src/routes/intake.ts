@@ -3,14 +3,15 @@
  * owner (tier=agent_represented, no human login) + a heart_file; an agent endpoint
  * registers and must pass a challenge before it is active. /personas drives sim admission.
  */
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db as makeDb } from "../db/client";
-import { heartFiles, ownerDeliveries, owners } from "../db/schema";
+import { heartFiles, intakePayments, ownerDeliveries, owners } from "../db/schema";
 import type { Env } from "../env";
 import { admitWithCap } from "../admission";
 import { seal } from "../crypto/box";
+import { SKUS, makeX402Provider, parsePaymentHeader, x402Challenge } from "../payments/x402";
 import { isSafeDeliveryUrl } from "../agentrelay/outbound";
 import { registerEndpoint, verifyEndpoint } from "../identity/endpoints";
 
@@ -39,7 +40,33 @@ const heartSchema = z.object({
   heart: z.record(z.unknown()),
 });
 
-intakeRoutes.post("/intake/heart-file", async (c) => {
+// Agent dating-doc submission. Registered as a PUBLIC route in index.ts (ABOVE the operator access
+// gate) because a BYO agent can't hold the founder ACCESS_KEY — the $1 x402 payment IS the write
+// authorization (same pattern as the reveal/claim routes: public, authorized by payment/token, not
+// the operator key). Downstream chaperone + admission still apply; $1/write is the anti-flood floor.
+export const heartFileHandler = async (c: Context<{ Bindings: Env }>): Promise<Response> => {
+  const db = makeDb(c.env.DB);
+  // Agents pay $1 (x402/USDC) to file a dating doc onto the floor. Bare POST → 402; pay → the doc is
+  // created. PAY_TO unset → payments off → submission is free (backward compatible). Humans file via
+  // the $NUMETAL-held human floor (/api/chat/submit-doc) instead, so this only meters agent intake.
+  if (c.env.PAY_TO) {
+    const sku = SKUS.doc_submit!;
+    const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 / v1
+    if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, "docsubmit");
+    // Anti-replay: key on the signed authorization nonce, checked BEFORE verify() (mainnet SETTLES).
+    const terms = parsePaymentHeader(paymentHeader);
+    const orderId = `docsubmit:${terms?.nonce ?? "nononce"}`;
+    const prior = await db.select({ id: intakePayments.id }).from(intakePayments).where(eq(intakePayments.orderId, orderId)).get();
+    if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
+    const provider = makeX402Provider(c.env);
+    const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
+    if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
+    await db
+      .insert(intakePayments)
+      .values({ orderId, payer: v.payer.toLowerCase(), amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""), network: provider.network, nonce: v.nonce, settlementTx: v.tx })
+      .onConflictDoNothing()
+      .run();
+  }
   const parsed = heartSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "invalid heart-file", issues: parsed.error.issues }, 400);
   const b = parsed.data;
@@ -49,7 +76,6 @@ intakeRoutes.post("/intake/heart-file", async (c) => {
   }
   const heartStr = JSON.stringify(b.heart);
   if (heartStr.length > MAX_HEART_CHARS) return c.json({ error: `heart too large (max ${MAX_HEART_CHARS} chars)` }, 413);
-  const db = makeDb(c.env.DB);
   const owner = await db
     .insert(owners)
     .values({
@@ -97,7 +123,7 @@ intakeRoutes.post("/intake/heart-file", async (c) => {
   }
 
   return c.json({ ownerId: owner.id, heartFileId: hf.id, tier: "agent_represented" });
-});
+};
 
 const agentSchema = z.object({
   ownerId: z.number().int().positive().optional(),
