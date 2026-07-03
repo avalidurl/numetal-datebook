@@ -131,6 +131,57 @@ export function x402Requirements(env: Env, sku: Sku, payTo: string) {
   };
 }
 
+/**
+ * CDP Bazaar discovery extension (x402 v2 `extensions.bazaar`). CDP indexes a resource ONLY when it
+ * settles a payment whose requirements DECLARE this metadata (settling alone is not enough — docs.cdp
+ * .coinbase.com/x402/bazaar). `info.input` must pass strict JSON-Schema validation against
+ * `schema.properties.input`, or CDP's EXTENSION-RESPONSES header on settle reads `rejected`. Only the
+ * agent_ask surface is declared (the public, invocable pay-per-answer endpoint); other SKUs stay
+ * undeclared → not cataloged, by design.
+ */
+export function x402BazaarExtension(sku: Sku): { bazaar: unknown } | null {
+  if (sku.id !== "agent_ask") return null;
+  const input = {
+    type: "http",
+    method: "POST",
+    bodyType: "json",
+    body: { message: "How do I write a dating doc that gets good matches?" },
+  };
+  return {
+    bazaar: {
+      info: {
+        input,
+        output: {
+          type: "json",
+          example: { ok: true, reply: "A candid, specific admission beats a résumé — try naming one small true thing you want a partner to know.", mode: "chat", paid: true },
+        },
+      },
+      schema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: {
+          input: {
+            type: "object",
+            properties: {
+              type: { type: "string" },
+              method: { type: "string" },
+              bodyType: { type: "string" },
+              body: {
+                type: "object",
+                properties: { message: { type: "string", maxLength: 2000, description: "The dating/relationship question to ask Ishtar" } },
+                required: ["message"],
+              },
+            },
+            required: ["type", "method", "body"],
+          },
+          output: { type: "object" },
+        },
+        required: ["input"],
+      },
+    },
+  };
+}
+
 /** x402 v2 top-level ResourceInfo (the resource the payment unlocks). `url` is a full URL (required). */
 export function x402ResourceInfo(env: Env, sku: Sku) {
   return { url: `${apiBase(env)}${sku.route}`, description: `Ishtar ${sku.id}`, mimeType: "application/json" };
@@ -155,11 +206,13 @@ export function encodeX402Header(obj: unknown): string {
  * MPP requires `Cache-Control: no-store` on 402s; harmless for x402 clients, so set always.
  */
 export async function x402Challenge(env: Env, sku: Sku, payTo: string, orderId: string): Promise<Response> {
+  const ext = x402BazaarExtension(sku); // CDP Bazaar discovery metadata (agent_ask only)
   const body = {
     x402Version: X402_VERSION,
     error: "payment required",
     resource: x402ResourceInfo(env, sku), // v2: ResourceInfo object at the top level, not inside accepts
     accepts: [x402Requirements(env, sku, payTo)],
+    ...(ext ? { extensions: ext } : {}), // top-level extensions (client echoes them into the payload)
   };
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -259,11 +312,17 @@ export function makeX402Provider(env: Env): PaymentProvider {
           if (!env.CDP_API_KEY_ID || !env.CDP_API_KEY_SECRET) return { verified: false, raw: "cdp keys missing" };
           const host = "api.cdp.coinbase.com";
           const base = "/platform/v2/x402";
-          const paymentPayload = decodePayment(paymentHeader);
+          const paymentPayload = decodePayment(paymentHeader) as Record<string, unknown> | null;
           if (!paymentPayload) return { verified: false, raw: "payment payload unreadable" };
+          // CDP Bazaar cataloging needs `paymentPayload.resource` at settle (docs: "the settle request
+          // MUST contain paymentPayload.resource"). A generic x402 client may not set it, so inject the
+          // full resource URL if absent — harmless to the payment, required for discovery.
+          if (!paymentPayload.resource) paymentPayload.resource = x402ResourceInfo(env, sku).url;
           // Same canonical requirements the client signed against in the 402 challenge — must match or the
           // facilitator rejects on a payload↔requirements mismatch (CAIP-2 network, full-URL resource, timeout).
-          const paymentRequirements = x402Requirements(env, sku, payTo);
+          // Carry the Bazaar discovery extension on the requirements so CDP's extractDiscoveryInfo() catalogs it.
+          const ext = x402BazaarExtension(sku);
+          const paymentRequirements = { ...x402Requirements(env, sku, payTo), ...(ext ? { extensions: ext } : {}) };
           const body = JSON.stringify({ x402Version: X402_VERSION, paymentPayload, paymentRequirements });
           // verify (signature/funds valid?)
           const vTok = await cdpBearer(env.CDP_API_KEY_ID, env.CDP_API_KEY_SECRET, "POST", host, `${base}/verify`);
@@ -274,6 +333,10 @@ export function makeX402Provider(env: Env): PaymentProvider {
           // settle (broadcast transferWithAuthorization — real USDC moves here)
           const sTok = await cdpBearer(env.CDP_API_KEY_ID, env.CDP_API_KEY_SECRET, "POST", host, `${base}/settle`);
           const sr = await fetch(`${cfg.facilitator}/settle`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${sTok}` }, body });
+          // CDP reports Bazaar-metadata acceptance here: EXTENSION-RESPONSES = `processing` (accepted) or
+          // `rejected`. Surface it in observability without failing the payment over a discovery hiccup.
+          const extResp = sr.headers.get("EXTENSION-RESPONSES");
+          if (extResp) console.log(JSON.stringify({ at: "x402.settle", sku: sku.id, extensionResponses: extResp }));
           if (!sr.ok) return { verified: false, raw: `cdp settle ${sr.status}` };
           const sj = (await sr.json()) as { success?: boolean; errorReason?: string; transaction?: string; payer?: string };
           if (!sj.success) return { verified: false, raw: sj.errorReason ?? "cdp settle failed" };
