@@ -24,6 +24,10 @@ export const SKUS: Record<string, Sku> = {
   // priceUsd is the catalog/challenge default; the live price is a runtime settings knob
   // ('featured_price_usd'), read in the route so it changes without a redeploy.
   featured_slot: { id: "featured_slot", priceUsd: "$50.00", route: "/api/featured/post" },
+  // Contact reveal (the human-introduction unlock). EACH side pays this once to see the other's
+  // contact — symmetric, so neither contact is shown until that side has paid for its own reveal.
+  // Gated downstream of the 18+/ID check + mutual consent, so it never fires until reveals go live.
+  reveal_unlock: { id: "reveal_unlock", priceUsd: "$20.00", route: "/api/escalations/reveal" },
 };
 
 // Staging defaults (testnet only, no key). eip155:84532 = Base Sepolia.

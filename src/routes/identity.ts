@@ -9,9 +9,10 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { db as makeDb, type DB } from "../db/client";
-import { couples, escalationInvites, events, identityVerifications, introConsents, owners, personas } from "../db/schema";
+import { couples, escalationInvites, events, identityVerifications, introConsents, owners, personas, revealPayments } from "../db/schema";
 import type { Env } from "../env";
 import { open } from "../crypto/box";
+import { SKUS, makeX402Provider, parsePaymentHeader, x402Challenge } from "../payments/x402";
 import { createDiditSession, verifyDiditWebhook } from "../identity/didit";
 import { verifyPrivyToken } from "../identity/privy";
 import { claimShell } from "../ui/system-pages";
@@ -164,6 +165,45 @@ export async function revealHandler(c: Context<{ Bindings: Env }>): Promise<Resp
   if (!inv) return c.json({ error: "no claimed introduction for this identity" }, 404);
   if (!(await revealReady(db, inv.coupleId)))
     return c.json({ ok: true, ready: false, status: "Your 18+ check is still pending — we'll open the introduction the moment it clears." });
+  // Paywall: EACH side pays $20 (x402/USDC) once to unlock its own reveal. We only charge here —
+  // after the intro is actually revealable — so no one pays before there's a contact to unlock. A
+  // side that already paid re-reveals free. Charged downstream of the 18+/consent gate, so this is
+  // dormant until reveals go live. PAY_TO unset → payments off → reveal stays free (backward compatible).
+  if (c.env.PAY_TO) {
+    const alreadyPaid = await db
+      .select({ id: revealPayments.id })
+      .from(revealPayments)
+      .where(and(eq(revealPayments.coupleId, inv.coupleId), eq(revealPayments.ownerId, inv.ownerId)))
+      .get();
+    if (!alreadyPaid) {
+      const sku = SKUS.reveal_unlock!;
+      const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 / v1
+      if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, `reveal:${inv.coupleId}:${inv.ownerId}`);
+      // Anti-replay: key on the signed authorization nonce, checked BEFORE verify() (mainnet SETTLES).
+      const terms = parsePaymentHeader(paymentHeader);
+      const orderId = `reveal:${inv.coupleId}:${inv.ownerId}:${terms?.nonce ?? "nononce"}`;
+      const prior = await db.select({ id: revealPayments.id }).from(revealPayments).where(eq(revealPayments.orderId, orderId)).get();
+      if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
+      const provider = makeX402Provider(c.env);
+      const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
+      if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
+      // First insert wins; the (couple, owner) unique index makes a concurrent double-pay a no-op.
+      await db
+        .insert(revealPayments)
+        .values({
+          orderId,
+          coupleId: inv.coupleId,
+          ownerId: inv.ownerId,
+          payer: v.payer.toLowerCase(),
+          amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""),
+          network: provider.network,
+          nonce: v.nonce,
+          settlementTx: v.tx,
+        })
+        .onConflictDoNothing()
+        .run();
+    }
+  }
   const ids = await coupleOwnerIds(db, inv.coupleId);
   const otherId = ids.find((id) => id !== inv.ownerId);
   if (otherId == null) return c.json({ error: "introduction incomplete" }, 404);
