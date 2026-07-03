@@ -36,8 +36,14 @@ const DEFAULT_TEMPO_RPC = "https://rpc.tempo.xyz";
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const CHALLENGE_TTL_MS = 10 * 60 * 1000;
 
-/** SKUs that offer the MPP rail (see the v1-scope note above). */
-export const MPP_SKUS = new Set(["agent_ask", "chat_topup"]);
+/**
+ * SKUs that offer the MPP rail. v1 = agent_ask ONLY — the stateless "pay → one answer in the same
+ * response" surface where push mode is safe. chat_topup mints a bearer SESSION, which push mode
+ * (possession of a PUBLIC tx hash ≠ proof the caller controls the paying wallet) cannot safely bind;
+ * it awaits pull mode (a client-signed tx proves control). featured/intake/premium have policy-refusal
+ * paths AFTER payment (a full board, a held doc) and stay x402-only until the refund policy is set.
+ */
+export const MPP_SKUS = new Set(["agent_ask"]);
 
 export function mppEnabled(env: Env): boolean {
   const on = env.MPP_ENABLED === "1" || env.MPP_ENABLED === "true";
@@ -162,51 +168,61 @@ const topicAddr = (topic: string): string => ("0x" + topic.slice(-40)).toLowerCa
  * callers must ALSO dedupe on `tx` (one on-chain transfer can only buy one artifact).
  */
 export async function verifyMppPayment(env: Env, cred: MppCredential, sku: Sku): Promise<VerifiedPayment> {
-  const ch = cred.challenge;
-  if (ch.method !== "tempo" || ch.intent !== "charge") return { verified: false, raw: "method-unsupported" };
-  if (!ch.id || !ch.request || ch.realm !== mppRealm(env)) return { verified: false, raw: "invalid-challenge" };
-
-  const expectId = await hmacB64url(env.MPP_SECRET_KEY!, bindingInput(ch.realm, ch.method, ch.intent, ch.request, ch.expires ?? "", ch.digest ?? "", ch.opaque ?? ""));
-  if (!ctEqual(expectId, ch.id)) return { verified: false, raw: "invalid-challenge" };
-  if (ch.expires && Date.parse(ch.expires) < Date.now()) return { verified: false, raw: "payment-expired" };
-
-  let req: { amount?: string; currency?: string; recipient?: string };
+  // Fail-closed like the x402 provider: any throw (malformed RPC/hex, network) → 402, never a 500.
   try {
-    req = JSON.parse(b64urlDecode(ch.request));
+    const ch = cred.challenge;
+    // Wrong METHOD/intent is a 400-class method-unsupported; wrong SUBMISSION MODE (below) is a
+    // retryable 402 verification-failed — the tempo/charge method IS accepted, only pull mode isn't.
+    if (ch.method !== "tempo" || ch.intent !== "charge") return { verified: false, raw: "method-unsupported" };
+    if (!ch.id || !ch.request || ch.realm !== mppRealm(env)) return { verified: false, raw: "invalid-challenge" };
+
+    const expectId = await hmacB64url(env.MPP_SECRET_KEY!, bindingInput(ch.realm, ch.method, ch.intent, ch.request, ch.expires ?? "", ch.digest ?? "", ch.opaque ?? ""));
+    if (!ctEqual(expectId, ch.id)) return { verified: false, raw: "invalid-challenge" };
+    if (ch.expires && Date.parse(ch.expires) < Date.now()) return { verified: false, raw: "payment-expired" };
+
+    let req: { amount?: string; currency?: string; recipient?: string };
+    try {
+      req = JSON.parse(b64urlDecode(ch.request));
+    } catch {
+      return { verified: false, raw: "malformed-credential" };
+    }
+    // The bound request must state OUR terms for THIS SKU — an id forged over other terms
+    // already failed the HMAC, so this guards against config drift between issue and verify.
+    if (req.currency?.toLowerCase() !== mppCurrency(env)) return { verified: false, raw: "verification-failed" };
+    if (req.recipient?.toLowerCase() !== mppRecipient(env)) return { verified: false, raw: "verification-failed" };
+    if (req.amount !== atomicAmount(sku)) return { verified: false, raw: "payment-insufficient" };
+
+    if (cred.payload.type !== "hash") return { verified: false, raw: "verification-failed" }; // push mode only (supportedModes:[push])
+    const hash = cred.payload.hash;
+    if (!hash || !/^0x[0-9a-fA-F]{64}$/.test(hash)) return { verified: false, raw: "malformed-credential" };
+
+    // Push mode: the client broadcasts and waits for ~500ms finality BEFORE submitting, so the
+    // receipt should exist on the first read — a short bounded retry covers propagation jitter only.
+    let receipt: Awaited<ReturnType<typeof fetchTempoReceipt>> = null;
+    for (let i = 0; i < 2 && !receipt; i++) {
+      receipt = await fetchTempoReceipt(env, hash).catch(() => null);
+      if (!receipt && i === 0) await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!receipt || receipt.status !== "0x1") return { verified: false, raw: "verification-failed" };
+
+    const want = BigInt(req.amount!);
+    const isHex = (s: string) => /^0x[0-9a-fA-F]*$/.test(s);
+    const log = (receipt.logs ?? []).find(
+      (l) =>
+        l.address?.toLowerCase() === mppCurrency(env) &&
+        l.topics?.[0] === TRANSFER_TOPIC &&
+        l.topics.length >= 3 &&
+        topicAddr(l.topics[2]!) === mppRecipient(env) &&
+        isHex(l.data) &&
+        BigInt(l.data || "0x0") >= want,
+    );
+    if (!log) return { verified: false, raw: "verification-failed" };
+
+    const payer = topicAddr(log.topics[1]!);
+    return { verified: true, payer, tx: hash.toLowerCase(), amountUsdc: (Number(req.amount) / 1e6).toFixed(2), nonce: ch.id };
   } catch {
-    return { verified: false, raw: "malformed-credential" };
+    return { verified: false, raw: "verification-failed" }; // fail-closed
   }
-  // The bound request must state OUR terms for THIS SKU — an id forged over other terms
-  // already failed the HMAC, so this guards against config drift between issue and verify.
-  if (req.currency?.toLowerCase() !== mppCurrency(env)) return { verified: false, raw: "verification-failed: currency" };
-  if (req.recipient?.toLowerCase() !== mppRecipient(env)) return { verified: false, raw: "verification-failed: recipient" };
-  if (req.amount !== atomicAmount(sku)) return { verified: false, raw: "payment-insufficient" };
-
-  if (cred.payload.type !== "hash") return { verified: false, raw: "method-unsupported: push mode only (supportedModes:[push])" };
-  const hash = cred.payload.hash;
-  if (!hash || !/^0x[0-9a-fA-F]{64}$/.test(hash)) return { verified: false, raw: "malformed-credential" };
-
-  // The client just broadcast (~500ms finality) — poll briefly rather than failing the race.
-  let receipt: Awaited<ReturnType<typeof fetchTempoReceipt>> = null;
-  for (let i = 0; i < 4 && !receipt; i++) {
-    receipt = await fetchTempoReceipt(env, hash).catch(() => null);
-    if (!receipt && i < 3) await new Promise((r) => setTimeout(r, 700));
-  }
-  if (!receipt || receipt.status !== "0x1") return { verified: false, raw: "verification-failed: no successful receipt" };
-
-  const want = BigInt(req.amount);
-  const log = (receipt.logs ?? []).find(
-    (l) =>
-      l.address?.toLowerCase() === mppCurrency(env) &&
-      l.topics?.[0] === TRANSFER_TOPIC &&
-      l.topics.length >= 3 &&
-      topicAddr(l.topics[2]!) === mppRecipient(env) &&
-      BigInt(l.data) >= want,
-  );
-  if (!log) return { verified: false, raw: "verification-failed: transfer log does not satisfy the challenge" };
-
-  const payer = topicAddr(log.topics[1]!);
-  return { verified: true, payer, tx: hash.toLowerCase(), amountUsdc: (Number(req.amount) / 1e6).toFixed(2), nonce: ch.id };
 }
 
 /** Success receipt header value (`Payment-Receipt`) — MUST NOT be attached to error responses. */
@@ -223,15 +239,35 @@ export function mppReceiptHeader(env: Env, challengeId: string, tx: string, sku:
   );
 }
 
-/** MPP failure = 402 + FRESH challenge + RFC 9457 problem body (never a receipt). */
+// Problem registry per draft-httpauth-payment Table 6 + mpp.dev/protocol/http-402. Every code is a
+// 402 (with a FRESH challenge) EXCEPT method-unsupported, the registry's lone 4xx-non-402.
+const MPP_PROBLEMS: Record<string, { status: number; title: string }> = {
+  "payment-required": { status: 402, title: "Payment Required" },
+  "payment-insufficient": { status: 402, title: "Payment Insufficient" },
+  "payment-expired": { status: 402, title: "Payment Expired" },
+  "verification-failed": { status: 402, title: "Payment Verification Failed" },
+  "malformed-credential": { status: 402, title: "Malformed Credential" },
+  "invalid-challenge": { status: 402, title: "Invalid Challenge" },
+  "method-unsupported": { status: 400, title: "Method Not Supported" },
+};
+
+/** Map a verifyMppPayment `raw` reason to a problem code (never expose the raw string to clients). */
+export function mppProblemCode(raw: unknown): string {
+  const s = String(raw ?? "verification-failed").split(":")[0]!.trim();
+  return s in MPP_PROBLEMS ? s : "verification-failed";
+}
+
+/** MPP failure = problem status + (for 402s) a FRESH challenge + RFC 9457 body — never a receipt. */
 export async function mppProblem(env: Env, sku: Sku, code: string, detail: string): Promise<Response> {
+  const spec = MPP_PROBLEMS[code] ?? MPP_PROBLEMS["verification-failed"]!;
   const headers: Record<string, string> = {
     "content-type": "application/problem+json",
     "cache-control": "no-store",
   };
-  if (mppEnabled(env)) headers["WWW-Authenticate"] = await buildMppChallengeHeader(env, sku);
+  // A 402 MUST carry a Payment challenge; a 400 (method-unsupported) must not invite a blind retry.
+  if (spec.status === 402 && mppEnabled(env)) headers["WWW-Authenticate"] = await buildMppChallengeHeader(env, sku);
   return new Response(
-    JSON.stringify({ type: `https://paymentauth.org/problems/${code}`, title: "Payment Required", status: 402, detail }),
-    { status: 402, headers },
+    JSON.stringify({ type: `https://paymentauth.org/problems/${code}`, title: spec.title, status: spec.status, detail }),
+    { status: spec.status, headers },
   );
 }

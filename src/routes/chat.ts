@@ -44,7 +44,7 @@ import { accrueBuyback } from "../economics/reserve";
 import { chatSpendExceeded } from "../economics/budget";
 import { recordEpisode, recordFeedback } from "../coach/memory";
 import { makeX402Provider, SKUS, x402Challenge, encodeX402Header, parsePaymentHeader } from "../payments/x402";
-import { MPP_NETWORK, mppEnabled, mppProblem, mppReceiptHeader, parseMppAuth, verifyMppPayment } from "../payments/mpp";
+import { MPP_NETWORK, mppEnabled, mppProblem, mppProblemCode, mppReceiptHeader, parseMppAuth, verifyMppPayment } from "../payments/mpp";
 import { timingSafeEqualStr } from "../util/timing";
 import { docReadyEmail, resendSend } from "../newsletter/resend";
 
@@ -118,28 +118,21 @@ chatRoutes.post("/chat/session", async (c) => {
 const topupSchema = z.object({ ref: z.string().min(8).max(100), over18: z.boolean().optional() });
 
 chatRoutes.post("/chat/topup", async (c) => {
+  const parsed = topupSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "ref (client idempotency key, 8-100 chars) required" }, 400);
+  if (!parsed.data.over18) return c.json({ error: "over18:true required — you must confirm you are 18 or older" }, 400);
   if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
   // mainnet (real USDC via the CDP facilitator) is wired in src/payments/x402.ts; go-live is gated by
   // X402_MODE=mainnet + the CDP_API_KEY_* secrets + a mainnet PAY_TO (redacted), not by a code guard.
+  // NOTE: topup mints a bearer SESSION, so it stays x402-only — x402's signed authorization proves the
+  // caller controls the paying wallet. MPP push-mode proves only that a transfer landed (the hash is
+  // public), so binding a session to it would be an account-takeover vector. MPP topup awaits pull mode.
+
   const sku = SKUS.chat_topup!;
   const provider = makeX402Provider(c.env);
-  const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // x402 v2 / v1
-  const mppCred = mppEnabled(c.env) ? parseMppAuth(c.req.header("authorization")) : null; // MPP rail
-
-  // UNPAID probe → the 402 IS the answer, BEFORE body validation (MPP/mppscan discovery probes a
-  // bare POST and must reach the challenge; the spec forbids side effects pre-payment anyway).
-  // Body validation belongs to the PAID retry below. A valid body still gets its ref echoed in
-  // x-order-id, preserving the pre-MPP behavior for x402 clients that read it.
-  const probe = topupSchema.safeParse(await c.req.raw.clone().json().catch(() => ({})));
-  if (!paymentHeader && !mppCred) {
-    return x402Challenge(c.env, sku, c.env.PAY_TO, probe.success ? `chattopup:${probe.data.ref}` : "chattopup:probe");
-  }
-  const isMpp = !paymentHeader && !!mppCred; // credential header decides the rail — never both
-
-  const parsed = probe;
-  if (!parsed.success) return c.json({ error: "ref (client idempotency key, 8-100 chars) required" }, 400);
-  if (!parsed.data.over18) return c.json({ error: "over18:true required — you must confirm you are 18 or older" }, 400);
   const orderId = `chattopup:${parsed.data.ref}`;
+  const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
+  if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
 
   const db = makeDb(c.env.DB);
   // SEC-2026-07-01(#2): idempotency BEFORE settle. provider.verify() performs the irreversible on-chain
@@ -154,17 +147,8 @@ chatRoutes.post("/chat/topup", async (c) => {
     return c.json({ ok: true, credited: false, sessionToken: token, expiresAt, address: priorTopup.payer.toLowerCase(), ...(await getBalance(db, c.env, priorTopup.payer)) });
   }
 
-  const v = isMpp ? await verifyMppPayment(c.env, mppCred!, sku) : await provider.verify(paymentHeader!, sku, c.env.PAY_TO);
-  if (!v.verified || !v.payer) {
-    if (isMpp) return mppProblem(c.env, sku, String(v.raw ?? "verification-failed").split(":")[0]!.trim(), String(v.raw ?? "payment not verified"));
-    return c.json({ error: "payment not verified", reason: v.raw }, 402);
-  }
-  // MPP push-mode: one settled Tempo tx buys exactly one top-up — a fresh ref replaying an
-  // already-redeemed tx hash must be refused (the per-ref idempotency above can't catch it).
-  if (isMpp && v.tx) {
-    const priorTx = await db.select({ id: chatTopups.id }).from(chatTopups).where(eq(chatTopups.settlementTx, v.tx)).get();
-    if (priorTx) return mppProblem(c.env, sku, "verification-failed", "this settlement transaction was already redeemed");
-  }
+  const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
+  if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
 
   const dollars = Number(sku.priceUsd.replace("$", ""));
   const credits = Math.round(creditsPerUsd(c.env) * dollars); // e.g. 7.5 × $2 = 15 messages
@@ -176,7 +160,7 @@ chatRoutes.post("/chat/topup", async (c) => {
       payer: v.payer.toLowerCase(),
       amountUsdc: v.amountUsdc ?? String(dollars),
       credits,
-      network: isMpp ? MPP_NETWORK : provider.network,
+      network: provider.network,
       nonce: v.nonce,
       settlementTx: v.tx,
     })
@@ -189,9 +173,8 @@ chatRoutes.post("/chat/topup", async (c) => {
   }
   await attest18(db, v.payer); // over18 confirmed above → recorded
   const { token, expiresAt } = await mintSession(db, v.payer, "topup");
-  // Settlement confirmation — x402 v2 clients read PAYMENT-RESPONSE; MPP clients read Payment-Receipt.
-  if (isMpp) c.header("Payment-Receipt", mppReceiptHeader(c.env, mppCred!.challenge.id!, v.tx!, sku));
-  else if (v.tx) c.header("PAYMENT-RESPONSE", encodeX402Header({ success: true, transaction: v.tx, network: v.network, payer: v.payer }));
+  // x402 v2 settlement confirmation — full v2 clients read this PAYMENT-RESPONSE header after a successful settle.
+  if (v.tx) c.header("PAYMENT-RESPONSE", encodeX402Header({ success: true, transaction: v.tx, network: v.network, payer: v.payer }));
   return c.json({ ok: true, credited: !!first, sessionToken: token, expiresAt, address: v.payer.toLowerCase(), ...(await getBalance(db, c.env, v.payer)) });
 });
 
@@ -382,54 +365,60 @@ chatRoutes.post("/chat/ask", async (c) => {
   const { message } = parsed.data;
 
   const db = makeDb(c.env.DB);
-  // Anti-replay / anti double-settle, checked BEFORE verify() (x402 mainnet verify SETTLES real
-  // USDC). x402 keys on the signed EIP-3009 authorization nonce; MPP keys on the single-use
-  // challenge id (per draft-httpauth-payment). A repeat is refused, never re-charged.
-  const terms = isMpp ? null : parsePaymentHeader(paymentHeader!);
-  const orderId = isMpp ? `agentask:mpp:${mppCred!.challenge.id ?? "noid"}` : `agentask:${terms?.nonce ?? "nononce"}`;
-  const prior = await db.select({ id: chatTopups.id }).from(chatTopups).where(eq(chatTopups.orderId, orderId)).get();
-  if (prior) {
-    if (isMpp) return mppProblem(c.env, sku, "invalid-challenge", "this challenge was already used — request a new one");
-    return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
-  }
+  const orderId = isMpp ? `agentask:mpp:${mppCred!.challenge.id ?? "noid"}` : `agentask:${parsePaymentHeader(paymentHeader!)?.nonce ?? "nononce"}`;
 
   const v = isMpp ? await verifyMppPayment(c.env, mppCred!, sku) : await provider.verify(paymentHeader!, sku, c.env.PAY_TO);
   if (!v.verified || !v.payer) {
-    if (isMpp) return mppProblem(c.env, sku, String(v.raw ?? "verification-failed").split(":")[0]!.trim(), String(v.raw ?? "payment not verified"));
-    return c.json({ error: "payment not verified", reason: v.raw }, 402);
+    // A 402 MUST carry a fresh challenge (both specs) — re-serve the dual-rail challenge, not a bare error.
+    if (isMpp) return mppProblem(c.env, sku, mppProblemCode(v.raw), "payment could not be verified");
+    return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
   }
-  // MPP push-mode: the on-chain transfer pre-exists the request — one settled tx buys exactly one
-  // answer, so a NEW challenge id replaying an OLD tx hash must also be refused.
-  if (isMpp && v.tx) {
-    const priorTx = await db.select({ id: chatTopups.id }).from(chatTopups).where(eq(chatTopups.settlementTx, v.tx)).get();
-    if (priorTx) return mppProblem(c.env, sku, "verification-failed", "this settlement transaction was already redeemed");
-  }
-  // Record the settle (credits:0 — this SKU buys ONE answer, not quota). First insert wins (idempotent).
-  await db
+
+  // Single-use, race-safe: the ledger INSERT is the admission gate. Uniqueness on order_id (x402
+  // nonce / MPP challenge id) AND on settlement_tx (migration 0030) means a concurrent replay — same
+  // authorization, OR one MPP tx redeemed under many fresh challenges — loses the insert and is refused,
+  // so one payment buys exactly one answer even under a TOCTOU race (a bare pre-check SELECT can't).
+  // credits:0 — this SKU buys ONE answer, not quota.
+  const first = await db
     .insert(chatTopups)
     .values({ orderId, payer: v.payer.toLowerCase(), amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""), credits: 0, network: isMpp ? MPP_NETWORK : provider.network, nonce: v.nonce, settlementTx: v.tx })
     .onConflictDoNothing()
-    .run();
-  // Money has moved: EVERY response from here on carries the receipt — PAYMENT-RESPONSE for x402,
-  // Payment-Receipt for MPP (what each client parses) + payer/tx in the body. The safety/scope
-  // branches below refuse the ANSWER, never the settle, so omitting the receipt there misreports
-  // a real charge as unpaid.
-  if (isMpp) c.header("Payment-Receipt", mppReceiptHeader(c.env, mppCred!.challenge.id!, v.tx!, sku));
-  else if (v.tx) c.header("PAYMENT-RESPONSE", encodeX402Header({ success: true, transaction: v.tx, network: v.network, payer: v.payer }));
+    .returning({ id: chatTopups.id })
+    .get();
+  if (!first) {
+    if (isMpp) return mppProblem(c.env, sku, "invalid-challenge", "this payment was already redeemed — request a new challenge");
+    return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
+  }
 
-  // Safety envelope — same deterministic layers as /chat, in the same order.
+  // Money has moved AND we won the redemption race. The receipt rides only on the 2xx delivery
+  // responses below (MPP spec: Payment-Receipt MUST NOT appear on error responses). setReceipt()
+  // stamps x402's PAYMENT-RESPONSE (every branch — no such MUST-NOT) or MPP's Payment-Receipt (2xx only).
+  const setReceipt = () => {
+    if (isMpp) c.header("Payment-Receipt", mppReceiptHeader(c.env, mppCred!.challenge.id!, v.tx!, sku));
+    else if (v.tx) c.header("PAYMENT-RESPONSE", encodeX402Header({ success: true, transaction: v.tx, network: v.network, payer: v.payer }));
+  };
+
+  // Safety envelope — same deterministic layers as /chat, in the same order. These refuse the ANSWER,
+  // never the settle: they still return 200 (a delivered refusal reply) and carry the receipt + payer/tx.
   const crisis = detectCrisis(message);
   if (crisis.hit) {
     await recordCrisisEvent(db, `x402:${v.payer}`, crisis);
+    setReceipt();
     return c.json({ ok: true, reply: crisisResponse(c.req.header("cf-ipcountry") || undefined), via: "crisis", safety: "crisis_support", paid: true, payer: v.payer, tx: v.tx });
   }
   if (detectMinor(message)) {
     await recordMinorEvent(db, `x402:${v.payer}`);
+    setReceipt();
     return c.json({ ok: true, reply: MINOR_REDIRECT, via: "age_gate", safety: "adults_only", paid: true, payer: v.payer, tx: v.tx });
   }
   const intent = await intentGate(db, c.env, message, undefined, `x402:${v.payer}`);
-  if (!intent.onTopic) return c.json({ ok: true, reply: OFFTOPIC_WARNING, via: "off_topic", offTopic: true, scope: "dating", paid: true, payer: v.payer, tx: v.tx });
+  if (!intent.onTopic) {
+    setReceipt();
+    return c.json({ ok: true, reply: OFFTOPIC_WARNING, via: "off_topic", offTopic: true, scope: "dating", paid: true, payer: v.payer, tx: v.tx });
+  }
   const inV = await chaperone(db, c.env, { stage: "chat_input", targetType: "chat_input", targetId: 0, text: message, callerRef: `x402:${v.payer}` });
+  // Chaperone-held / model-down are NON-2xx: payer/tx stay in the body for audit, but NO receipt header
+  // (MPP MUST-NOT on errors; x402 PAYMENT-RESPONSE likewise withheld here for parity).
   if (inV.verdict !== "allow" && inV.verdict !== "sanitize") return c.json({ error: "message held by the chaperone", reason: inV.reason, paid: true, payer: v.payer, tx: v.tx }, 422);
 
   let reply: string;
@@ -444,6 +433,7 @@ chatRoutes.post("/chat/ask", async (c) => {
   const leak = looksLikeSystemLeak(reply);
   const outV = await chaperone(db, c.env, { stage: "chat_output", targetType: "chat_output", targetId: 0, text: reply, callerRef: `x402:${v.payer}` });
   const safe = egress.safe && !leak && (outV.verdict === "allow" || outV.verdict === "sanitize") ? outV.text ?? reply : null;
+  setReceipt(); // 200 either way below (delivery or a paid-but-withheld notice)
   if (!safe) return c.json({ ok: true, reply: null, withheld: true, paid: true, payer: v.payer, tx: v.tx });
   return c.json({ ok: true, reply: safe, mode, paid: true, payer: v.payer, tx: v.tx });
 });
