@@ -5,6 +5,7 @@
  * in without touching Ishtar. verify() is FAIL-CLOSED: any error → not verified.
  */
 import type { Env } from "../env";
+import { buildMppChallengeHeader, MPP_SKUS, mppEnabled } from "./mpp";
 
 export interface Sku {
   id: string;
@@ -147,22 +148,27 @@ export function encodeX402Header(obj: unknown): string {
   return btoa(bin);
 }
 
-/** 402 challenge (x402 v2 wire). v2 clients read PaymentRequired from the PAYMENT-REQUIRED header. */
-export function x402Challenge(env: Env, sku: Sku, payTo: string, orderId: string): Response {
+/**
+ * 402 challenge — DUAL-RAIL wire. x402 v2 clients read PaymentRequired from the PAYMENT-REQUIRED
+ * header; when MPP is enabled for the SKU the same 402 also carries a `WWW-Authenticate: Payment`
+ * challenge (disjoint header spaces — each client parses only its own; live-proven pattern).
+ * MPP requires `Cache-Control: no-store` on 402s; harmless for x402 clients, so set always.
+ */
+export async function x402Challenge(env: Env, sku: Sku, payTo: string, orderId: string): Promise<Response> {
   const body = {
     x402Version: X402_VERSION,
     error: "payment required",
     resource: x402ResourceInfo(env, sku), // v2: ResourceInfo object at the top level, not inside accepts
     accepts: [x402Requirements(env, sku, payTo)],
   };
-  return new Response(JSON.stringify(body, null, 2), {
-    status: 402,
-    headers: {
-      "content-type": "application/json",
-      "x-order-id": orderId,
-      "PAYMENT-REQUIRED": encodeX402Header(body), // v2 clients read here; body is v1-only fallback
-    },
-  });
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "cache-control": "no-store",
+    "x-order-id": orderId,
+    "PAYMENT-REQUIRED": encodeX402Header(body), // v2 clients read here; body is v1-only fallback
+  };
+  if (mppEnabled(env) && MPP_SKUS.has(sku.id)) headers["WWW-Authenticate"] = await buildMppChallengeHeader(env, sku);
+  return new Response(JSON.stringify(body, null, 2), { status: 402, headers });
 }
 
 // ── CDP (mainnet) auth: a per-request EdDSA Bearer JWT ─────────────────────────────────────────────

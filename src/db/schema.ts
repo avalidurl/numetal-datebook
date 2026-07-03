@@ -534,17 +534,21 @@ export const chatNonces = sqliteTable("chat_nonces", {
 
 // x402 credit top-ups for the chat — own table (chat has no owner row, so it can't reuse
 // premium_orders). UNIQUE(order_id) makes settle idempotent: a replay credits nothing twice.
-export const chatTopups = sqliteTable("chat_topups", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  orderId: text("order_id").notNull().unique(),
-  payer: text("payer"),
-  amountUsdc: text("amount_usdc").notNull(),
-  credits: integer("credits").notNull(),
-  network: text("network").notNull(),
-  nonce: text("nonce"), // anti-replay key (red-team C4); UNIQUE(network, nonce) via migration 0010
-  settlementTx: text("settlement_tx"),
-  createdAt: text("created_at").notNull().default(now),
-});
+export const chatTopups = sqliteTable(
+  "chat_topups",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    orderId: text("order_id").notNull().unique(),
+    payer: text("payer"),
+    amountUsdc: text("amount_usdc").notNull(),
+    credits: integer("credits").notNull(),
+    network: text("network").notNull(),
+    nonce: text("nonce"), // anti-replay key (red-team C4); UNIQUE(network, nonce) via migration 0010
+    settlementTx: text("settlement_tx"), // partial-UNIQUE (WHERE NOT NULL) via migration 0030 — MPP tx single-use
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => [uniqueIndex("idx_chat_topups_settlement_tx").on(t.settlementTx).where(sql`settlement_tx IS NOT NULL`)],
+);
 
 /* ----------------------------------------------------------------- The Window (REDACTED-ID) */
 // Pay-to-be-seen public featured dating-doc board. A poster (human-via-agent or agent) pays
