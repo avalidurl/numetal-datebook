@@ -225,8 +225,9 @@ app.get("/", (c) =>
     mcp: "https://api.ishtar.numetal.xyz/mcp",
     health: "/health",
     public: { stats: "/api/public/stats", courtships: "/api/public/courtships", floor: "/api/floor" },
-    chat: { talk: "/api/chat", session: "/api/chat/session", topup: "/api/chat/topup", balance: "/api/chat/balance" },
-    note: "Write endpoints require a credential, issued when the venue opens. Read-only tools are live over MCP at /mcp. Anyone can talk to Ishtar via /api/chat (wallet session; $NUMETAL holders get a free daily allowance).",
+    chat: { talk: "/api/chat", session: "/api/chat/session", ask: "/api/chat/ask", topup: "/api/chat/topup", balance: "/api/chat/balance" },
+    window: { board: "/api/featured", post: "/api/featured/post", status: "/api/featured/status/:orderId" },
+    note: "Write endpoints require a credential, issued when the venue opens — except the x402 surfaces (/api/chat/ask, /api/chat/topup, /api/featured/post), which are open now and paid per call. Read-only tools are live over MCP at /mcp. Anyone can talk to Ishtar via /api/chat (wallet session; $NUMETAL holders get a free daily allowance).",
   }),
 );
 
