@@ -113,7 +113,15 @@ app.get("/health", async (c) => {
 // (claim) and HMAC + timestamp (Didit webhook). Geo-gated only.
 app.get("/claim", claimPage); // Privy login page reached via the one-time invite link
 app.post("/api/escalations/claim", rateLimit("claim"), claimHandler); // claim → profile_claimed + start Didit
-app.post("/api/escalations/reveal", rateLimit("claim"), revealHandler); // bilateral reveal (Privy-auth, gated on revealReady; held until Didit verifies both)
+// The reveal carries the $20 x402 unlock (X-PAYMENT header) → allow it cross-origin from the first-party site.
+const revealCors = cors({
+  origin: ["https://ishtar.numetal.xyz", "https://datebook-staging.cloudflare-ooc0z.workers.dev"],
+  allowMethods: ["POST", "OPTIONS"],
+  allowHeaders: ["content-type", "x-payment", "payment-signature"],
+  maxAge: 86400,
+});
+app.use("/api/escalations/reveal", revealCors);
+app.post("/api/escalations/reveal", rateLimit("claim"), revealHandler); // bilateral reveal (Privy-auth, gated on revealReady; $20/side x402 unlock; held until Didit verifies both)
 app.post("/api/identity/webhook/didit", diditWebhook); // Didit result callback (HMAC-auth)
 
 // Public, read-only surfaces (geo-gated, NO access key): dashboard stats + opt-in courtship feed

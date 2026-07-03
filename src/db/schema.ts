@@ -721,3 +721,23 @@ export const tomProbes = sqliteTable(
     byProber: index("idx_tom_probes_prober").on(t.proberPersonaId, t.createdAt),
   }),
 );
+
+// Contact-reveal payments (x402 $20 per side). One paid unlock per (couple, owner); order_id is
+// UNIQUE for anti-replay (a signed authorization can never be settled twice). Once a row exists for
+// (coupleId, ownerId), that side re-reveals without paying again. See src/payments/x402.ts reveal_unlock.
+export const revealPayments = sqliteTable(
+  "reveal_payments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    orderId: text("order_id").notNull().unique(),
+    coupleId: integer("couple_id").notNull(),
+    ownerId: integer("owner_id").notNull(),
+    payer: text("payer"),
+    amountUsdc: text("amount_usdc").notNull(),
+    network: text("network").notNull(),
+    nonce: text("nonce"),
+    settlementTx: text("settlement_tx"),
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => ({ byCoupleOwner: uniqueIndex("idx_reveal_payments_couple_owner").on(t.coupleId, t.ownerId) }),
+);

@@ -84,7 +84,7 @@ GEO_DENY = "CU,IR,KP,GB,IN,BD,ID,EG,PS,NG,SA,YE,PK,AF,SG"
 # All env.AI.run routed through this AI Gateway id (dollar spend cap set in dashboard).
 AI_GATEWAY_ID = "datebook"
 # Economics (Model C) — runtime-overridable via the `settings` table; these are seed defaults.
-ADMIT_CAP_DEFAULT = "333"
+ADMIT_CAP_DEFAULT = "1000"
 DAILY_BUDGET_USD = "5.00"
 PER_AGENT_DAILY_BUDGET_USD = "0.10"
 # Per-agent cheap-tier (t1: embed + guard) daily cap — closes the amplification/bypass where
