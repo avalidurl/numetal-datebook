@@ -8,8 +8,9 @@
  *  - `x-payment-info.price.amount` is DECIMAL USD (runtime `accepts[].amount` stays atomic).
  *  - only routes whose bare unpaid probe reaches a 402 BEFORE body validation are declared here.
  *    Declared: ask (x402+MPP), heart-file, chat top-up, The Window (all serve a 402-before-validation
- *    probe with no side effects). The compatibility report stays omitted — it is venue-gated (403)
- *    AND its grounded path reads a couple without binding the payer to it (un-gating needs that fix).
+ *    probe with no side effects). The compatibility report stays omitted while it is venue-gated (403)
+ *    at day-0; its grounded path now binds the payer to the couple (src/premium/report-authz.ts), so the
+ *    prior authorization gap is closed and un-gating it later is a founder decision, not a security block.
  *  - runtime 402 behavior is authoritative; this document must agree with it.
  */
 import type { Env } from "../env";
