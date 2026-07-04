@@ -256,7 +256,7 @@ export function buildOpenApi(env: Env) {
           type: "http",
           scheme: "Payment",
           description:
-            "MPP (Machine Payments Protocol — Tempo Labs + Stripe HTTP-402). The same 402 carries `WWW-Authenticate: Payment` (method=tempo, USDC on Tempo, chainId 4217); retry with `Authorization: Payment <credential>`; success returns a `Payment-Receipt` header. Offered on the pay-per-answer surface.",
+            "MPP (Machine Payments Protocol — Tempo Labs + Stripe HTTP-402). The same 402 carries `WWW-Authenticate: Payment` (method=tempo, USDC on Tempo, chainId 4217); retry with `Authorization: Payment <credential>`; success returns a `Payment-Receipt` header. Offered on the two chat surfaces: pay-per-answer (`/api/chat/ask`, push mode) and chat top-up (`/api/chat/topup`, pull mode).",
         },
       },
     },
