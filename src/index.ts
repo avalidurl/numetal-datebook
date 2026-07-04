@@ -39,6 +39,7 @@ import { experimentRoutes } from "./routes/experiment";
 import { reportRoutes } from "./routes/report";
 import { fuzzRoutes } from "./routes/fuzz";
 import { sweepRetention } from "./retention";
+import { sweepStreamDemo } from "./stream/sweep";
 import { runReflectionSweep } from "./coach/reflect";
 import { db as makeDb } from "./db/client";
 import { notFoundPage, serverErrorPage, wantsHtml } from "./ui/system-pages";
@@ -399,6 +400,7 @@ export default {
           await sweepRetention(env);
           await purgeExpiredTrysts(env); // burn expired tryst rooms → delete content, keep the signed cert
           await purgeExpiredFeatured(env); // drop expired featured posts off the public board (REDACTED-ID)
+          await sweepStreamDemo(env); // bound the live-stream synthetic demo (owners/personas/couples) — no unbounded stream-* owner leak
           // Phase 2: synthesize cited "lovemap" reflections for humans with new episodes (bounded per run).
           await runReflectionSweep(makeDb(env.DB), env, 10);
         } catch (e) {

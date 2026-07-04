@@ -36,6 +36,7 @@ export interface Env {
   STREAM_MIN_TURNS?: string; // min courtship turns before the earned-commitment closure judge runs (default 6)
   STREAM_MIN_COUPLES?: string;
   STREAM_DAILY_BUDGET_USD?: string;
+  STREAM_KEEP_COUPLES?: string; // recent stream-demo couples kept by the cron sweep (default 50); older synthetic couples + their stream owners/personas are retired so the demo never bloats D1
   // Talk-to-Ishtar (paid chat). All optional → sensible defaults in code.
   CHAT_MODEL?: string; // overrides GAMBIT_MODEL for the conversational brain
   TOPIC_MODEL?: string; // small fast model for the intent/scope gate (default @cf/meta/llama-3.2-3b-instruct)
