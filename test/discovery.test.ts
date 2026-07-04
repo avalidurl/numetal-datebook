@@ -98,4 +98,17 @@ describe("discovery — /openapi.json declares the paid surfaces", () => {
     };
     expect(withProof["x-discovery"]?.ownershipProofs).toEqual(["proof-a", "proof-b"]);
   });
+
+  it("discloses what $2 buys (block size) + the off-topic charge WITHOUT paying (session-audit gap 2026-07-04)", () => {
+    const doc = buildOpenApi({ ...env, PAY_TO: PAY } as Env) as {
+      paths: Record<string, { post?: { summary?: string; description?: string; responses?: Record<string, { content?: Record<string, { schema?: { properties?: Record<string, { description?: string }> } }> }> } }>;
+    };
+    const topup = doc.paths["/api/chat/topup"]!.post!;
+    // $2 = 15 messages at the default 7.5 credits/USD rate — visible pre-payment in summary, description, and the credits field.
+    expect(topup.summary).toContain("$2.00 buys 15 coaching messages");
+    expect(topup.description).toMatch(/block of 15 message credits/);
+    expect(topup.responses!["200"]!.content!["application/json"]!.schema!.properties!.credits!.description).toContain("15");
+    // ask discloses that an off-topic / safety-withheld reply is still charged (the session's surprise).
+    expect(doc.paths["/api/chat/ask"]!.post!.description).toMatch(/STILL charged/);
+  });
 });
