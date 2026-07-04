@@ -44,7 +44,7 @@ import { accrueBuyback } from "../economics/reserve";
 import { chatSpendExceeded } from "../economics/budget";
 import { recordEpisode, recordFeedback } from "../coach/memory";
 import { makeX402Provider, SKUS, x402Challenge, encodeX402Header, parsePaymentHeader } from "../payments/x402";
-import { MPP_NETWORK, MPP_PULL_SKUS, mppEnabled, mppProblem, mppProblemCode, mppReceiptHeader, parseMppAuth, verifyMppPayment, verifyMppPullPayment } from "../payments/mpp";
+import { MPP_NETWORK, MPP_PULL_SKUS, mppEnabled, mppProblem, mppProblemCode, mppReceiptHeader, mppSkuActive, parseMppAuth, verifyMppPayment, verifyMppPullPayment } from "../payments/mpp";
 import { timingSafeEqualStr } from "../util/timing";
 import { docReadyEmail, resendSend } from "../newsletter/resend";
 
@@ -129,7 +129,7 @@ chatRoutes.post("/chat/topup", async (c) => {
   const sku = SKUS.chat_topup!;
   const provider = makeX402Provider(c.env);
   const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
-  const mppPullOn = mppEnabled(c.env) && MPP_PULL_SKUS.has(sku.id);
+  const mppPullOn = mppEnabled(c.env) && mppSkuActive(c.env, sku) && MPP_PULL_SKUS.has(sku.id); // gated on MPP_PULL_ENABLED — dark until a live handshake is proven
   const mppCred = mppPullOn ? parseMppAuth(c.req.header("authorization")) : null; // MPP pull rail (Authorization: Payment)
   // Bare/unpaid probe → the 402 challenge BEFORE body validation (discovery indexers require the probe
   // to reach a 402 with NO side effects; the real per-ref orderId is only needed on the paid retry).

@@ -80,6 +80,25 @@ export function mppEnabled(env: Env): boolean {
   const on = env.MPP_ENABLED === "1" || env.MPP_ENABLED === "true";
   return on && !!env.MPP_SECRET_KEY && !!(env.MPP_RECIPIENT || env.PAY_TO);
 }
+
+/**
+ * Pull-mode kill-switch. Pull mints a bearer SESSION off a client-signed Tempo tx; the code is
+ * adversarially-verified SOUND, but no LIVE client handshake has been observed and correctness rests
+ * on the pinned viem/ox Tempo serializer. So pull ships DARK behind its own flag even after merge —
+ * flip MPP_PULL_ENABLED only after one real end-to-end pull settlement is confirmed on staging.
+ * Push SKUs (agent_ask) are unaffected.
+ */
+export function mppPullEnabled(env: Env): boolean {
+  return env.MPP_PULL_ENABLED === "1" || env.MPP_PULL_ENABLED === "true";
+}
+
+/** Is a SKU's MPP rail ACTIVE right now? Push SKUs are active whenever MPP is on; pull SKUs
+ *  (session-minting) additionally require MPP_PULL_ENABLED, so they advertise/accept MPP only once
+ *  the kill-switch is flipped. Used everywhere the dual-rail 402 / openapi is decided. */
+export function mppSkuActive(env: Env, sku: Sku): boolean {
+  if (!MPP_SKUS.has(sku.id)) return false;
+  return mppMode(sku) === "push" || mppPullEnabled(env);
+}
 export function mppRecipient(env: Env): string {
   return (env.MPP_RECIPIENT || env.PAY_TO || "").toLowerCase();
 }

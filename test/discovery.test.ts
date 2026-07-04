@@ -47,7 +47,7 @@ describe("discovery — bare unpaid probe reaches 402 BEFORE body validation, no
 
 describe("discovery — /openapi.json declares the paid surfaces", () => {
   it("declares ask (x402+mpp), heart-file, topup, window — all with x-payment-info + schemas", () => {
-    const doc = buildOpenApi({ ...env, PAY_TO: PAY, MPP_ENABLED: "1", MPP_SECRET_KEY: "x" } as Env) as {
+    const doc = buildOpenApi({ ...env, PAY_TO: PAY, MPP_ENABLED: "1", MPP_SECRET_KEY: "x", MPP_PULL_ENABLED: "1" } as Env) as {
       paths: Record<string, { post?: { "x-payment-info"?: { protocols: unknown[]; price: { amount: string } }; requestBody?: unknown } }>;
     };
     const paid = ["/api/chat/ask", "/api/intake/heart-file", "/api/chat/topup", "/api/featured/post"];

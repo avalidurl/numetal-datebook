@@ -29,7 +29,7 @@ const ABI = parseAbi([
 ]);
 
 const mppEnv = (over: Partial<Env> = {}): Env =>
-  ({ ...env, PAY_TO: RECIPIENT, MPP_ENABLED: "1", MPP_SECRET_KEY: "pull-secret", ...over }) as Env;
+  ({ ...env, PAY_TO: RECIPIENT, MPP_ENABLED: "1", MPP_SECRET_KEY: "pull-secret", MPP_PULL_ENABLED: "1", ...over }) as Env;
 
 /** Parse a WWW-Authenticate: Payment header into its params. */
 function parseChallenge(header: string): Record<string, string> {
@@ -144,6 +144,22 @@ describe("MPP pull — verifyMppPullPayment", () => {
     expect(v.amountUsdc).toBe("2.00");
     expect(v.nonce!.length).toBeGreaterThan(20);
     expect(v.tx).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+
+  // CANARY — the signer-recovery regression guard. A REAL Tempo type-0x76 tx signed OFFLINE by
+  // Hardhat key #1 (pays $2 USDC to the recipient), captured 2026-07-04. The other tests sign
+  // in-process, so a viem/ox bump to the Tempo sign-payload derivation would shift generation AND
+  // recovery together and pass silently. These bytes are FIXED external ground truth: if the
+  // serializer regresses, recovery against them returns the wrong address → this fails LOUDLY,
+  // instead of every real payer silently getting a 402.
+  it("CANARY: recovers the exact pinned signer from a fixed signed tx (guards a viem/tempo serializer bump)", async () => {
+    const FIXTURE_RAW =
+      "0x76f8d0821079843b9aca00843b9aca00830186a0f85ef85c9420c000000000000000000000b9537d11c60e8b5080b844a9059cbb00000000000000000000000036de990133d36d7e3df9a820aa3ede5a2320de7100000000000000000000000000000000000000000000000000000000001e8480c0808080809420c000000000000000000000b9537d11c60e8b5080c0b8410961ddc82aaf9b3ef10f761b3742639b911d6a2a9a1430d63c11c9ff532b9cfe3e990e1a13907d226162d1abd63c1195a2442768ba6858eb0223daf111d3085b1b" as `0x${string}`;
+    const e = mppEnv();
+    restore = stubRpc({ receipt: goodReceipt(2_000_000n) }); // Transfer from SIGNER (= the fixture's signer)
+    const v = await verifyMppPullPayment(e, pullCred(await issue(e), FIXTURE_RAW), SKUS.chat_topup!);
+    expect(v.verified).toBe(true);
+    expect(v.payer).toBe(SIGNER.toLowerCase()); // 0x70997970… — recovered from the FIXED bytes
   });
 
   it("accepts an overpaying transferWithMemo call to us", async () => {
@@ -262,7 +278,7 @@ describe("MPP pull — verifyMppPullPayment", () => {
 });
 
 describe("MPP pull — route (/api/chat/topup)", () => {
-  const routeEnv = () => ({ ...env, PAY_TO: RECIPIENT, MPP_ENABLED: "1", MPP_SECRET_KEY: "route-pull-secret", CHAT_LAUNCHED: "true" }) as Env;
+  const routeEnv = () => ({ ...env, PAY_TO: RECIPIENT, MPP_ENABLED: "1", MPP_SECRET_KEY: "route-pull-secret", MPP_PULL_ENABLED: "1", CHAT_LAUNCHED: "true" }) as Env;
   const authHeader = (cred: MppCredential) => "Payment " + btoa(JSON.stringify(cred)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const post = async (headers: Record<string, string>) => {
     const ctx = createExecutionContext();

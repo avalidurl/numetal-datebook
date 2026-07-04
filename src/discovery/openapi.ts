@@ -14,7 +14,7 @@
  */
 import type { Env } from "../env";
 import { SKUS, type Sku } from "../payments/x402";
-import { mppCurrency, mppEnabled, mppMode, mppRecipient, MPP_NETWORK, MPP_SKUS } from "../payments/mpp";
+import { mppCurrency, mppEnabled, mppMode, mppRecipient, MPP_NETWORK, mppSkuActive } from "../payments/mpp";
 
 const apiBase = (env: Env): string => (env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").replace(/\/+$/, "");
 // Decimal-USD string for x-payment-info.price.amount (6dp, e.g. "$0.10" → "0.100000").
@@ -27,7 +27,7 @@ const usd = (sku: Sku): string => Number(sku.priceUsd.replace("$", "")).toFixed(
  */
 function protocolsFor(env: Env, sku: Sku): unknown[] {
   const p: unknown[] = [{ x402: {} }];
-  if (mppEnabled(env) && MPP_SKUS.has(sku.id)) {
+  if (mppEnabled(env) && mppSkuActive(env, sku)) {
     p.push({ mpp: { method: "tempo", intent: "charge", network: MPP_NETWORK, currency: mppCurrency(env), recipient: mppRecipient(env), supportedModes: [mppMode(sku)] } });
   }
   return p;

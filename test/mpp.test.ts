@@ -26,7 +26,7 @@ const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a
 const pad = (addr: string) => "0x" + addr.slice(2).padStart(64, "0");
 
 const mppEnv = (over: Partial<Env> = {}): Env =>
-  ({ ...env, PAY_TO: RECIPIENT, MPP_ENABLED: "1", MPP_SECRET_KEY: "test-secret", ...over }) as Env;
+  ({ ...env, PAY_TO: RECIPIENT, MPP_ENABLED: "1", MPP_SECRET_KEY: "test-secret", MPP_PULL_ENABLED: "1", ...over }) as Env;
 
 /** Parse a WWW-Authenticate: Payment header into its params. */
 function parseChallenge(header: string): Record<string, string> {
@@ -113,6 +113,12 @@ describe("MPP — challenge issuance (dual-rail 402)", () => {
     // MPP dark → x402 only even on MPP SKUs
     const dark = await x402Challenge({ ...e, MPP_ENABLED: undefined } as Env, SKUS.agent_ask!, RECIPIENT, "t");
     expect(dark.headers.get("WWW-Authenticate")).toBeNull();
+  });
+
+  it("kill-switch: pull-mode topup is DARK without MPP_PULL_ENABLED (push/ask unaffected)", async () => {
+    const dark = { ...mppEnv(), MPP_PULL_ENABLED: undefined } as Env; // MPP on, pull flag OFF
+    expect((await x402Challenge(dark, SKUS.agent_ask!, RECIPIENT, "t")).headers.get("WWW-Authenticate")).toMatch(/^Payment /);
+    expect((await x402Challenge(dark, SKUS.chat_topup!, RECIPIENT, "t")).headers.get("WWW-Authenticate")).toBeNull();
   });
 
   it("scope: ask (push) + topup (pull) offer the MPP rail", () => {
