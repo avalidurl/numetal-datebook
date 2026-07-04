@@ -72,6 +72,10 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
   // identity and the ONLY thing that authorizes decrypting a couple's private hearts below. Null on the
   // comped path (no payment) — comped authorization falls back to the founder-allowlisted ownerId.
   let payerWallet: string | null = null;
+  // Did THIS request freshly verify a payment? The orderId is client-supplied, so the idempotent-replay
+  // path returns a prior member's cached payer to WHOEVER replays the order key. That payer must never
+  // authorize the sensitive grounded read — only a freshly-verified payer may (see the gate below).
+  let payerFresh = false;
   if (comped) {
     await db.update(premiumOrders).set({ status: "comped" }).where(eq(premiumOrders.orderId, orderId)).run();
   } else {
@@ -84,6 +88,7 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     if (!settled.ok) return c.json({ error: "payment not verified", reason: settled.reason }, 402);
     receiptId = settled.receiptId ?? null;
     payerWallet = settled.payer ?? null;
+    payerFresh = settled.fresh === true;
   }
 
   // Ground the report in the actual dating docs + courtship when a couple is named — a report that
@@ -95,12 +100,15 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
   if (coupleId) {
     const membership = await loadCoupleMembership(c.env, coupleId);
     if (membership.couple) {
-      const callerOwnerId = comped ? ownerId : await ownerIdForWallet(c.env, payerWallet);
+      // Only a FRESHLY-verified payer (or a founder-comped ownerId) may authorize the decrypt. A payer
+      // handed back by the idempotent-replay short-circuit is discarded (payerFresh=false → null), so a
+      // caller cannot inherit a member's identity by replaying their order key on the same UTC day.
+      const callerOwnerId = comped ? ownerId : payerFresh ? await ownerIdForWallet(c.env, payerWallet) : null;
       if (!isCoupleMember(membership, callerOwnerId)) {
         await db.update(premiumOrders).set({ status: "failed" }).where(eq(premiumOrders.orderId, orderId)).run();
         await db
           .insert(events)
-          .values({ kind: "premium_report_authz_denied", payload: JSON.stringify({ orderId, coupleId, callerOwnerId, comped }) })
+          .values({ kind: "premium_report_authz_denied", payload: JSON.stringify({ orderId, coupleId, callerOwnerId, comped, fresh: payerFresh }) })
           .run();
         return c.json(
           { ok: false, orderId, receiptId, report: null, forbidden: true, error: "not authorized: the payer is not a member of this couple" },
