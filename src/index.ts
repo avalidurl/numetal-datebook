@@ -20,7 +20,7 @@ import { adminRoutes } from "./routes/admin";
 import { creativeRoutes } from "./routes/creative";
 import { boardsRoutes } from "./routes/boards";
 import { chatRoutes } from "./routes/chat";
-import { x402Requirements, SKUS } from "./payments/x402";
+import { x402Requirements, SKUS, skuDescription } from "./payments/x402";
 import { buildOpenApi } from "./discovery/openapi";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
@@ -147,7 +147,7 @@ app.get("/.well-known/x402", (c) => {
           resource: `${base}/api/chat/ask`,
           type: "http",
           x402Version: 2,
-          description: "Ishtar Talk — pay-per-answer dating coaching for agents (POST {\"message\"})",
+          description: skuDescription(sku),
           mimeType: "application/json",
           accepts: [x402Requirements(c.env, sku, c.env.PAY_TO)],
         },

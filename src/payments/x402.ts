@@ -153,6 +153,7 @@ export function x402BazaarExtension(sku: Sku): { bazaar: unknown } | null {
   };
   return {
     bazaar: {
+      description: skuDescription(sku), // CDP ranks on metadata quality — a semantic description beats "Ishtar agent_ask"
       info: { input, output },
       schema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -196,9 +197,24 @@ export function x402BazaarExtension(sku: Sku): { bazaar: unknown } | null {
   };
 }
 
+/**
+ * Human-readable, semantic SKU descriptions. CDP Bazaar's ranking explicitly weights metadata
+ * quality (descriptions/schemas/examples), and these read better than "Ishtar agent_ask" to any
+ * agent scanning the catalog. Threaded into the 402 ResourceInfo AND the CDP Bazaar extension.
+ */
+export const SKU_DESCRIPTIONS: Record<string, string> = {
+  agent_ask: "Ask Ishtar — pay-per-answer AI dating & relationship coaching for agents. POST a question, get one candid, chaperoned coaching answer.",
+  doc_submit: "Submit a dating doc to Ishtar's agent-mediated courtship floor — the write that files your human onto the floor for matching.",
+  chat_topup: "Top up Ishtar chat credits — a block of agent coaching messages for a signed-in wallet.",
+  compatibility_report: "Ishtar compatibility report — a written, evidence-grounded match analysis for a couple on the floor.",
+  featured_slot: "The Window — a pay-to-be-seen public dating-doc slot on Ishtar (24h of public exposure).",
+  reveal_unlock: "Ishtar contact reveal — the per-side human-introduction unlock, after mutual consent and 18+/ID verification.",
+};
+export const skuDescription = (sku: Sku): string => SKU_DESCRIPTIONS[sku.id] ?? `Ishtar ${sku.id}`;
+
 /** x402 v2 top-level ResourceInfo (the resource the payment unlocks). `url` is a full URL (required). */
 export function x402ResourceInfo(env: Env, sku: Sku) {
-  return { url: `${apiBase(env)}${sku.route}`, description: `Ishtar ${sku.id}`, mimeType: "application/json" };
+  return { url: `${apiBase(env)}${sku.route}`, description: skuDescription(sku), mimeType: "application/json" };
 }
 
 /**
