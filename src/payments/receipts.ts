@@ -23,7 +23,7 @@ export async function settleAndPersist(
   provider: PaymentProvider,
   ctx: OrderCtx,
   paymentHeader: string,
-): Promise<{ ok: boolean; receiptId?: number; reason: string }> {
+): Promise<{ ok: boolean; receiptId?: number; reason: string; payer?: string }> {
   // SEC-2026-07-01(#1,#3): idempotency MUST precede settle. provider.verify() performs the irreversible
   // on-chain CDP /settle on mainnet; a retried order carrying a FRESHLY-signed EIP-3009 authorization
   // (new nonce) would settle a SECOND transfer — and the post-settle receipt insert (onConflictDoNothing
@@ -32,11 +32,13 @@ export async function settleAndPersist(
   // 'failed'. Both are closed by short-circuiting BEFORE any settle: if this order already has a settled
   // receipt, return the prior success and never re-verify. (Mirrors the featured live-status pre-check.)
   const prior = await db
-    .select({ id: paymentReceipts.id })
+    .select({ id: paymentReceipts.id, payer: paymentReceipts.payer })
     .from(paymentReceipts)
     .where(eq(paymentReceipts.orderId, ctx.orderId))
     .get();
-  if (prior) return { ok: true, receiptId: prior.id, reason: "already settled" };
+  // Return the recorded payer on the idempotent path too — downstream authorization (the
+  // compatibility-report couple-membership gate) relies on the settled payer identity.
+  if (prior) return { ok: true, receiptId: prior.id, reason: "already settled", payer: prior.payer ?? undefined };
 
   const v = await provider.verify(paymentHeader, ctx.sku, ctx.payTo);
   if (!v.verified) {
@@ -76,5 +78,5 @@ export async function settleAndPersist(
   // Accrue only on first settle (rec is undefined on idempotent replay).
   if (rec) await accrueBuyback(db, env, ctx.orderId, dollars);
 
-  return { ok: true, receiptId: rec?.id, reason: "settled" };
+  return { ok: true, receiptId: rec?.id, reason: "settled", payer: v.payer };
 }
