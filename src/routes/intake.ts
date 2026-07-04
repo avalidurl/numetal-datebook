@@ -7,7 +7,7 @@ import { type Context, Hono } from "hono";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db as makeDb } from "../db/client";
-import { heartFiles, intakePayments, ownerDeliveries, owners } from "../db/schema";
+import { heartFiles, intakePayments, ownerDeliveries, ownerWallets, owners } from "../db/schema";
 import type { Env } from "../env";
 import { admitWithCap } from "../admission";
 import { seal } from "../crypto/box";
@@ -46,6 +46,10 @@ const heartSchema = z.object({
 // the operator key). Downstream chaperone + admission still apply; $1/write is the anti-flood floor.
 export const heartFileHandler = async (c: Context<{ Bindings: Env }>): Promise<Response> => {
   const db = makeDb(c.env.DB);
+  // The wallet that PAID the $1 filing fee — captured so it can be bound to the new owner below, which
+  // lets that wallet later authorize owner-scoped paid surfaces (e.g. the couple compatibility report).
+  let payerWallet: string | null = null;
+  let payerNetwork = "";
   // Agents pay $1 (x402/USDC) to file a dating doc onto the floor. Bare POST → 402; pay → the doc is
   // created. PAY_TO unset → payments off → submission is free (backward compatible). Humans file via
   // the $NUMETAL-held human floor (/api/chat/submit-doc) instead, so this only meters agent intake.
@@ -61,9 +65,11 @@ export const heartFileHandler = async (c: Context<{ Bindings: Env }>): Promise<R
     const provider = makeX402Provider(c.env);
     const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
     if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
+    payerWallet = v.payer.toLowerCase();
+    payerNetwork = provider.network;
     await db
       .insert(intakePayments)
-      .values({ orderId, payer: v.payer.toLowerCase(), amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""), network: provider.network, nonce: v.nonce, settlementTx: v.tx })
+      .values({ orderId, payer: payerWallet, amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""), network: provider.network, nonce: v.nonce, settlementTx: v.tx })
       .onConflictDoNothing()
       .run();
   }
@@ -92,6 +98,18 @@ export const heartFileHandler = async (c: Context<{ Bindings: Env }>): Promise<R
     })
     .returning({ id: owners.id })
     .get();
+  // Bind the wallet that PAID for this filing to the new owner, so it can later authorize owner-scoped
+  // paid surfaces — notably the couple compatibility report, whose gate resolves payer→owner→couple
+  // membership (src/premium/report-authz.ts). Without this, an agent-represented owner has no wallet on
+  // record and is refused (403) their own couple's report. onConflictDoNothing: (provider,network,address)
+  // is unique, so a wallet keeps its first binding — agents should use one wallet per represented human.
+  if (payerWallet) {
+    await db
+      .insert(ownerWallets)
+      .values({ ownerId: owner.id, provider: "external", chainFamily: "evm", network: payerNetwork, address: payerWallet, status: "active" })
+      .onConflictDoNothing()
+      .run();
+  }
   const hf = await db
     .insert(heartFiles)
     .values({

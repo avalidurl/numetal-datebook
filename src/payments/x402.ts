@@ -370,7 +370,10 @@ export function makeX402Provider(env: Env): PaymentProvider {
           if (!sr.ok) return { verified: false, raw: `cdp settle ${sr.status}` };
           const sj = (await sr.json()) as { success?: boolean; errorReason?: string; transaction?: string; payer?: string };
           if (!sj.success) return { verified: false, raw: sj.errorReason ?? "cdp settle failed" };
-          return { ...ok(), payer: sj.payer ?? terms.to, tx: sj.transaction };
+          // payer is security-load-bearing (the compatibility-report couple-membership gate authorizes
+          // on it) — NEVER fall back to the recipient (terms.to) when CDP omits it, or a caller could
+          // inherit PAY_TO's identity. Absent payer => undefined => downstream authorization fails closed.
+          return { ...ok(), payer: sj.payer, tx: sj.transaction };
         }
 
         // Staging: keyless x402.org facilitator, /verify only (testnet — no real settlement).

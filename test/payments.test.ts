@@ -61,6 +61,11 @@ describe("x402 settle-then-persist", () => {
     const r1 = await settleAndPersist(db, env, provider(true), { orderId: "o_ok", sku, payTo: "0xpay" }, "PAY");
     const r2 = await settleAndPersist(db, env, provider(true), { orderId: "o_ok", sku, payTo: "0xpay" }, "PAY");
     expect(r1.ok && r2.ok).toBe(true);
+    // IDOR fix: only the FRESH settle may authorize a sensitive read; the idempotent replay must not,
+    // because its returned payer is inherited from whoever first paid this (client-supplied) order key.
+    expect(r1.fresh).toBe(true);
+    expect(r2.fresh).toBe(false);
+    expect(r2.payer).toBe("0xpayer"); // payer still surfaced (for the receipt), just not `fresh`
     expect(await db.select().from(paymentReceipts).where(eq(paymentReceipts.orderId, "o_ok")).all()).toHaveLength(1);
     expect(await db.select().from(buybackReserve).where(eq(buybackReserve.orderId, "o_ok")).all()).toHaveLength(1);
     const ord = await db.select().from(premiumOrders).where(eq(premiumOrders.orderId, "o_ok")).get();

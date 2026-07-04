@@ -16,6 +16,7 @@ import { runGuarded } from "../economics/gateway";
 import { textOf } from "../economics/pricing";
 import { settleAndPersist } from "../payments/receipts";
 import { makeX402Provider, SKUS, x402Challenge } from "../payments/x402";
+import { isCoupleMember, loadCoupleMembership, ownerIdForWallet } from "../premium/report-authz";
 
 export const premiumRoutes = new Hono<{ Bindings: Env }>();
 
@@ -67,6 +68,14 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     .filter(Boolean)
     .includes(String(ownerId));
   let receiptId: number | null = null;
+  // The wallet that actually settled the payment (from x402 verify/settle). This is the caller's PROVEN
+  // identity and the ONLY thing that authorizes decrypting a couple's private hearts below. Null on the
+  // comped path (no payment) — comped authorization falls back to the founder-allowlisted ownerId.
+  let payerWallet: string | null = null;
+  // Did THIS request freshly verify a payment? The orderId is client-supplied, so the idempotent-replay
+  // path returns a prior member's cached payer to WHOEVER replays the order key. That payer must never
+  // authorize the sensitive grounded read — only a freshly-verified payer may (see the gate below).
+  let payerFresh = false;
   if (comped) {
     await db.update(premiumOrders).set({ status: "comped" }).where(eq(premiumOrders.orderId, orderId)).run();
   } else {
@@ -78,16 +87,37 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     const settled = await settleAndPersist(db, c.env, provider, { orderId, sku, payTo: c.env.PAY_TO }, paymentHeader);
     if (!settled.ok) return c.json({ error: "payment not verified", reason: settled.reason }, 402);
     receiptId = settled.receiptId ?? null;
+    payerWallet = settled.payer ?? null;
+    payerFresh = settled.fresh === true;
   }
 
   // Ground the report in the actual dating docs + courtship when a couple is named — a report that
-  // never reads the hearts is a stub. Decrypt both persona hearts + the published transcript.
+  // never reads the hearts is a stub. This DECRYPTS both personas' private hearts, so it is gated
+  // behind a couple-membership check (IDOR fix, 2026-07-04): the caller's PROVEN identity — the settled
+  // payer wallet, or a founder-comped ownerId — must own one of the couple's two personas. A non-member
+  // (or an unresolvable payer) is refused BEFORE any decryption. See src/premium/report-authz.ts.
   let grounding = "";
   if (coupleId) {
-    const cr = await c.env.DB.prepare("SELECT a_id, b_id FROM couples WHERE id=?1").bind(coupleId).first<{ a_id: number; b_id: number }>();
-    if (cr) {
-      const pa = await c.env.DB.prepare("SELECT handle, heart_json FROM personas WHERE id=?1").bind(cr.a_id).first<{ handle: string; heart_json: string }>();
-      const pb = await c.env.DB.prepare("SELECT handle, heart_json FROM personas WHERE id=?1").bind(cr.b_id).first<{ handle: string; heart_json: string }>();
+    const membership = await loadCoupleMembership(c.env, coupleId);
+    if (membership.couple) {
+      // Only a FRESHLY-verified payer (or a founder-comped ownerId) may authorize the decrypt. A payer
+      // handed back by the idempotent-replay short-circuit is discarded (payerFresh=false → null), so a
+      // caller cannot inherit a member's identity by replaying their order key on the same UTC day.
+      const callerOwnerId = comped ? ownerId : payerFresh ? await ownerIdForWallet(c.env, payerWallet) : null;
+      if (!isCoupleMember(membership, callerOwnerId)) {
+        await db.update(premiumOrders).set({ status: "failed" }).where(eq(premiumOrders.orderId, orderId)).run();
+        await db
+          .insert(events)
+          .values({ kind: "premium_report_authz_denied", payload: JSON.stringify({ orderId, coupleId, callerOwnerId, comped, fresh: payerFresh }) })
+          .run();
+        return c.json(
+          { ok: false, orderId, receiptId, report: null, forbidden: true, error: "not authorized: the payer is not a member of this couple" },
+          403,
+        );
+      }
+      const { aId, bId } = membership.couple;
+      const pa = await c.env.DB.prepare("SELECT handle, heart_json FROM personas WHERE id=?1").bind(aId).first<{ handle: string; heart_json: string }>();
+      const pb = await c.env.DB.prepare("SELECT handle, heart_json FROM personas WHERE id=?1").bind(bId).first<{ handle: string; heart_json: string }>();
       const ha = (await open(c.env, pa?.heart_json ?? null)) ?? "";
       const hb = (await open(c.env, pb?.heart_json ?? null)) ?? "";
       const tr = (await c.env.DB.prepare("SELECT body FROM turns WHERE couple_id=?1 AND status='published' ORDER BY turn_seq ASC LIMIT 24").bind(coupleId).all()).results as Array<{ body: string }>;
