@@ -67,4 +67,35 @@ describe("discovery — /openapi.json declares the paid surfaces", () => {
     expect(mppOf("/api/chat/ask")?.supportedModes).toEqual(["push"]);
     expect(mppOf("/api/chat/topup")?.supportedModes).toEqual(["pull"]);
   });
+
+  it("declares components.securitySchemes and references them per paid op (AgentCash sell-to-agents)", () => {
+    const doc = buildOpenApi({ ...env, PAY_TO: PAY, MPP_ENABLED: "1", MPP_SECRET_KEY: "x", MPP_PULL_ENABLED: "1" } as Env) as {
+      info: { contact?: { email?: string } };
+      components?: { securitySchemes?: Record<string, { type?: string; scheme?: string; name?: string }> };
+      paths: Record<string, { post?: { security?: Array<Record<string, string[]>> } }>;
+    };
+    // schemes exist and are accurately typed
+    const schemes = doc.components?.securitySchemes ?? {};
+    expect(schemes.x402).toMatchObject({ type: "apiKey", in: "header", name: "payment-signature" });
+    expect(schemes.mpp).toMatchObject({ type: "http", scheme: "Payment" });
+    // documented ownership contact
+    expect(doc.info.contact?.email).toBe("contact@gokhan.vc");
+    // each paid op references the scheme keys it accepts; ask carries both rails
+    const secKeys = (p: string) => (doc.paths[p]!.post!.security ?? []).flatMap((s) => Object.keys(s));
+    expect(secKeys("/api/chat/ask")).toEqual(["x402", "mpp"]);
+    expect(secKeys("/api/featured/post")).toEqual(["x402"]);
+    // every referenced scheme is defined in components
+    for (const p of ["/api/chat/ask", "/api/intake/heart-file", "/api/chat/topup", "/api/featured/post"]) {
+      for (const k of secKeys(p)) expect(schemes[k], `${p} references undefined scheme ${k}`).toBeTruthy();
+    }
+  });
+
+  it("emits x-discovery.ownershipProofs only when AGENTCASH_OWNERSHIP_PROOF is set", () => {
+    const without = buildOpenApi({ ...env, PAY_TO: PAY } as Env) as Record<string, unknown>;
+    expect(without["x-discovery"]).toBeUndefined();
+    const withProof = buildOpenApi({ ...env, PAY_TO: PAY, AGENTCASH_OWNERSHIP_PROOF: "proof-a, proof-b" } as Env) as {
+      "x-discovery"?: { ownershipProofs?: string[] };
+    };
+    expect(withProof["x-discovery"]?.ownershipProofs).toEqual(["proof-a", "proof-b"]);
+  });
 });
