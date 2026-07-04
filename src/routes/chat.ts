@@ -118,21 +118,23 @@ chatRoutes.post("/chat/session", async (c) => {
 const topupSchema = z.object({ ref: z.string().min(8).max(100), over18: z.boolean().optional() });
 
 chatRoutes.post("/chat/topup", async (c) => {
-  const parsed = topupSchema.safeParse(await c.req.json().catch(() => ({})));
-  if (!parsed.success) return c.json({ error: "ref (client idempotency key, 8-100 chars) required" }, 400);
-  if (!parsed.data.over18) return c.json({ error: "over18:true required — you must confirm you are 18 or older" }, 400);
   if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
   // mainnet (real USDC via the CDP facilitator) is wired in src/payments/x402.ts; go-live is gated by
   // X402_MODE=mainnet + the CDP_API_KEY_* secrets + a mainnet PAY_TO (redacted), not by a code guard.
   // NOTE: topup mints a bearer SESSION, so it stays x402-only — x402's signed authorization proves the
   // caller controls the paying wallet. MPP push-mode proves only that a transfer landed (the hash is
   // public), so binding a session to it would be an account-takeover vector. MPP topup awaits pull mode.
-
   const sku = SKUS.chat_topup!;
   const provider = makeX402Provider(c.env);
-  const orderId = `chattopup:${parsed.data.ref}`;
   const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
-  if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
+  // Bare/unpaid probe → the 402 challenge BEFORE body validation (discovery indexers require the probe
+  // to reach a 402 with NO side effects; the real per-ref orderId is only needed on the paid retry).
+  if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, "chattopup");
+
+  const parsed = topupSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "ref (client idempotency key, 8-100 chars) required" }, 400);
+  if (!parsed.data.over18) return c.json({ error: "over18:true required — you must confirm you are 18 or older" }, 400);
+  const orderId = `chattopup:${parsed.data.ref}`;
 
   const db = makeDb(c.env.DB);
   // SEC-2026-07-01(#2): idempotency BEFORE settle. provider.verify() performs the irreversible on-chain

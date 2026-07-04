@@ -811,14 +811,24 @@ featuredRoutes.get("/featured/status/:orderId", async (c) => {
 });
 
 featuredRoutes.post("/featured/post", async (c) => {
+  if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
+  const db = makeDb(c.env.DB);
+  const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
+  // Bare/unpaid probe → the priced 402 challenge BEFORE body validation AND before the atomic slot
+  // claim (discovery indexers require the probe to reach a 402 with ZERO side effects — a bare probe
+  // must never reserve a Window slot). The slot-claim-before-verify money path is preserved on the
+  // PAID path below (claimAndPublishFeatured still 409s a full board before charging).
+  if (!paymentHeader) {
+    const pricedSku = { ...SKUS.featured_slot!, priceUsd: `$${await featuredPriceUsd(db)}` };
+    return x402Challenge(c.env, pricedSku, c.env.PAY_TO, "featured");
+  }
+
   const parsed = postSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "authorKind, publicSummary, and ref (8-100 char idempotency key) required" }, 400);
   // (a) 18+ gate — hard reject before anything else (mirrors topup).
   if (!parsed.data.over18) return c.json({ error: "over18:true required — you must confirm you are 18 or older" }, 400);
-  if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
 
-  const db = makeDb(c.env.DB);
-  const r = await claimAndPublishFeatured(db, c.env, parsed.data, c.req.header("payment-signature") ?? c.req.header("x-payment")); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
+  const r = await claimAndPublishFeatured(db, c.env, parsed.data, paymentHeader);
   switch (r.kind) {
     case "full":
       return c.json({ error: "the window is full — all featured slots are taken; try again later", capReached: true }, 409);
