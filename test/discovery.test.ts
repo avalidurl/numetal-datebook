@@ -56,11 +56,15 @@ describe("discovery — /openapi.json declares the paid surfaces", () => {
       expect(op?.["x-payment-info"], `${p} x-payment-info`).toBeTruthy();
       expect(op?.requestBody, `${p} requestBody`).toBeTruthy();
     }
-    // ask carries both rails; topup/window x402-only
+    // ask + topup carry both rails (ask push, topup pull); window x402-only
     const proto = (p: string) => (doc.paths[p]!.post!["x-payment-info"]!.protocols as Array<Record<string, unknown>>).map((x) => Object.keys(x)[0]);
     expect(proto("/api/chat/ask")).toEqual(["x402", "mpp"]);
-    expect(proto("/api/chat/topup")).toEqual(["x402"]);
+    expect(proto("/api/chat/topup")).toEqual(["x402", "mpp"]);
     expect(proto("/api/featured/post")).toEqual(["x402"]);
     expect(doc.paths["/api/chat/topup"]!.post!["x-payment-info"]!.price.amount).toBe("2.000000");
+    // per-SKU supportedModes: ask push, topup pull
+    const mppOf = (p: string) => (doc.paths[p]!.post!["x-payment-info"]!.protocols as Array<Record<string, { supportedModes?: string[] }>>).find((x) => x.mpp)?.mpp;
+    expect(mppOf("/api/chat/ask")?.supportedModes).toEqual(["push"]);
+    expect(mppOf("/api/chat/topup")?.supportedModes).toEqual(["pull"]);
   });
 });

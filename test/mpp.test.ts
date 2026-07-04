@@ -7,6 +7,7 @@ import {
   buildMppChallengeHeader,
   MPP_SKUS,
   mppEnabled,
+  mppMode,
   mppProblem,
   mppProblemCode,
   mppReceiptHeader,
@@ -101,9 +102,11 @@ describe("MPP — challenge issuance (dual-rail 402)", () => {
     expect(dual.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
     expect(dual.headers.get("WWW-Authenticate")).toMatch(/^Payment /);
     expect(dual.headers.get("cache-control")).toBe("no-store");
-    // topup mints a session → stays x402-only in v1 (push mode can't prove wallet control)
+    // topup mints a session → offers MPP in PULL mode (the signed tx proves wallet control)
     const topup = await x402Challenge(e, SKUS.chat_topup!, RECIPIENT, "t");
-    expect(topup.headers.get("WWW-Authenticate")).toBeNull();
+    expect(topup.headers.get("WWW-Authenticate")).toMatch(/^Payment /);
+    const topupReq = JSON.parse(b64urlDecode(parseChallenge(topup.headers.get("WWW-Authenticate")!).request!));
+    expect(topupReq.methodDetails.supportedModes).toEqual(["pull"]); // session-minting → pull only
     // non-MPP SKU → x402 only (featured has policy-refusal paths post-payment)
     const solo = await x402Challenge(e, SKUS.featured_slot!, RECIPIENT, "t");
     expect(solo.headers.get("WWW-Authenticate")).toBeNull();
@@ -112,8 +115,10 @@ describe("MPP — challenge issuance (dual-rail 402)", () => {
     expect(dark.headers.get("WWW-Authenticate")).toBeNull();
   });
 
-  it("scope: only ask offers the MPP rail in v1 (topup stays x402-only)", () => {
-    expect([...MPP_SKUS]).toEqual(["agent_ask"]);
+  it("scope: ask (push) + topup (pull) offer the MPP rail", () => {
+    expect([...MPP_SKUS].sort()).toEqual(["agent_ask", "chat_topup"]);
+    expect(mppMode(SKUS.agent_ask!)).toBe("push");
+    expect(mppMode(SKUS.chat_topup!)).toBe("pull");
     expect(mppEnabled(mppEnv())).toBe(true);
     expect(mppEnabled(mppEnv({ MPP_SECRET_KEY: undefined }))).toBe(false);
   });
