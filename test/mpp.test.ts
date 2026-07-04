@@ -7,6 +7,7 @@ import {
   buildMppChallengeHeader,
   MPP_SKUS,
   mppEnabled,
+  mppMode,
   mppProblem,
   mppProblemCode,
   mppReceiptHeader,
@@ -25,7 +26,7 @@ const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a
 const pad = (addr: string) => "0x" + addr.slice(2).padStart(64, "0");
 
 const mppEnv = (over: Partial<Env> = {}): Env =>
-  ({ ...env, PAY_TO: RECIPIENT, MPP_ENABLED: "1", MPP_SECRET_KEY: "test-secret", ...over }) as Env;
+  ({ ...env, PAY_TO: RECIPIENT, MPP_ENABLED: "1", MPP_SECRET_KEY: "test-secret", MPP_PULL_ENABLED: "1", ...over }) as Env;
 
 /** Parse a WWW-Authenticate: Payment header into its params. */
 function parseChallenge(header: string): Record<string, string> {
@@ -101,9 +102,11 @@ describe("MPP — challenge issuance (dual-rail 402)", () => {
     expect(dual.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
     expect(dual.headers.get("WWW-Authenticate")).toMatch(/^Payment /);
     expect(dual.headers.get("cache-control")).toBe("no-store");
-    // topup mints a session → stays x402-only in v1 (push mode can't prove wallet control)
+    // topup mints a session → offers MPP in PULL mode (the signed tx proves wallet control)
     const topup = await x402Challenge(e, SKUS.chat_topup!, RECIPIENT, "t");
-    expect(topup.headers.get("WWW-Authenticate")).toBeNull();
+    expect(topup.headers.get("WWW-Authenticate")).toMatch(/^Payment /);
+    const topupReq = JSON.parse(b64urlDecode(parseChallenge(topup.headers.get("WWW-Authenticate")!).request!));
+    expect(topupReq.methodDetails.supportedModes).toEqual(["pull"]); // session-minting → pull only
     // non-MPP SKU → x402 only (featured has policy-refusal paths post-payment)
     const solo = await x402Challenge(e, SKUS.featured_slot!, RECIPIENT, "t");
     expect(solo.headers.get("WWW-Authenticate")).toBeNull();
@@ -112,8 +115,16 @@ describe("MPP — challenge issuance (dual-rail 402)", () => {
     expect(dark.headers.get("WWW-Authenticate")).toBeNull();
   });
 
-  it("scope: only ask offers the MPP rail in v1 (topup stays x402-only)", () => {
-    expect([...MPP_SKUS]).toEqual(["agent_ask"]);
+  it("kill-switch: pull-mode topup is DARK without MPP_PULL_ENABLED (push/ask unaffected)", async () => {
+    const dark = { ...mppEnv(), MPP_PULL_ENABLED: undefined } as Env; // MPP on, pull flag OFF
+    expect((await x402Challenge(dark, SKUS.agent_ask!, RECIPIENT, "t")).headers.get("WWW-Authenticate")).toMatch(/^Payment /);
+    expect((await x402Challenge(dark, SKUS.chat_topup!, RECIPIENT, "t")).headers.get("WWW-Authenticate")).toBeNull();
+  });
+
+  it("scope: ask (push) + topup (pull) offer the MPP rail", () => {
+    expect([...MPP_SKUS].sort()).toEqual(["agent_ask", "chat_topup"]);
+    expect(mppMode(SKUS.agent_ask!)).toBe("push");
+    expect(mppMode(SKUS.chat_topup!)).toBe("pull");
     expect(mppEnabled(mppEnv())).toBe(true);
     expect(mppEnabled(mppEnv({ MPP_SECRET_KEY: undefined }))).toBe(false);
   });

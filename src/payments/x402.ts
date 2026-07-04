@@ -5,7 +5,7 @@
  * in without touching Ishtar. verify() is FAIL-CLOSED: any error → not verified.
  */
 import type { Env } from "../env";
-import { buildMppChallengeHeader, MPP_SKUS, mppEnabled } from "./mpp";
+import { buildMppChallengeHeader, mppEnabled, mppSkuActive } from "./mpp";
 
 export interface Sku {
   id: string;
@@ -250,7 +250,7 @@ export async function x402Challenge(env: Env, sku: Sku, payTo: string, orderId: 
     "x-order-id": orderId,
     "PAYMENT-REQUIRED": encodeX402Header(body), // v2 clients read here; body is v1-only fallback
   };
-  if (mppEnabled(env) && MPP_SKUS.has(sku.id)) headers["WWW-Authenticate"] = await buildMppChallengeHeader(env, sku);
+  if (mppEnabled(env) && mppSkuActive(env, sku)) headers["WWW-Authenticate"] = await buildMppChallengeHeader(env, sku);
   return new Response(JSON.stringify(body, null, 2), { status: 402, headers });
 }
 

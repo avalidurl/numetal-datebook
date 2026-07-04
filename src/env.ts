@@ -92,6 +92,7 @@ export interface Env {
   MPP_RECIPIENT?: string; // Tempo-side receiving address; defaults to PAY_TO (same keypair, two chains)
   MPP_CURRENCY?: string; // TIP-20 token address accepted on Tempo (default: USDC-on-Tempo)
   TEMPO_RPC_URL?: string; // Tempo JSON-RPC for receipt verification (default https://rpc.tempo.xyz)
+  MPP_PULL_ENABLED?: string; // "1"/"true" activates the pull-mode session-minting rail (chat_topup). DARK by default until a live client handshake is proven — the code is verified sound but never live-tested.
   // Escalation tier (humans meet). All optional → the tier is disabled (no-op) until set.
   PRIVY_APP_ID?: string;
   PRIVY_VERIFICATION_KEY?: string; // PEM SPKI public key from the Privy dashboard (ES256)

@@ -14,17 +14,21 @@
  */
 import type { Env } from "../env";
 import { SKUS, type Sku } from "../payments/x402";
-import { mppCurrency, mppEnabled, mppRecipient, MPP_NETWORK, MPP_SKUS } from "../payments/mpp";
+import { mppCurrency, mppEnabled, mppMode, mppRecipient, MPP_NETWORK, mppSkuActive } from "../payments/mpp";
 
 const apiBase = (env: Env): string => (env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").replace(/\/+$/, "");
 // Decimal-USD string for x-payment-info.price.amount (6dp, e.g. "$0.10" → "0.100000").
 const usd = (sku: Sku): string => Number(sku.priceUsd.replace("$", "")).toFixed(6);
 
-/** protocols[] for a SKU: x402 always; MPP too when the SKU is MPP-enabled and the rail is live. */
+/**
+ * protocols[] for a SKU: x402 always; MPP too when the SKU is MPP-enabled and the rail is live.
+ * supportedModes differs per SKU — agent_ask is ["push"], chat_topup (session-minting) is ["pull"]
+ * — so a discovery client knows which credential shape to send before probing the live 402.
+ */
 function protocolsFor(env: Env, sku: Sku): unknown[] {
   const p: unknown[] = [{ x402: {} }];
-  if (mppEnabled(env) && MPP_SKUS.has(sku.id)) {
-    p.push({ mpp: { method: "tempo", intent: "charge", network: MPP_NETWORK, currency: mppCurrency(env), recipient: mppRecipient(env) } });
+  if (mppEnabled(env) && mppSkuActive(env, sku)) {
+    p.push({ mpp: { method: "tempo", intent: "charge", network: MPP_NETWORK, currency: mppCurrency(env), recipient: mppRecipient(env), supportedModes: [mppMode(sku)] } });
   }
   return p;
 }
@@ -158,7 +162,7 @@ export function buildOpenApi(env: Env) {
               properties: { ok: { type: "boolean" }, credited: { type: "boolean" }, sessionToken: { type: "string" }, expiresAt: { type: "string" }, address: { type: "string" }, credits: { type: "number" } },
               required: ["ok"],
             }),
-            "402": { description: "Payment Required — x402 challenge (USDC on Base)." },
+            "402": { description: "Payment Required — the 402 carries the x402 (PAYMENT-REQUIRED, USDC on Base) and, on Tempo, MPP PULL-mode (WWW-Authenticate) challenges. Top-up mints a session, so MPP is pull-only (the client signs a Tempo tx; the server recovers the signer = proof of wallet control)." },
           },
         },
       },

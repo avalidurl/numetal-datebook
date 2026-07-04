@@ -44,7 +44,7 @@ import { accrueBuyback } from "../economics/reserve";
 import { chatSpendExceeded } from "../economics/budget";
 import { recordEpisode, recordFeedback } from "../coach/memory";
 import { makeX402Provider, SKUS, x402Challenge, encodeX402Header, parsePaymentHeader } from "../payments/x402";
-import { MPP_NETWORK, mppEnabled, mppProblem, mppProblemCode, mppReceiptHeader, parseMppAuth, verifyMppPayment } from "../payments/mpp";
+import { MPP_NETWORK, MPP_PULL_SKUS, mppEnabled, mppProblem, mppProblemCode, mppReceiptHeader, mppSkuActive, parseMppAuth, verifyMppPayment, verifyMppPullPayment } from "../payments/mpp";
 import { timingSafeEqualStr } from "../util/timing";
 import { docReadyEmail, resendSend } from "../newsletter/resend";
 
@@ -121,22 +121,69 @@ chatRoutes.post("/chat/topup", async (c) => {
   if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
   // mainnet (real USDC via the CDP facilitator) is wired in src/payments/x402.ts; go-live is gated by
   // X402_MODE=mainnet + the CDP_API_KEY_* secrets + a mainnet PAY_TO (redacted), not by a code guard.
-  // NOTE: topup mints a bearer SESSION, so it stays x402-only — x402's signed authorization proves the
-  // caller controls the paying wallet. MPP push-mode proves only that a transfer landed (the hash is
-  // public), so binding a session to it would be an account-takeover vector. MPP topup awaits pull mode.
+  // Top-up mints a bearer SESSION, so the paying rail MUST prove the caller controls the paying wallet:
+  //  - x402 → the signed EIP-3009 authorization proves control.
+  //  - MPP  → PULL mode ONLY: the client signs (but doesn't broadcast) the Tempo tx; we recover the
+  //    signer from the signature = proof of control, then bind the session to that address. Push mode
+  //    (a public tx hash) proves only that a transfer landed → account-takeover vector → NEVER here.
   const sku = SKUS.chat_topup!;
   const provider = makeX402Provider(c.env);
   const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
+  const mppPullOn = mppEnabled(c.env) && mppSkuActive(c.env, sku) && MPP_PULL_SKUS.has(sku.id); // gated on MPP_PULL_ENABLED — dark until a live handshake is proven
+  const mppCred = mppPullOn ? parseMppAuth(c.req.header("authorization")) : null; // MPP pull rail (Authorization: Payment)
   // Bare/unpaid probe → the 402 challenge BEFORE body validation (discovery indexers require the probe
   // to reach a 402 with NO side effects; the real per-ref orderId is only needed on the paid retry).
-  if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, "chattopup");
+  // With MPP live for topup this 402 carries BOTH rails (x402 PAYMENT-REQUIRED + MPP WWW-Authenticate).
+  if (!paymentHeader && !mppCred) return x402Challenge(c.env, sku, c.env.PAY_TO, "chattopup");
+  const isMpp = !paymentHeader && !!mppCred; // the credential header decides the rail — never both
 
   const parsed = topupSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "ref (client idempotency key, 8-100 chars) required" }, 400);
   if (!parsed.data.over18) return c.json({ error: "over18:true required — you must confirm you are 18 or older" }, 400);
-  const orderId = `chattopup:${parsed.data.ref}`;
 
   const db = makeDb(c.env.DB);
+  const dollars = Number(sku.priceUsd.replace("$", ""));
+  const credits = Math.round(creditsPerUsd(c.env) * dollars); // e.g. 7.5 × $2 = 15 messages
+
+  /* ---- MPP pull branch: verify the client-signed Tempo tx, credit + mint a session bound to the
+   * RECOVERED payer. Deduped on BOTH the challenge orderId AND the settlement_tx (partial-unique
+   * index, migration 0030) so one signed tx buys exactly one top-up even across fresh challenges. */
+  if (isMpp) {
+    const orderId = `chattopup:mpp:${mppCred!.challenge.id ?? "noid"}`;
+    // Fast-path a replayed challenge before verify (which would re-broadcast the same signed tx).
+    const prior = await db.select({ payer: chatTopups.payer }).from(chatTopups).where(eq(chatTopups.orderId, orderId)).get();
+    if (prior?.payer) {
+      await attest18(db, prior.payer);
+      const { token, expiresAt } = await mintSession(db, prior.payer, "topup");
+      return c.json({ ok: true, credited: false, sessionToken: token, expiresAt, address: prior.payer.toLowerCase(), ...(await getBalance(db, c.env, prior.payer)) });
+    }
+
+    const v = await verifyMppPullPayment(c.env, mppCred!, sku);
+    // A 402 MUST carry a fresh challenge (spec) — re-serve the MPP problem, not a bare error.
+    if (!v.verified || !v.payer) return mppProblem(c.env, sku, mppProblemCode(v.raw), "payment could not be verified");
+
+    // Single-use, race-safe: the INSERT is the admission gate. order_id (challenge id) AND
+    // settlement_tx are both unique, so a concurrent replay — same challenge, OR the same confirmed
+    // tx under a fresh challenge — loses the insert and is refused.
+    const first = await db
+      .insert(chatTopups)
+      .values({ orderId, payer: v.payer.toLowerCase(), amountUsdc: v.amountUsdc ?? String(dollars), credits, network: MPP_NETWORK, nonce: v.nonce, settlementTx: v.tx })
+      .onConflictDoNothing()
+      .returning({ id: chatTopups.id })
+      .get();
+    if (!first) return mppProblem(c.env, sku, "invalid-challenge", "this payment was already redeemed — request a new challenge");
+
+    await addCredits(db, v.payer, credits);
+    await accrueBuyback(db, c.env, null, dollars); // chat has no premium_orders row → null order ref
+    await attest18(db, v.payer); // over18 confirmed above → recorded
+    const { token, expiresAt } = await mintSession(db, v.payer, "topup");
+    // Money moved AND we won the race — the receipt rides only on this 2xx (MPP: MUST NOT on errors).
+    c.header("Payment-Receipt", mppReceiptHeader(c.env, mppCred!.challenge.id!, v.tx!, sku));
+    return c.json({ ok: true, credited: true, sessionToken: token, expiresAt, address: v.payer.toLowerCase(), ...(await getBalance(db, c.env, v.payer)) });
+  }
+
+  /* ---- x402 branch (unchanged) ------------------------------------------------------------- */
+  const orderId = `chattopup:${parsed.data.ref}`;
   // SEC-2026-07-01(#2): idempotency BEFORE settle. provider.verify() performs the irreversible on-chain
   // CDP /settle on mainnet; a retry carrying a freshly-signed authorization (new nonce) would settle a
   // SECOND USDC transfer, then the chat_topups insert below no-ops on order_id → double-charge with no
@@ -149,11 +196,9 @@ chatRoutes.post("/chat/topup", async (c) => {
     return c.json({ ok: true, credited: false, sessionToken: token, expiresAt, address: priorTopup.payer.toLowerCase(), ...(await getBalance(db, c.env, priorTopup.payer)) });
   }
 
-  const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
+  const v = await provider.verify(paymentHeader!, sku, c.env.PAY_TO);
   if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
 
-  const dollars = Number(sku.priceUsd.replace("$", ""));
-  const credits = Math.round(creditsPerUsd(c.env) * dollars); // e.g. 7.5 × $2 = 15 messages
   // Idempotent settle: first insert wins; a replay credits nothing twice.
   const first = await db
     .insert(chatTopups)
