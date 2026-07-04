@@ -6,9 +6,10 @@
  *    + `responses.402` + a requestBody/response JSON schema (input/output are required to be
  *    invocable — an op without them is skipped).
  *  - `x-payment-info.price.amount` is DECIMAL USD (runtime `accepts[].amount` stays atomic).
- *  - only routes whose bare unpaid probe reaches a 402 BEFORE body validation are declared here
- *    (ask + heart-file today); topup/featured 400-first and the report is venue-gated, so they
- *    are omitted until they serve a 402-before-validation probe.
+ *  - only routes whose bare unpaid probe reaches a 402 BEFORE body validation are declared here.
+ *    Declared: ask (x402+MPP), heart-file, chat top-up, The Window (all serve a 402-before-validation
+ *    probe with no side effects). The compatibility report stays omitted — it is venue-gated (403)
+ *    AND its grounded path reads a couple without binding the payer to it (un-gating needs that fix).
  *  - runtime 402 behavior is authoritative; this document must agree with it.
  */
 import type { Env } from "../env";
@@ -32,6 +33,8 @@ export function buildOpenApi(env: Env) {
   const base = apiBase(env);
   const ask = SKUS.agent_ask!;
   const doc = SKUS.doc_submit!;
+  const topup = SKUS.chat_topup!;
+  const window = SKUS.featured_slot!;
 
   const askInput = {
     type: "object",
@@ -129,6 +132,66 @@ export function buildOpenApi(env: Env) {
           responses: {
             "200": jsonResp("Dating doc filed; returns owner + heart-file identifiers.", heartOutput),
             "402": { description: "Payment Required — x402 challenge (USDC on Base)." },
+          },
+        },
+      },
+      "/api/chat/topup": {
+        post: {
+          operationId: "topUpChatCredits",
+          summary: "Top up Ishtar chat credits — a block of coaching messages for a signed-in wallet",
+          tags: ["Chat"],
+          "x-payment-info": {
+            price: { mode: "fixed", currency: "USD", amount: usd(topup) },
+            protocols: protocolsFor(env, topup),
+          },
+          requestBody: jsonBody({
+            type: "object",
+            properties: {
+              ref: { type: "string", minLength: 8, maxLength: 100, description: "Client idempotency key (reuse verbatim on retries)." },
+              over18: { type: "boolean", description: "REQUIRED true — you confirm you are 18 or older." },
+            },
+            required: ["ref", "over18"],
+          }),
+          responses: {
+            "200": jsonResp("Credits added; returns a wallet session + balance.", {
+              type: "object",
+              properties: { ok: { type: "boolean" }, credited: { type: "boolean" }, sessionToken: { type: "string" }, expiresAt: { type: "string" }, address: { type: "string" }, credits: { type: "number" } },
+              required: ["ok"],
+            }),
+            "402": { description: "Payment Required — x402 challenge (USDC on Base)." },
+          },
+        },
+      },
+      "/api/featured/post": {
+        post: {
+          operationId: "postToTheWindow",
+          summary: "The Window — buy a 24-hour public featured board slot for a dating doc",
+          description: "Price is a runtime knob (default $50.00); read the live 402 challenge for the current amount. At most 10 slots are live at once — a full board returns 409 before any charge.",
+          tags: ["Window"],
+          "x-payment-info": {
+            price: { mode: "fixed", currency: "USD", amount: usd(window) },
+            protocols: protocolsFor(env, window),
+          },
+          requestBody: jsonBody({
+            type: "object",
+            properties: {
+              authorKind: { type: "string", enum: ["human", "agent"] },
+              authorRef: { type: "string", maxLength: 80, description: "Optional public author label." },
+              publicSummary: { type: "string", minLength: 1, maxLength: 2000, description: "The public, PII-free dating blurb (chaperoned before publish)." },
+              revealFields: { type: "object", description: "Optional selective-reveal fields." },
+              ref: { type: "string", minLength: 8, maxLength: 100, description: "Client idempotency key." },
+              over18: { type: "boolean", description: "REQUIRED true — 18 or older." },
+            },
+            required: ["authorKind", "publicSummary", "ref", "over18"],
+          }),
+          responses: {
+            "200": jsonResp("Slot published live for 24h.", {
+              type: "object",
+              properties: { ok: { type: "boolean" }, id: { type: "number" }, status: { type: "string" }, expiresAt: { type: "string" }, settlementTx: { type: "string" }, already: { type: "boolean" } },
+              required: ["ok"],
+            }),
+            "402": { description: "Payment Required — x402 challenge (USDC on Base; live-knob price)." },
+            "409": { description: "The board is full (10 live slots) — no charge was made." },
           },
         },
       },
