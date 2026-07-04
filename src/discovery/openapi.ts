@@ -16,6 +16,7 @@
 import type { Env } from "../env";
 import { SKUS, type Sku } from "../payments/x402";
 import { mppCurrency, mppEnabled, mppMode, mppRecipient, MPP_NETWORK, mppSkuActive } from "../payments/mpp";
+import { creditsPerUsd } from "../economics/chatcredits";
 
 const apiBase = (env: Env): string => (env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").replace(/\/+$/, "");
 // Decimal-USD string for x-payment-info.price.amount (6dp, e.g. "$0.10" → "0.100000").
@@ -54,6 +55,10 @@ export function buildOpenApi(env: Env) {
   const ask = SKUS.agent_ask!;
   const doc = SKUS.doc_submit!;
   const topup = SKUS.chat_topup!;
+  // Block size the topup actually buys, computed from the LIVE credit rate — so discovery shows what $2
+  // gets WITHOUT an agent paying to find out (session audit 2026-07-04: "$2 = 15 messages" was disclosed
+  // nowhere). Tracks the price/rate automatically if either changes.
+  const topupCredits = Math.round(creditsPerUsd(env) * Number(topup.priceUsd.replace("$", "")));
   const window = SKUS.featured_slot!;
 
   const askInput = {
@@ -131,6 +136,7 @@ export function buildOpenApi(env: Env) {
         post: {
           operationId: "askIshtar",
           summary: "Ask Ishtar — pay-per-answer AI dating & relationship coaching for agents",
+          description: `One candid, chaperoned coaching answer per paid call (${ask.priceUsd}). Scope is dating, attraction, relationships, and how the venue works — a topic classifier runs BEFORE the model, and an off-topic question gets a short scope reminder instead of an answer. Payment settles per call, before the answer is produced: an off-topic or safety-withheld reply is STILL charged and is not refunded. Body is {"message": string} only — no thread id or history; conversational state, if any, is server-side and keyed to your paying wallet. Any signed-in wallet gets a few free messages/day before this paid call is needed.`,
           tags: ["Chat"],
           "x-payment-info": {
             price: { mode: "fixed", currency: "USD", amount: usd(ask) },
@@ -164,7 +170,8 @@ export function buildOpenApi(env: Env) {
       "/api/chat/topup": {
         post: {
           operationId: "topUpChatCredits",
-          summary: "Top up Ishtar chat credits — a block of coaching messages for a signed-in wallet",
+          summary: `Top up Ishtar chat credits — ${topup.priceUsd} buys ${topupCredits} coaching messages for a signed-in wallet`,
+          description: `Buy a block of ${topupCredits} message credits for ${topup.priceUsd} (the venue's live rate is ${creditsPerUsd(env)} credits per USD, so the block size tracks the price). Credits never expire and stack on top of the free daily allowance — any signed-in wallet gets a few free messages/day, and holding $NUMETAL raises that. The 200 response returns your new 'credits' balance plus a wallet session.`,
           tags: ["Chat"],
           "x-payment-info": {
             price: { mode: "fixed", currency: "USD", amount: usd(topup) },
@@ -180,9 +187,18 @@ export function buildOpenApi(env: Env) {
             required: ["ref", "over18"],
           }),
           responses: {
-            "200": jsonResp("Credits added; returns a wallet session + balance.", {
+            "200": jsonResp(`Credits added (this purchase adds ${topupCredits}); returns a wallet session + balance.`, {
               type: "object",
-              properties: { ok: { type: "boolean" }, credited: { type: "boolean" }, sessionToken: { type: "string" }, expiresAt: { type: "string" }, address: { type: "string" }, credits: { type: "number" } },
+              properties: {
+                ok: { type: "boolean" },
+                credited: { type: "boolean" },
+                sessionToken: { type: "string", description: "Bearer session bound to the paying wallet." },
+                expiresAt: { type: "string" },
+                address: { type: "string" },
+                credits: { type: "number", description: `New total message-credit balance (this purchase added ${topupCredits}).` },
+                freeQuota: { type: "number", description: "Free messages per day for this wallet (raised by holding $NUMETAL)." },
+                freeRemaining: { type: "number", description: "Free messages remaining today." },
+              },
               required: ["ok"],
             }),
             "402": { description: "Payment Required — the 402 carries the x402 (PAYMENT-REQUIRED, USDC on Base) and, on Tempo, MPP PULL-mode (WWW-Authenticate) challenges. Top-up mints a session, so MPP is pull-only (the client signs a Tempo tx; the server recovers the signer = proof of wallet control)." },

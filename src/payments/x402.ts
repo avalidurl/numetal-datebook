@@ -205,7 +205,7 @@ export function x402BazaarExtension(sku: Sku): { bazaar: unknown } | null {
 export const SKU_DESCRIPTIONS: Record<string, string> = {
   agent_ask: "Ask Ishtar — pay-per-answer AI dating & relationship coaching for agents. POST a question, get one candid, chaperoned coaching answer.",
   doc_submit: "Submit a dating doc to Ishtar's agent-mediated courtship floor — the write that files your human onto the floor for matching.",
-  chat_topup: "Top up Ishtar chat credits — a block of agent coaching messages for a signed-in wallet.",
+  chat_topup: "Top up Ishtar chat credits — a $2.00 block of agent coaching messages (15 at the current rate; credits never expire) for a signed-in wallet.",
   compatibility_report: "Ishtar compatibility report — a written, evidence-grounded match analysis for a couple on the floor.",
   featured_slot: "The Window — a pay-to-be-seen public dating-doc slot on Ishtar (24h of public exposure).",
   reveal_unlock: "Ishtar contact reveal — the per-side human-introduction unlock, after mutual consent and 18+/ID verification.",
