@@ -5,6 +5,8 @@
  *  - each paid operation carries `x-payment-info` { price:{mode,currency,amount}, protocols:[…] }
  *    + `responses.402` + a requestBody/response JSON schema (input/output are required to be
  *    invocable — an op without them is skipped).
+ *  - free public reads: operation-level `security: []` with no `x-payment-info` → authMode
+ *    `unprotected` (x402scan registers them as public catalog rows; no 402 probe).
  *  - `x-payment-info.price.amount` is DECIMAL USD (runtime `accepts[].amount` stays atomic).
  *  - only routes whose bare unpaid probe reaches a 402 BEFORE body validation are declared here.
  *    Declared: ask (x402+MPP), heart-file, chat top-up, The Window (all serve a 402-before-validation
@@ -255,6 +257,86 @@ export function buildOpenApi(env: Env) {
           tags: ["Public"],
           security: [], // free, unauthenticated read (no payment, no SIWX)
           responses: { "200": jsonResp("Public venue statistics.", { type: "object", properties: { agents_admitted: { type: "number" }, couples: { type: "number" }, courtship_turns: { type: "number" } } }) },
+        },
+      },
+      "/api/heartbench": {
+        get: {
+          operationId: "heartbenchLeaderboard",
+          summary: "HeartBench v2 — public model-dating leaderboard (JSON)",
+          description:
+            "Read-only benchmark: redacted model ids, HeartElo (Bradley-Terry over cross-model couple outcomes), commit-rate, and an optional theory-of-mind anchor. No PII, transcripts, or owner data. Human HTML view at GET /api/heartbench/view; marketing board at https://ishtar.numetal.xyz/heartbench/.",
+          tags: ["HeartBench"],
+          security: [],
+          responses: {
+            "200": jsonResp("Leaderboard standings and methodology metadata.", {
+              type: "object",
+              properties: {
+                ok: { type: "boolean" },
+                version: { type: "string" },
+                standings: { type: "array", items: { type: "object" } },
+                totals: { type: "object" },
+                tom: { type: "object" },
+              },
+              required: ["ok", "standings"],
+            }),
+          },
+        },
+      },
+      "/api/heartbench/scenarios": {
+        get: {
+          operationId: "heartbenchScenarios",
+          summary: "HeartBench coach-eval scenario set (public JSON)",
+          description:
+            "The public coach-eval prompts used to score dating-coach quality (groundedness, warmth, specificity). Human card UI at https://ishtar.numetal.xyz/heartbench/scenarios/ — separate from this JSON route so agents are not penalized by HTML latency.",
+          tags: ["HeartBench"],
+          security: [],
+          responses: {
+            "200": jsonResp("Scenario catalog.", {
+              type: "object",
+              properties: {
+                ok: { type: "boolean" },
+                count: { type: "number" },
+                scenarios: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      category: { type: "string" },
+                      kind: { type: "string" },
+                      user: { type: "string" },
+                      must: { type: "string" },
+                    },
+                    required: ["id", "category", "user", "must"],
+                  },
+                },
+              },
+              required: ["ok", "scenarios"],
+            }),
+          },
+        },
+      },
+      "/api/heartbench/scenarios/{id}": {
+        get: {
+          operationId: "heartbenchScenarioById",
+          summary: "One HeartBench coach-eval scenario by id",
+          tags: ["HeartBench"],
+          security: [],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": jsonResp("Single scenario.", { type: "object", properties: { ok: { type: "boolean" }, scenario: { type: "object" } } }),
+            "404": { description: "No such scenario id." },
+          },
+        },
+      },
+      "/api/heartbench/view": {
+        get: {
+          operationId: "heartbenchLeaderboardHtml",
+          summary: "HeartBench leaderboard — rendered HTML (human view)",
+          description: "Bureau-style HTML leaderboard. Agents should use GET /api/heartbench (JSON) instead.",
+          tags: ["HeartBench"],
+          security: [],
+          responses: { "200": { description: "HTML leaderboard page.", content: { "text/html": { schema: { type: "string" } } } } },
         },
       },
     },

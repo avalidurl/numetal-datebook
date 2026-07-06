@@ -16,15 +16,16 @@ import { open } from "../crypto/box";
 import { getSetting } from "../economics/budget";
 import { captureError } from "../observability";
 import { compatible, coldScore, type EligPersona, parseHeart } from "./eligibility";
-import { greedyPair, pairKey, type Candidate } from "./pairing";
+import { greedyPair, pairKey, applyCrossModelBias, type Candidate } from "./pairing";
 import { embedHeart, shortlist, upsertHeartVector } from "./shortlist";
 import { makeGambit } from "./gambit";
 import { notifyMatchForCouple } from "../notify/match-hook";
+import { modelPool } from "./models";
 
 const intervalMs = (env: Env): number => (env.SIM_MODE === "day0" ? 5 * 60_000 : 60 * 60_000);
 
-type Persona = { id: number; handle: string; heart: string; activeMarket: string; homeMarket: string };
-type View = EligPersona & { heartText: string };
+type Persona = { id: number; handle: string; model: string; heart: string; activeMarket: string; homeMarket: string };
+type View = EligPersona & { heartText: string; model: string };
 
 export class MatchCoordinator implements DurableObject {
   constructor(private state: DurableObjectState, private env: Env) {}
@@ -60,6 +61,7 @@ export class MatchCoordinator implements DurableObject {
       .select({
         id: personas.id,
         handle: personas.handle,
+        model: personas.model,
         heart: personas.heartJson,
         activeMarket: personas.activeMarket,
         homeMarket: personas.homeMarket,
@@ -142,7 +144,7 @@ export class MatchCoordinator implements DurableObject {
     const lo = Math.min(aId, bId);
     const hi = Math.max(aId, bId);
     const rows = (await db
-      .select({ id: personas.id, handle: personas.handle, heart: personas.heartJson, activeMarket: personas.activeMarket, homeMarket: personas.homeMarket })
+      .select({ id: personas.id, handle: personas.handle, model: personas.model, heart: personas.heartJson, activeMarket: personas.activeMarket, homeMarket: personas.homeMarket })
       .from(personas)
       .where(inArray(personas.id, [lo, hi]))
       .all()) as Persona[];
@@ -182,6 +184,7 @@ export class MatchCoordinator implements DurableObject {
         homeMarket: p.homeMarket,
         parsed: parseHeart(heartText),
         heartText,
+        model: p.model,
       });
     }
     return view;
@@ -189,6 +192,9 @@ export class MatchCoordinator implements DurableObject {
 
   private async buildEdges(db: DB, eligible: Persona[]): Promise<Candidate[]> {
     const view = await this.buildView(eligible);
+    const modelById = new Map(eligible.map((p) => [p.id, p.model]));
+    const multiModel = modelPool(this.env).length > 1;
+    const bias = (edges: Candidate[]) => applyCrossModelBias(edges, modelById, multiModel);
     // Preferred: embeddings + Vectorize kNN, made RECIPROCAL (a near b AND b near a) and
     // eligibility-filtered. Fallback: a real cold-start matcher (NOT insertion order).
     try {
@@ -203,11 +209,11 @@ export class MatchCoordinator implements DurableObject {
         }
       }
       const edges = this.reciprocalEdges(directed, view);
-      if (edges.length) return edges;
+      if (edges.length) return bias(edges);
     } catch (e) {
       await captureError(this.env, e, { where: "buildEdges:embeddings" });
     }
-    return this.coldStartEdges([...view.keys()], view);
+    return bias(this.coldStartEdges([...view.keys()], view));
   }
 
   /** One-way nearest ≠ mutual fit (committee finding): keep an edge only if it survives the

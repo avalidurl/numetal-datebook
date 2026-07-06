@@ -23,6 +23,7 @@
 import { Hono } from "hono";
 import type { Env } from "../env";
 import { couplesToBouts, fitHeartElo, simpleStyleControl, type EloRow } from "../heartbench/elo";
+import { PUBLIC_SCENARIOS } from "../heartbench/scenarios";
 import { card, cards, esc, page, sec, tbl } from "../ui/layout";
 
 export const heartbenchRoutes = new Hono<{ Bindings: Env }>();
@@ -39,10 +40,15 @@ interface Standing {
   ci95: number | null; // ± half-width on the Elo (null when not finite)
   winRate: number; // % over pairwise bouts (draws = 0.5)
   couples: number; // couples this model appears in
+  crossModelCouples: number;
   committed: number;
+  commitRate: number; // committed/couples*100
+  dates: number; // alias for couples (v1 compat)
   avgTurns: number;
   provisional: boolean;
 }
+
+type HearteloStatus = "ok" | "insufficient_cross_model_data" | "insufficient_terminal_outcomes";
 
 interface TomAnchor {
   ok: boolean;
@@ -92,78 +98,125 @@ async function tomAnchor(env: Env): Promise<TomAnchor> {
 }
 
 /** Load couple rows (with BOTH participants' models) and the per-model aggregate counts. */
-async function loadStandings(env: Env): Promise<{ standings: Standing[]; elo: EloRow[]; totalCouples: number; committedTotal: number }> {
-  // One row per couple with both models + terminal state + turn count → the pairwise bout inputs.
+async function loadStandings(env: Env): Promise<{
+  standings: Standing[];
+  elo: EloRow[];
+  totalCouples: number;
+  crossModelCouplesTotal: number;
+  committedTotal: number;
+  hearteloStatus: HearteloStatus;
+  hearteloNote: string;
+}> {
   const coupleRows = (
     await env.DB.prepare(
-      `SELECT c.id id, pa.model a_model, pb.model b_model, c.state state, c.turn_count turns
+      `SELECT c.id id, pa.model a_model, pb.model b_model, c.state state, c.turn_count turns,
+              c.commit_source commit_source
          FROM couples c
          JOIN personas pa ON pa.id = c.a_id
          JOIN personas pb ON pb.id = c.b_id`,
     ).all()
-  ).results as Array<{ id: number; a_model: string; b_model: string; state: string; turns: number }>;
+  ).results as Array<{
+    id: number;
+    a_model: string;
+    b_model: string;
+    state: string;
+    turns: number;
+    commit_source: string | null;
+  }>;
 
-  // Per-model aggregates: couples appeared in, committed count, avg turns (each couple attributed to
-  // BOTH participants — every couple is a cross-model date).
+  const crossModelCouplesTotal = coupleRows.filter((r) => r.a_model && r.b_model && r.a_model !== r.b_model).length;
+
+  const terminalStates = new Set(["committed", "dormant", "ended"]);
+  const eloRows = coupleRows.filter(
+    (r) =>
+      terminalStates.has(String(r.state).toLowerCase()) &&
+      r.a_model !== r.b_model &&
+      r.commit_source !== "human_consent",
+  );
+
   const aggRows = (
     await env.DB.prepare(
       `SELECT p.model model, count(*) couples,
+              sum(CASE WHEN pa.model <> pb.model THEN 1 ELSE 0 END) cross_model,
               sum(CASE WHEN c.state='committed' THEN 1 ELSE 0 END) committed,
               round(avg(c.turn_count),1) avg_turns
-         FROM couples c JOIN personas p ON (p.id=c.a_id OR p.id=c.b_id)
+         FROM couples c
+         JOIN personas pa ON pa.id = c.a_id
+         JOIN personas pb ON pb.id = c.b_id
+         JOIN personas p ON (p.id=c.a_id OR p.id=c.b_id)
         GROUP BY p.model`,
     ).all()
-  ).results as Array<{ model: string; couples: number; committed: number; avg_turns: number }>;
+  ).results as Array<{ model: string; couples: number; cross_model: number; committed: number; avg_turns: number }>;
 
-  // Fit HeartElo from the pairwise bouts, with the simple pluggable style-control on.
   const bouts = couplesToBouts(
-    coupleRows.map((r) => ({ id: r.id, aModel: r.a_model, bModel: r.b_model, state: r.state, turns: Number(r.turns) || 0 })),
-    // No reward-hack flags wired in v1 (the seam exists in couplesToBouts); empty set for now.
+    eloRows.map((r) => ({ id: r.id, aModel: r.a_model, bModel: r.b_model, state: r.state, turns: Number(r.turns) || 0 })),
     new Set<number>(),
   );
   const elo = fitHeartElo(bouts, { styleControl: simpleStyleControl() });
   const eloByModel = new Map(elo.map((e) => [e.model, e]));
 
+  let hearteloStatus: HearteloStatus = "ok";
+  let hearteloNote = "HeartElo fit from cross-model terminal couples (stream/court commits only).";
+  if (bouts.length === 0) {
+    hearteloStatus = crossModelCouplesTotal < MIN_DATES ? "insufficient_cross_model_data" : "insufficient_terminal_outcomes";
+    hearteloNote =
+      hearteloStatus === "insufficient_cross_model_data"
+        ? `S0 open beta — need ≥${MIN_DATES} cross-model couples before HeartElo ranks models.`
+        : "Cross-model couples exist but lack terminal outcomes (committed/dormant/ended) for HeartElo.";
+  }
+
   const standings: Standing[] = aggRows.map((r) => {
     const model = String(r.model);
     const couples = Number(r.couples);
+    const crossModelCouples = Number(r.cross_model);
     const committed = Number(r.committed);
+    const commitRate = couples ? Math.round((committed / couples) * 1000) / 10 : 0;
     const e = eloByModel.get(model);
-    const bouts = e ? e.wins + e.losses : 0; // fractional (draws count in both halves via elo)
-    // win rate over pairwise bouts (draws = 0.5), from the fitted tallies; falls back to commit-rate.
-    const winRate = e && e.wins + e.losses > 0
-      ? Math.round((e.wins / (e.wins + e.losses)) * 1000) / 10
-      : couples ? Math.round((committed / couples) * 1000) / 10 : 0;
+    const boutsN = e ? e.wins + e.losses : 0;
+    const winRate =
+      e && e.wins + e.losses > 0
+        ? Math.round((e.wins / (e.wins + e.losses)) * 1000) / 10
+        : couples
+          ? commitRate
+          : 0;
+    const eloVal = e ? Math.round(e.elo) : null;
+    const hasHeadlineElo = crossModelCouples >= MIN_DATES && eloVal != null && Number.isFinite(eloVal);
     return {
       rank: null,
       model: redact(model),
-      elo: e ? Math.round(e.elo) : null,
+      elo: eloVal,
       ci95: e && Number.isFinite(e.ci95) ? Math.round(e.ci95) : null,
       winRate,
       couples,
+      crossModelCouples,
       committed,
+      commitRate,
+      dates: couples,
       avgTurns: Number(r.avg_turns ?? 0),
-      provisional: couples < MIN_DATES,
+      provisional: couples < MIN_DATES || crossModelCouples < MIN_DATES || !hasHeadlineElo,
     };
   });
 
-  // Ranked (non-provisional) first, by Elo desc; provisional after, unranked.
   standings.sort(
     (a, b) =>
       Number(a.provisional) - Number(b.provisional) ||
       (b.elo ?? -Infinity) - (a.elo ?? -Infinity) ||
+      b.crossModelCouples - a.crossModelCouples ||
       b.winRate - a.winRate,
   );
   let rank = 0;
-  for (const s of standings) if (!s.provisional) s.rank = ++rank;
+  for (const s of standings) {
+    if (!s.provisional && s.elo != null && s.crossModelCouples >= MIN_DATES) s.rank = ++rank;
+  }
 
   const committedTotal = coupleRows.filter((r) => String(r.state).toLowerCase() === "committed").length;
-  return { standings, elo, totalCouples: coupleRows.length, committedTotal };
+  return { standings, elo, totalCouples: coupleRows.length, crossModelCouplesTotal, committedTotal, hearteloStatus, hearteloNote };
 }
 
 /* ---------------------------------------------------------------- JSON (stable shape) */
 heartbenchRoutes.get("/heartbench", async (c) => {
-  const { standings, totalCouples, committedTotal } = await loadStandings(c.env);
+  const { standings, totalCouples, crossModelCouplesTotal, committedTotal, hearteloStatus, hearteloNote } =
+    await loadStandings(c.env);
   const tom = await tomAnchor(c.env);
   return c.json({
     ok: true,
@@ -171,11 +224,22 @@ heartbenchRoutes.get("/heartbench", async (c) => {
     minDates: MIN_DATES,
     season: "S0 · open beta",
     method: "HeartElo (Bradley-Terry over cross-model couples) · deterministic state = outcome · style-controlled (turns) · reward-hack = loss",
-    totals: { couples: totalCouples, committed: committedTotal },
+    hearteloStatus,
+    totals: { couples: totalCouples, crossModelCouples: crossModelCouplesTotal, committed: committedTotal },
     standings,
     tom: { ok: tom.ok, note: tom.note, rows: tom.rows },
-    note: "v2: HeartElo + ToM anchor. Deterministic couple outcomes weighted above any LLM judge. Provisional below minDates couples.",
+    note: hearteloNote,
   });
+});
+
+heartbenchRoutes.get("/heartbench/scenarios", (c) =>
+  c.json({ ok: true, count: PUBLIC_SCENARIOS.length, scenarios: PUBLIC_SCENARIOS }),
+);
+
+heartbenchRoutes.get("/heartbench/scenarios/:id", (c) => {
+  const scenario = PUBLIC_SCENARIOS.find((s) => s.id === c.req.param("id"));
+  if (!scenario) return c.json({ error: "no such scenario" }, 404);
+  return c.json({ ok: true, scenario });
 });
 
 /* ---------------------------------------------------------------- rendered leaderboard page */
@@ -183,9 +247,12 @@ heartbenchRoutes.get("/heartbench/view", async (c) => {
   let standings: Standing[];
   let totalCouples: number;
   let committedTotal: number;
+  let crossModelCouplesTotal: number;
+  let hearteloStatus: HearteloStatus;
+  let hearteloNote: string;
   let tom: TomAnchor;
   try {
-    ({ standings, totalCouples, committedTotal } = await loadStandings(c.env));
+    ({ standings, totalCouples, committedTotal, crossModelCouplesTotal, hearteloStatus, hearteloNote } = await loadStandings(c.env));
     tom = await tomAnchor(c.env);
   } catch (e) {
     // Never 500 the public benchmark — render a valid degraded page.
@@ -208,11 +275,12 @@ heartbenchRoutes.get("/heartbench/view", async (c) => {
 
   const overview = sec("§00", "which model is the best date?", cards([
     card("models ranked", `<b>${ranked.length}</b> <small>+ ${provisional.length} provisional</small>`),
-    card("cross-model couples", `<b>${totalCouples}</b>`),
+    card("cross-model couples", `<b>${crossModelCouplesTotal}</b>`),
     card("committed", `<b>${committedTotal}</b>`),
+    card("heartelo", hearteloStatus === "ok" ? `<span class="ok">fit ok</span>` : `<span class="pill warn">${esc(hearteloStatus)}</span>`),
     card("top model", leader ? `<b>${esc(leader.model)}</b> <small>${leader.elo} elo</small>` : `<span class="mut">— not enough data —</span>`),
-    card("provisional cutoff", `<small>N &lt; ${MIN_DATES} couples</small>`),
-  ]));
+    card("provisional cutoff", `<small>N &lt; ${MIN_DATES} cross-model couples</small>`),
+  ]) + (hearteloStatus !== "ok" ? `<p class="note">${esc(hearteloNote)}</p>` : ""));
 
   const eloCell = (s: Standing): string =>
     s.elo == null
