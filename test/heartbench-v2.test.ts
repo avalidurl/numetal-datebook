@@ -100,6 +100,7 @@ describe("HeartBench v2 route", () => {
     const j = (await res.json()) as Record<string, unknown>;
     expect(j.ok).toBe(true);
     expect(j.version).toBe("v2");
+    expect(j.hearteloStatus).toBe("insufficient_cross_model_data");
     expect(Array.isArray(j.standings)).toBe(true);
     // ToM table is absent in this worktree's schema → insufficient data, gracefully.
     expect((j.tom as { ok: boolean }).ok).toBe(false);
@@ -118,18 +119,55 @@ describe("HeartBench v2 route", () => {
     expect(html).toContain("not enough data");
   });
 
+  it("same-model-only couples yield insufficient_cross_model_data", async () => {
+    for (let i = 0; i < 3; i++) await seedCouple("dormant", "@cf/same", "@cf/same", 8);
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(req("/api/heartbench"), env, ctx);
+    await waitOnExecutionContext(ctx);
+    const j = (await res.json()) as { hearteloStatus: string; standings: Array<{ elo: number | null }> };
+    expect(j.hearteloStatus).toBe("insufficient_cross_model_data");
+    expect(j.standings.every((s) => s.elo == null)).toBe(true);
+  });
+
+  it("cross-model terminal couples with zero commits still yield finite HeartElo", async () => {
+    for (let i = 0; i < 3; i++) await seedCouple("dormant", "@cf/x-a", "@cf/x-b-" + i, 8);
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(req("/api/heartbench"), env, ctx);
+    await waitOnExecutionContext(ctx);
+    const j = (await res.json()) as { hearteloStatus: string; standings: Array<{ model: string; elo: number | null }> };
+    expect(j.hearteloStatus).toBe("ok");
+    const a = j.standings.find((s) => s.model === "x-a");
+    expect(a?.elo).not.toBeNull();
+  });
+
+  it("exposes public coach scenarios", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(req("/api/heartbench/scenarios"), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { count: number; scenarios: Array<{ id: string; must: string }> };
+    expect(j.count).toBe(17);
+    expect(j.scenarios[0]?.id).toBeTruthy();
+    expect(j.scenarios[0]?.must).toBeTruthy();
+  });
+
   it("marks low-N models Provisional and keeps them off the headline rank", async () => {
     // Two models, one cross-model couple → both have N=1 couple → both provisional (MIN_DATES=10).
     await seedCouple("committed", "@cf/prov-a", "@cf/prov-b");
     const ctx = createExecutionContext();
     const res = await worker.fetch(req("/api/heartbench"), env, ctx);
     await waitOnExecutionContext(ctx);
-    const j = (await res.json()) as { standings: Array<{ model: string; provisional: boolean; rank: number | null; elo: number | null }> };
+    const j = (await res.json()) as {
+      standings: Array<{ model: string; provisional: boolean; rank: number | null; elo: number | null; commitRate: number; dates: number }>;
+      hearteloStatus: string;
+    };
     const a = j.standings.find((s) => s.model === "prov-a");
     expect(a).toBeTruthy();
     expect(a!.provisional).toBe(true);
     expect(a!.rank).toBeNull(); // provisional → unranked
-    expect(a!.elo).not.toBeNull(); // Elo still computed, just flagged
+    expect(a!.elo).not.toBeNull(); // Elo still computed from the one terminal bout
+    expect(a!.commitRate).toBeGreaterThan(0);
+    expect(a!.dates).toBeGreaterThan(0);
   });
 
   it("ranks a model that reaches MIN_DATES couples and reflects the win", async () => {

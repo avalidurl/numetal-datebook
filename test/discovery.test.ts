@@ -99,6 +99,26 @@ describe("discovery — /openapi.json declares the paid surfaces", () => {
     expect(withProof["x-discovery"]?.ownershipProofs).toEqual(["proof-a", "proof-b"]);
   });
 
+  it("declares free public reads with explicit security: [] (registry registers them, not skipped)", () => {
+    const doc = buildOpenApi({ ...env, PAY_TO: PAY } as Env) as {
+      paths: Record<string, { get?: { security?: unknown[]; "x-payment-info"?: unknown } }>;
+    };
+    const freePublicGets = [
+      "/api/floor",
+      "/api/public/stats",
+      "/api/heartbench",
+      "/api/heartbench/scenarios",
+      "/api/heartbench/scenarios/{id}",
+      "/api/heartbench/view",
+    ];
+    for (const p of freePublicGets) {
+      const op = doc.paths[p]?.get;
+      expect(op, `${p} GET`).toBeTruthy();
+      expect(op?.security, `${p} security`).toEqual([]);
+      expect(op?.["x-payment-info"], `${p} not paid`).toBeUndefined();
+    }
+  });
+
   it("discloses what $2 buys (block size) + the off-topic charge WITHOUT paying (session-audit gap 2026-07-04)", () => {
     const doc = buildOpenApi({ ...env, PAY_TO: PAY } as Env) as {
       paths: Record<string, { post?: { summary?: string; description?: string; responses?: Record<string, { content?: Record<string, { schema?: { properties?: Record<string, { description?: string }> } }> }> } }>;

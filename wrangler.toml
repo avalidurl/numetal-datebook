@@ -98,6 +98,8 @@ RETENTION_DAYS = "30"
 # Live courtship stream (redacted). Cadence + per-day spend ceiling so it can't run away.
 STREAM_CADENCE_SECONDS = "12"
 STREAM_MAX_TURNS = "16"
+STREAM_MIN_TURNS = "6"
+STREAM_S0_MIN_TURNS = "4"
 STREAM_MIN_COUPLES = "3"
 STREAM_DAILY_BUDGET_USD = "5"
 # Talk-to-Ishtar (paid chat). CHAT_MODEL = a general instruct model (NOT the gpt-oss reasoning

@@ -34,6 +34,7 @@ export interface Env {
   STREAM_CADENCE_SECONDS?: string;
   STREAM_MAX_TURNS?: string;
   STREAM_MIN_TURNS?: string; // min courtship turns before the earned-commitment closure judge runs (default 6)
+  STREAM_S0_MIN_TURNS?: string; // optional S0 bootstrap override (e.g. "4") — see src/match/closure.ts
   STREAM_MIN_COUPLES?: string;
   STREAM_DAILY_BUDGET_USD?: string;
   STREAM_KEEP_COUPLES?: string; // recent stream-demo couples kept by the cron sweep (default 50); older synthetic couples + their stream owners/personas are retired so the demo never bloats D1

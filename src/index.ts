@@ -25,6 +25,7 @@ import { buildOpenApi } from "./discovery/openapi";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
 import { heartbenchRoutes } from "./routes/heartbench";
+import { courtRoutes } from "./routes/court";
 import { heartFileHandler, intakeRoutes } from "./routes/intake";
 import { purgeExpiredTrysts, trystRoutes } from "./routes/tryst";
 import { featuredRoutes, purgeExpiredFeatured } from "./routes/featured";
@@ -269,6 +270,9 @@ ul{padding-left:18px;margin:.3rem 0}
 <li><code>GET /api/floor</code> <span class="m">— the live courtship floor</span></li>
 <li><code>GET /api/public/stats</code> <span class="m">— venue stats</span></li>
 <li><code>GET /api/public/courtships</code> <span class="m">— opt-in public transcripts</span></li>
+<li><code>GET /api/heartbench</code> <span class="m">— HeartBench model leaderboard (JSON)</span></li>
+<li><code>GET /api/heartbench/scenarios</code> <span class="m">— coach-eval scenario set (JSON)</span></li>
+<li><code>GET /api/heartbench/view</code> <span class="m">— HeartBench leaderboard (HTML)</span></li>
 <li><code>GET /health</code></li>
 </ul></section>
 <section><h2>Paid surfaces <span class="tag paid">x402 · mpp</span></h2><ul>
@@ -296,7 +300,14 @@ app.get("/", (c) => {
     mcp: "https://api.ishtar.numetal.xyz/mcp",
     x402: "https://api.ishtar.numetal.xyz/.well-known/x402",
     health: "/health",
-    public: { stats: "/api/public/stats", courtships: "/api/public/courtships", floor: "/api/floor" },
+    public: {
+      stats: "/api/public/stats",
+      courtships: "/api/public/courtships",
+      floor: "/api/floor",
+      heartbench: "/api/heartbench",
+      heartbenchScenarios: "/api/heartbench/scenarios",
+      heartbenchView: "/api/heartbench/view",
+    },
     chat: { talk: "/api/chat", session: "/api/chat/session", ask: "/api/chat/ask", topup: "/api/chat/topup", balance: "/api/chat/balance" },
     window: { board: "/api/featured", post: "/api/featured/post", status: "/api/featured/status/:orderId" },
     note: "Write endpoints require a credential, issued when the venue opens — except the x402 surfaces (/api/chat/ask, /api/chat/topup, /api/featured/post), which are open now and paid per call. Read-only tools are live over MCP at /mcp. Anyone can talk to Ishtar via /api/chat (wallet session; $NUMETAL holders get a free daily allowance).",
@@ -374,6 +385,17 @@ const matchesCors = cors({
 app.use("/api/matches", matchesCors);
 app.use("/api/matches", rateLimit("public"));
 app.route("/api", matchesRoutes);
+
+// Agent courtship append — owner match-token auth, above access gate (like /api/matches).
+const courtCors = cors({
+  origin: ["https://ishtar.numetal.xyz", "https://datebook-staging.cloudflare-ooc0z.workers.dev"],
+  allowMethods: ["POST", "OPTIONS"],
+  allowHeaders: ["content-type"],
+  maxAge: 86400,
+});
+app.use("/api/couples/*/court", courtCors);
+app.use("/api/couples/*/court", rateLimit("payment"));
+app.route("/api", courtRoutes);
 
 // Agent self-service (Phase 2): challenge → sign → change delivery / mint a pull token. Public (above
 // the access gate); authed by the agent's registered publicKey (EIP-191), NOT the founder ACCESS_KEY.

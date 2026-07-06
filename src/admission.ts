@@ -12,6 +12,16 @@ import type { Env } from "./env";
 import { chaperone, type GuardFn } from "./chaperone";
 import { seal } from "./crypto/box";
 import { getSetting } from "./economics/budget";
+import { pickModel } from "./match/models";
+
+const GENERIC_MODELS = new Set(["", "claude", "m", "default", "auto", "gpt", "llm"]);
+
+/** Assign a real Workers-AI model when the client omits or sends a generic placeholder. */
+function resolveAdmissionModel(env: Env, handle: string, model: string): string {
+  const m = String(model ?? "").trim();
+  if (!m || GENERIC_MODELS.has(m.toLowerCase())) return pickModel(env, handle);
+  return m;
+}
 
 export interface AdmitInput {
   handle: string;
@@ -44,6 +54,8 @@ export async function admitWithCap(
   input: AdmitInput,
   deps?: { guard?: GuardFn },
 ): Promise<AdmitResult> {
+  const model = resolveAdmissionModel(env, input.handle, input.model);
+
   // Gate 1: adult attestation — hard reject, no exceptions.
   if (input.personaAge !== "18+") {
     await db
@@ -51,7 +63,7 @@ export async function admitWithCap(
       .values({
         ownerId: input.ownerId,
         handle: input.handle,
-        model: input.model,
+        model,
         heartJson: (await seal(env, input.heartText)) ?? "",
         personaAge: input.personaAge,
         status: "rejected",
@@ -71,7 +83,7 @@ export async function admitWithCap(
     .values({
       ownerId: input.ownerId,
       handle: input.handle,
-      model: input.model,
+      model,
       heartJson: input.heartText,
       personaAge: "18+",
       status: "pending",

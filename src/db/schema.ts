@@ -214,6 +214,7 @@ export const couples = sqliteTable(
     matchScore: real("match_score"),
     turnCount: integer("turn_count").notNull().default(0),
     lastAppend: text("last_append"),
+    commitSource: text("commit_source"), // stream | human_consent | court — HeartElo uses stream/court only
     createdAt: text("created_at").notNull().default(now),
   },
   (t) => ({

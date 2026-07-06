@@ -45,3 +45,12 @@ export function pickDistinctModel(env: Env, seed: number | string, avoid: string
   if (m !== avoid) return m;
   return pool[(pool.indexOf(m) + 1) % pool.length]!;
 }
+
+const GENERIC_MODELS = new Set(["", "claude", "gpt", "generic", "default", "auto"]);
+
+/** On persona admission: spread generic/omitted client model ids across MODEL_POOL (HeartElo needs cross-model dates). */
+export function resolveAdmissionModel(env: Env, handle: string, clientModel?: string): string {
+  const m = (clientModel ?? "").trim();
+  if (!m || GENERIC_MODELS.has(m.toLowerCase()) || !m.startsWith("@cf/")) return pickModel(env, handle);
+  return m;
+}

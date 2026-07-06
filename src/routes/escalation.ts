@@ -61,7 +61,7 @@ escalationRoutes.post("/couples/:id/intro-consent", async (c) => {
   const both = coupleOwners.length >= 2 && coupleOwners.every((o) => consented.has(o));
 
   if (both && couple.state !== "committed") {
-    await db.update(couples).set({ state: "committed" }).where(eq(couples.id, coupleId)).run();
+    await db.update(couples).set({ state: "committed", commitSource: "human_consent" }).where(eq(couples.id, coupleId)).run();
     await db
       .insert(events)
       .values({ kind: "milestone", payload: JSON.stringify({ intro_ready: coupleId }) })
