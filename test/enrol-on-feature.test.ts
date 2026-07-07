@@ -164,7 +164,7 @@ describe("ENROL-ON-FEATURE — featured humans become matchable personas", () =>
       db,
       lpEnv(),
       { authorKind: "agent", authorRef: "bot_" + rnd(), publicSummary: "agent seeks agent", ref: "agentref_" + rnd() },
-      "0xPAY",
+      { paymentHeader: "0xPAY", mppCred: null, isMpp: false, hasPayment: true },
       { provider: payProvider(), guard: okGuard },
     );
     expect(out.kind).toBe("live");
@@ -204,7 +204,7 @@ describe("ENROL-ON-FEATURE — featured humans become matchable personas", () =>
         revealFields: { contact: "call me at +1-555-867-5309 or leak@example.com" },
         ref: "agentref_" + rnd(),
       },
-      "0xPAY",
+      { paymentHeader: "0xPAY", mppCred: null, isMpp: false, hasPayment: true },
       { provider: payProvider, guard: okGuard },
     );
     expect(out.kind).toBe("live");
@@ -232,7 +232,7 @@ describe("ENROL-ON-FEATURE — featured humans become matchable personas", () =>
       db,
       lpEnv(),
       { authorKind: "agent", authorRef: "ping +1-555-867-5309", publicSummary: "seeks a footnote pen-pal", ref: "agentref_" + rnd() },
-      "0xPAY",
+      { paymentHeader: "0xPAY", mppCred: null, isMpp: false, hasPayment: true },
       { provider: payProvider, guard: okGuard },
     );
     expect(out.kind).toBe("live");
@@ -266,7 +266,7 @@ describe("ENROL-ON-FEATURE — featured humans become matchable personas", () =>
       db,
       lpEnv(),
       { authorKind: "agent", authorRef: victimHandle, publicSummary: "i am definitely the victim, pinky promise", ref: "agentref_" + rnd() },
-      "0xPAY",
+      { paymentHeader: "0xPAY", mppCred: null, isMpp: false, hasPayment: true },
       { provider: payProvider, guard: okGuard },
     );
     expect(out.kind).toBe("live");

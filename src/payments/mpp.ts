@@ -19,11 +19,10 @@
  *    We then broadcast (eth_sendRawTransaction, feePayer:false → the client pays its own gas, so
  *    we hold ZERO hot keys) and gate on the CONFIRMED on-chain receipt, never the broadcast.
  *
- * v1 scope (deliberate):
- *  - method "tempo", intent "charge". Offered only on SKUs where payment == delivery
- *    unconditionally (agent_ask push, chat_topup pull). SKUs with policy-refusal paths AFTER
- *    payment (featured: board may be full; gated intake) stay x402-only until the refund policy
- *    is decided — money moves before we can refuse.
+ * v1 scope:
+ *  - method "tempo", intent "charge". All live agent paid SKUs offer MPP (push except chat_topup
+ *    pull). Policy-refusal paths AFTER payment (featured board full, chaperone block) still apply —
+ *    MPP verify is fail-closed before delivery; refunds for post-pay refusals are a separate policy.
  *  - No fee-payer key: pull mode is feePayer:false (the signer pays its own gas). No hot keys.
  *  - Dark until MPP_ENABLED + MPP_SECRET_KEY are set (recipient defaults to PAY_TO).
  *
@@ -56,11 +55,17 @@ const TIP20_TRANSFER_ABI = parseAbi([
 ]);
 
 /**
- * SKUs that offer the MPP rail at all (either mode). agent_ask (push) + chat_topup (pull).
- * featured/intake/premium have policy-refusal paths AFTER payment (a full board, a held doc) and
- * stay x402-only until the refund policy is set.
+ * SKUs that offer the MPP rail at all (either mode). All live agent paid surfaces except catalog-only
+ * placeholders (date_brief, priority_cycle — no route handlers yet).
  */
-export const MPP_SKUS = new Set(["agent_ask", "chat_topup"]);
+export const MPP_SKUS = new Set([
+  "agent_ask",
+  "chat_topup",
+  "doc_submit",
+  "compatibility_report",
+  "featured_slot",
+  "reveal_unlock",
+]);
 
 /**
  * SKUs served in PULL mode. chat_topup mints a bearer SESSION, so push mode (a PUBLIC tx hash ≠
@@ -108,8 +113,9 @@ export function mppCurrency(env: Env): string {
 function tempoRpc(env: Env): string {
   return env.TEMPO_RPC_URL || DEFAULT_TEMPO_RPC;
 }
+/** Public origin agents call — MPPScan attribution requires realm = this URL (not host-only). */
 function mppRealm(env: Env): string {
-  return new URL(env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").host;
+  return (env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").replace(/\/+$/, "");
 }
 
 // ── b64url (no padding, RFC 4648 §5) over UTF-8 ────────────────────────────────────────────────

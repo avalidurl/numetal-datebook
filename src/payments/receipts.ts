@@ -9,6 +9,8 @@ import type { DB } from "../db/client";
 import { paymentReceipts, premiumOrders } from "../db/schema";
 import type { Env } from "../env";
 import { accrueBuyback } from "../economics/reserve";
+import type { PaymentRails } from "./dual-rail";
+import { settlementNetwork, verifyPushRailFailClosed } from "./dual-rail";
 import type { PaymentProvider, Sku } from "./x402";
 
 export interface OrderCtx {
@@ -22,8 +24,12 @@ export async function settleAndPersist(
   env: Env,
   provider: PaymentProvider,
   ctx: OrderCtx,
-  paymentHeader: string,
-): Promise<{ ok: boolean; receiptId?: number; reason: string; payer?: string; fresh?: boolean }> {
+  payment: string | PaymentRails,
+): Promise<{ ok: boolean; receiptId?: number; reason: string; payer?: string; fresh?: boolean; mppResponse?: Response }> {
+  const rails: PaymentRails =
+    typeof payment === "string"
+      ? { paymentHeader: payment, mppCred: null, isMpp: false, hasPayment: true }
+      : payment;
   // SEC-2026-07-01(#1,#3): idempotency MUST precede settle. provider.verify() performs the irreversible
   // on-chain CDP /settle on mainnet; a retried order carrying a FRESHLY-signed EIP-3009 authorization
   // (new nonce) would settle a SECOND transfer — and the post-settle receipt insert (onConflictDoNothing
@@ -42,7 +48,9 @@ export async function settleAndPersist(
   // (see the compatibility-report grounded gate, which only trusts a `fresh` payer).
   if (prior) return { ok: true, receiptId: prior.id, reason: "already settled", payer: prior.payer ?? undefined, fresh: false };
 
-  const v = await provider.verify(paymentHeader, ctx.sku, ctx.payTo);
+  const verified = await verifyPushRailFailClosed(env, ctx.sku, ctx.payTo, rails, provider);
+  if ("mppResponse" in verified) return { ok: false, reason: "payment not verified", mppResponse: verified.mppResponse };
+  const v = verified.v;
   if (!v.verified) {
     await db
       .update(premiumOrders)
@@ -57,8 +65,9 @@ export async function settleAndPersist(
     .insert(paymentReceipts)
     .values({
       orderId: ctx.orderId,
-      network: provider.network,
-      facilitator: provider.facilitator,
+      paymentProtocol: rails.isMpp ? "mpp" : "x402",
+      network: settlementNetwork(rails.isMpp, provider),
+      facilitator: rails.isMpp ? "tempo" : provider.facilitator,
       payer: v.payer,
       payTo: v.payTo ?? ctx.payTo,
       amountUsdc: v.amountUsdc ?? String(dollars),

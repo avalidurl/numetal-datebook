@@ -13,6 +13,8 @@ import { couples, escalationInvites, events, identityVerifications, introConsent
 import type { Env } from "../env";
 import { open } from "../crypto/box";
 import { SKUS, makeX402Provider, parsePaymentHeader, x402Challenge } from "../payments/x402";
+import { readPaymentRails, settlementNetwork, verifyPushRailFailClosed } from "../payments/dual-rail";
+import { mppProblem } from "../payments/mpp";
 import { createDiditSession, verifyDiditWebhook } from "../identity/didit";
 import { verifyPrivyToken } from "../identity/privy";
 import { claimShell } from "../ui/system-pages";
@@ -177,16 +179,28 @@ export async function revealHandler(c: Context<{ Bindings: Env }>): Promise<Resp
       .get();
     if (!alreadyPaid) {
       const sku = SKUS.reveal_unlock!;
-      const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 / v1
-      if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, `reveal:${inv.coupleId}:${inv.ownerId}`);
-      // Anti-replay: key on the signed authorization nonce, checked BEFORE verify() (mainnet SETTLES).
-      const terms = parsePaymentHeader(paymentHeader);
-      const orderId = `reveal:${inv.coupleId}:${inv.ownerId}:${terms?.nonce ?? "nononce"}`;
-      const prior = await db.select({ id: revealPayments.id }).from(revealPayments).where(eq(revealPayments.orderId, orderId)).get();
-      if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
+      const rails = readPaymentRails(c.env, sku, {
+        paymentSignature: c.req.header("payment-signature"),
+        xPayment: c.req.header("x-payment"),
+        authorization: c.req.header("authorization"),
+      });
+      if (!rails.hasPayment) return x402Challenge(c.env, sku, c.env.PAY_TO, `reveal:${inv.coupleId}:${inv.ownerId}`);
       const provider = makeX402Provider(c.env);
-      const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
-      if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
+      const orderId = rails.isMpp
+        ? `reveal:${inv.coupleId}:${inv.ownerId}:mpp:${rails.mppCred!.challenge.id ?? "noid"}`
+        : `reveal:${inv.coupleId}:${inv.ownerId}:${parsePaymentHeader(rails.paymentHeader!)?.nonce ?? "nononce"}`;
+      if (!rails.isMpp) {
+        const prior = await db.select({ id: revealPayments.id }).from(revealPayments).where(eq(revealPayments.orderId, orderId)).get();
+        if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
+      }
+      const verified = await verifyPushRailFailClosed(c.env, sku, c.env.PAY_TO, rails, provider);
+      if ("mppResponse" in verified) return verified.mppResponse;
+      const v = verified.v;
+      if (!v.verified || !v.payer) return x402Challenge(c.env, sku, c.env.PAY_TO, `reveal:${inv.coupleId}:${inv.ownerId}`);
+      if (rails.isMpp) {
+        const prior = await db.select({ id: revealPayments.id }).from(revealPayments).where(eq(revealPayments.orderId, orderId)).get();
+        if (prior) return mppProblem(c.env, sku, "invalid-challenge", "this payment was already redeemed — request a new challenge");
+      }
       // First insert wins; the (couple, owner) unique index makes a concurrent double-pay a no-op.
       await db
         .insert(revealPayments)
@@ -196,7 +210,7 @@ export async function revealHandler(c: Context<{ Bindings: Env }>): Promise<Resp
           ownerId: inv.ownerId,
           payer: v.payer.toLowerCase(),
           amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""),
-          network: provider.network,
+          network: settlementNetwork(rails.isMpp, provider),
           nonce: v.nonce,
           settlementTx: v.tx,
         })

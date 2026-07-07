@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { claimAndPublishFeatured, listFeatured, purgeExpiredFeatured } from "../src/routes/featured";
 import { db as makeDb } from "../src/db/client";
 import type { PaymentProvider } from "../src/payments/x402";
+import type { PaymentRails } from "../src/payments/dual-rail";
 import type { GuardFn } from "../src/chaperone";
 
 // The HTTP route can't reach the live AI guard or the CDP facilitator in the test runtime, so —
@@ -29,6 +30,7 @@ const badProvider: PaymentProvider = {
 };
 
 const PAY = "0xPAYMENTHEADER"; // opaque; the injected provider ignores its contents
+const x402Rails = (paymentHeader: string): PaymentRails => ({ paymentHeader, mppCred: null, isMpp: false, hasPayment: true });
 const rnd = () => Math.random().toString(36).slice(2);
 const input = (over: Partial<Parameters<typeof claimAndPublishFeatured>[2]> = {}) => ({
   authorKind: "human" as const,
@@ -48,7 +50,7 @@ describe("The Window (REDACTED-ID) — paid public featured board", () => {
     const db = makeDb(env.DB);
     const outcomes = [];
     for (let i = 0; i < 11; i++) {
-      outcomes.push(await claimAndPublishFeatured(db, env, input(), PAY, { provider: payProvider(), guard: okGuard }));
+      outcomes.push(await claimAndPublishFeatured(db, env, input(), x402Rails(PAY), { provider: payProvider(), guard: okGuard }));
     }
     expect(outcomes.filter((o) => o.kind === "live")).toHaveLength(10);
     expect(outcomes.filter((o) => o.kind === "full")).toHaveLength(1);
@@ -60,7 +62,7 @@ describe("The Window (REDACTED-ID) — paid public featured board", () => {
     const db = makeDb(env.DB);
     await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','2')").run();
     const outcomes = [];
-    for (let i = 0; i < 3; i++) outcomes.push(await claimAndPublishFeatured(db, env, input(), PAY, { provider: payProvider(), guard: okGuard }));
+    for (let i = 0; i < 3; i++) outcomes.push(await claimAndPublishFeatured(db, env, input(), x402Rails(PAY), { provider: payProvider(), guard: okGuard }));
     expect(outcomes.filter((o) => o.kind === "live")).toHaveLength(2);
     expect(outcomes.some((o) => o.kind === "full")).toBe(true);
   });
@@ -69,7 +71,7 @@ describe("The Window (REDACTED-ID) — paid public featured board", () => {
     const db = makeDb(env.DB);
     await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('featured_daily_cap','1')").run();
     // Fill the single slot.
-    const first = await claimAndPublishFeatured(db, env, input(), PAY, { provider: payProvider(), guard: okGuard });
+    const first = await claimAndPublishFeatured(db, env, input(), x402Rails(PAY), { provider: payProvider(), guard: okGuard });
     expect(first.kind).toBe("live");
 
     // The next poster brings a VALID payment header — but the board is full, so the provider must
@@ -83,7 +85,7 @@ describe("The Window (REDACTED-ID) — paid public featured board", () => {
         throw new Error("payment must NOT be attempted on a full board");
       },
     };
-    const blocked = await claimAndPublishFeatured(db, env, input(), PAY, { provider: trap, guard: okGuard });
+    const blocked = await claimAndPublishFeatured(db, env, input(), x402Rails(PAY), { provider: trap, guard: okGuard });
     expect(blocked.kind).toBe("full");
     expect(verifyCalls).toBe(0); // the money path was never entered
 
@@ -93,7 +95,7 @@ describe("The Window (REDACTED-ID) — paid public featured board", () => {
 
   it("chaperone pre_publish hard-blocks an S12 (sexual) post — slot consumed, never published", async () => {
     const db = makeDb(env.DB);
-    const r = await claimAndPublishFeatured(db, env, input(), PAY, { provider: payProvider(), guard: s12Guard });
+    const r = await claimAndPublishFeatured(db, env, input(), x402Rails(PAY), { provider: payProvider(), guard: s12Guard });
     expect(r.kind).toBe("blocked");
     const live = await listFeatured(env);
     expect(live).toHaveLength(0); // an S12 post never reaches the public board
@@ -103,14 +105,14 @@ describe("The Window (REDACTED-ID) — paid public featured board", () => {
 
   it("chaperone pre_publish hard-blocks an S4 (minor) post", async () => {
     const db = makeDb(env.DB);
-    const r = await claimAndPublishFeatured(db, env, input(), PAY, { provider: payProvider(), guard: s4Guard });
+    const r = await claimAndPublishFeatured(db, env, input(), x402Rails(PAY), { provider: payProvider(), guard: s4Guard });
     expect(r.kind).toBe("blocked");
     expect(await listFeatured(env)).toHaveLength(0);
   });
 
   it("fails closed when payment is unverified — no live row, slot self-heals via the reservation TTL", async () => {
     const db = makeDb(env.DB);
-    const r = await claimAndPublishFeatured(db, env, input(), PAY, { provider: badProvider, guard: okGuard });
+    const r = await claimAndPublishFeatured(db, env, input(), x402Rails(PAY), { provider: badProvider, guard: okGuard });
     expect(r.kind).toBe("unpaid");
     expect(await listFeatured(env)).toHaveLength(0);
   });
@@ -126,8 +128,8 @@ describe("The Window (REDACTED-ID) — paid public featured board", () => {
   it("is idempotent on the order ref — a replay does not double-charge nor double-accrue the buyback", async () => {
     const db = makeDb(env.DB);
     const ref = "idem_" + rnd();
-    const r1 = await claimAndPublishFeatured(db, env, input({ ref }), PAY, { provider: payProvider(), guard: okGuard });
-    const r2 = await claimAndPublishFeatured(db, env, input({ ref }), PAY, { provider: payProvider(), guard: okGuard });
+    const r1 = await claimAndPublishFeatured(db, env, input({ ref }), x402Rails(PAY), { provider: payProvider(), guard: okGuard });
+    const r2 = await claimAndPublishFeatured(db, env, input({ ref }), x402Rails(PAY), { provider: payProvider(), guard: okGuard });
     expect(r1.kind).toBe("live");
     expect(r2.kind).toBe("live");
     if (r2.kind === "live") expect(r2.already).toBe(true);

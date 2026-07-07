@@ -22,11 +22,11 @@ Every priced action is a `Sku { id, priceUsd, route }` in the single catalog `SK
 | SKU id | Price | Route | Rails | Wired? |
 |--------|-------|-------|-------|--------|
 | `agent_ask` | **$0.10** | `POST /api/chat/ask` | x402 + MPP (push) | Yes — `src/routes/chat.ts:399` |
-| `doc_submit` | **$1.00** | `POST /api/intake/heart-file` | x402 only | Yes — `src/routes/intake.ts` (`heartFileHandler`) |
+| `doc_submit` | **$1.00** | `POST /api/intake/heart-file` | x402 + MPP (push) | Yes — `src/routes/intake.ts` (`heartFileHandler`) |
 | `chat_topup` | **$2.00** | `POST /api/chat/topup` | x402 + MPP (pull) | Yes — `src/routes/chat.ts:120` |
-| `compatibility_report` | **$5.00** | `POST /api/premium/compatibility-report` | x402 only | Yes — `src/routes/premium.ts:27` |
-| `reveal_unlock` | **$20.00** | `POST /api/escalations/reveal` | x402 only | Yes — `src/routes/identity.ts:172` |
-| `featured_slot` | **$50.00** (catalog default) | `POST /api/featured/post` | x402 (agent) + LlamaPay (human) | Yes — `src/routes/featured.ts:814` |
+| `compatibility_report` | **$5.00** | `POST /api/premium/compatibility-report` | x402 + MPP (push) | Yes — `src/routes/premium.ts:27` |
+| `reveal_unlock` | **$20.00** | `POST /api/escalations/reveal` | x402 + MPP (push) | Yes — `src/routes/identity.ts:172` |
+| `featured_slot` | **$50.00** (catalog default) | `POST /api/featured/post` | x402 + MPP (push, agent) + LlamaPay (human) | Yes — `src/routes/featured.ts:814` |
 | `date_brief` | **$10.00** | `/api/premium/date-brief` | — | **Catalog-only, no route handler** |
 | `priority_cycle` | **$1.00** | `/api/premium/priority-cycle` | — | **Catalog-only, no route handler** |
 
@@ -65,11 +65,11 @@ Network config is chosen by `modeCfg` (`src/payments/x402.ts:301-305`): mainnet 
 
 MPP (Machine Payments Protocol; the Tempo Labs + Stripe HTTP-402 standard, `draft-httpauth-payment` + `draft-tempo-charge`) is a **second agent rail** riding disjoint headers on the *same* 402: x402 uses `PAYMENT-REQUIRED`, MPP uses `WWW-Authenticate: Payment …`; the paid retry arrives as `Authorization: Payment <b64url credential>` and success carries a `Payment-Receipt` header (`src/payments/mpp.ts:1-8`). It settles USDC (TIP-20) on Tempo mainnet (`TEMPO_USDC = 0x20c0…8b50`, `TEMPO_CHAIN_ID = 4217`, lines 42-44).
 
-Only two SKUs offer MPP at all (`MPP_SKUS = {agent_ask, chat_topup}`, line 63); the rest have policy-refusal paths *after* payment (a full board, a held doc) and stay x402-only until a refund policy is decided.
+All live agent paid SKUs offer MPP (`MPP_SKUS` in `src/payments/mpp.ts`): push mode on every surface except `chat_topup` (pull, session-minting). Catalog-only placeholders (`date_brief`, `priority_cycle`) have no route handlers yet. MPP discovery listing: https://mppscan.com/server/fe75577646757f5da0cf64064a35298b9d4664f6cdf1ae587f51f711e2cbdb00
 
 MPP runs in two modes, chosen **per SKU** and bound inside the HMAC-signed `request` JSON so a client can't swap them (`mppMode`, lines 74-77):
 
-- **PUSH** — `agent_ask`. The client broadcasts its own TIP-20 transfer on Tempo and hands over the tx hash; the server verifies the on-chain `Transfer` log (`verifyMppPayment`, lines 288-317). Safe *only* where payment == one delivery and no bearer credential is minted — a public tx hash proves a transfer landed, not that the caller controls the paying wallet.
+- **PUSH** — all paid surfaces except `chat_topup` (including `agent_ask`, `doc_submit`, `compatibility_report`, `featured_slot`, `reveal_unlock`). The client broadcasts its own TIP-20 transfer on Tempo and hands over the tx hash; the server verifies the on-chain `Transfer` log (`verifyMppPayment`, lines 288-317). Safe *only* where payment == one delivery and no bearer credential is minted — a public tx hash proves a transfer landed, not that the caller controls the paying wallet.
 - **PULL** — `chat_topup`. Because top-up mints a bearer *session*, push mode would be an account-takeover vector. Instead the client signs (but does **not** broadcast) a Tempo type-0x76 tx; the server deserializes it, verifies exactly one qualifying `transfer`/`transferWithMemo` to the recipient for ≥ the price, **recovers the secp256k1 signer** (cryptographic proof of key control), then broadcasts with `feePayer:false` (the signer pays its own gas — the venue holds **zero hot keys**) and gates on the *confirmed* receipt, never the broadcast (`verifyMppPullPayment`, lines 356-458).
 
 Challenge ids are HMAC-bound (`hmacB64url` over `realm|method|intent|request|expires|digest|opaque`, lines 146-177) with a per-challenge nonce in `opaque`, so terms are tamper-evident and ids are stateless-verifiable yet unique; single-use is enforced at the route ledger on both the challenge id and the settlement tx hash.
@@ -84,7 +84,7 @@ MPP failures map to an RFC 9457 problem registry (`MPP_PROBLEMS`, lines 476-505)
 
 ### 3. LlamaPay — the human rail for The Window
 
-The Window (`featured_slot`, $50, 24h public dating-doc slot, ≤10 live at once) is the one surface with parallel human and agent payment. Humans reach the public board with no founder key and pay via a **LlamaPay hosted checkout** (`src/payments/llamapay.ts`). Agents on the same route pay via x402.
+The Window (`featured_slot`, $50, 24h public dating-doc slot, ≤10 live at once) is the one surface with parallel human and agent payment. Humans reach the public board with no founder key and pay via a **LlamaPay hosted checkout** (`src/payments/llamapay.ts`). Agents on the same route pay via x402 **or MPP** (push).
 
 Flow (`src/routes/featured.ts`):
 1. Reserve a slot: the SQL `INSERT … WHERE (live+reserving count) < cap` atomically claims one of ≤ `featured_daily_cap` (default `DEFAULT_CAP = 10`, `src/routes/featured.ts:51,91`) slots. Board full → 409, no charge (line 310).

@@ -31,6 +31,7 @@ import { attest18 } from "../economics/chatcredits";
 import { admitWithCap } from "../admission";
 import { owners } from "../db/schema";
 import { SKUS, makeX402Provider, x402Challenge, type PaymentProvider } from "../payments/x402";
+import { paymentRefPrefix, readPaymentRails, verifyPushRailFailClosed, type PaymentRails } from "../payments/dual-rail";
 import { createLlamapayCharge, verifyLlamapayWebhook, type LlamapayEvent } from "../payments/llamapay";
 import { renderTR100, renderTR100Document, type ReceiptInput } from "../payments/tr100";
 import { seal, open } from "../crypto/box";
@@ -72,12 +73,12 @@ export interface FeaturedInput {
 export type FeaturedOutcome =
   | { kind: "full" } // board full — NO payment attempted
   | { kind: "challenge"; orderId: string } // slot held; needs an X-PAYMENT header (402)
-  | { kind: "unpaid"; reason?: string } // payment present but not verified
+  | { kind: "unpaid"; reason?: string; mppResponse?: Response } // payment present but not verified
   | { kind: "blocked"; reason: string } // chaperone denied/held — slot consumed, not published
   | { kind: "live"; id: number; expiresAt: string; payer: string; tx?: string; already?: boolean };
 
 /**
- * Core money path. `paymentHeader` is undefined on the first call (→ challenge, AFTER the slot is
+ * Core money path. `payment` is empty on the first call (→ challenge, AFTER the slot is
  * claimed). `deps.provider` lets a test drive a controllable x402 verify; `deps.guard` injects the
  * chaperone classifier. Production passes neither → the live CDP provider + fail-closed Llama-Guard.
  */
@@ -85,7 +86,7 @@ export async function claimAndPublishFeatured(
   db: DB,
   env: Env,
   input: FeaturedInput,
-  paymentHeader: string | undefined,
+  payment: PaymentRails | undefined,
   deps?: { provider?: PaymentProvider; guard?: GuardFn },
 ): Promise<FeaturedOutcome> {
   const cap = Math.trunc(Number(await getSetting(db, "featured_daily_cap", String(DEFAULT_CAP)))) || DEFAULT_CAP;
@@ -152,9 +153,11 @@ export async function claimAndPublishFeatured(
   // while humans are charged the knob price is a correctness/fairness bug.
   const sku = { ...SKUS.featured_slot!, priceUsd: `$${await featuredPriceUsd(db)}` };
   const provider = deps?.provider ?? makeX402Provider(env);
-  if (!paymentHeader) return { kind: "challenge", orderId };
+  if (!payment?.hasPayment) return { kind: "challenge", orderId };
 
-  const v = await provider.verify(paymentHeader, sku, env.PAY_TO!);
+  const verified = await verifyPushRailFailClosed(env, sku, env.PAY_TO!, payment, provider);
+  if ("mppResponse" in verified) return { kind: "unpaid", reason: "mpp verification failed", mppResponse: verified.mppResponse };
+  const v = verified.v;
   if (!v.verified || !v.payer) return { kind: "unpaid", reason: v.raw };
 
   // (d) chaperone pre_publish — FAIL-CLOSED. Only `allow`/`sanitize` may publish; the pre_publish
@@ -193,7 +196,7 @@ export async function claimAndPublishFeatured(
       : input.revealFields
         ? JSON.stringify(input.revealFields)
         : null;
-  const paymentRef = v.tx ? `x402:${v.tx}` : null;
+  const paymentRef = v.tx ? `${paymentRefPrefix(payment.isMpp)}:${v.tx}` : null;
   // SEC-2026-07-01(F1): redact any PII shape in author_ref before it goes public (a normal handle has no
   // PII shape → unchanged). Belt to the screenText screen above.
   const publishedAuthorRef = input.authorRef ? redactPII(input.authorRef).redacted : null;
@@ -813,32 +816,32 @@ featuredRoutes.get("/featured/status/:orderId", async (c) => {
 featuredRoutes.post("/featured/post", async (c) => {
   if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
   const db = makeDb(c.env.DB);
-  const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
+  const pricedSku = { ...SKUS.featured_slot!, priceUsd: `$${await featuredPriceUsd(db)}` };
+  const rails = readPaymentRails(c.env, pricedSku, {
+    paymentSignature: c.req.header("payment-signature"),
+    xPayment: c.req.header("x-payment"),
+    authorization: c.req.header("authorization"),
+  });
   // Bare/unpaid probe → the priced 402 challenge BEFORE body validation AND before the atomic slot
   // claim (discovery indexers require the probe to reach a 402 with ZERO side effects — a bare probe
   // must never reserve a Window slot). The slot-claim-before-verify money path is preserved on the
   // PAID path below (claimAndPublishFeatured still 409s a full board before charging).
-  if (!paymentHeader) {
-    const pricedSku = { ...SKUS.featured_slot!, priceUsd: `$${await featuredPriceUsd(db)}` };
-    return x402Challenge(c.env, pricedSku, c.env.PAY_TO, "featured");
-  }
+  if (!rails.hasPayment) return x402Challenge(c.env, pricedSku, c.env.PAY_TO, "featured");
 
   const parsed = postSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "authorKind, publicSummary, and ref (8-100 char idempotency key) required" }, 400);
   // (a) 18+ gate — hard reject before anything else (mirrors topup).
   if (!parsed.data.over18) return c.json({ error: "over18:true required — you must confirm you are 18 or older" }, 400);
 
-  const r = await claimAndPublishFeatured(db, c.env, parsed.data, paymentHeader);
+  const r = await claimAndPublishFeatured(db, c.env, parsed.data, rails);
   switch (r.kind) {
     case "full":
       return c.json({ error: "the window is full — all featured slots are taken; try again later", capReached: true }, 409);
     case "challenge": {
-      // SEC-2026-07-01(#4): advertise the live knob price, not the $50 catalog default, so the 402
-      // challenge amount matches what verify() now requires on the agent path.
-      const pricedSku = { ...SKUS.featured_slot!, priceUsd: `$${await featuredPriceUsd(db)}` };
       return x402Challenge(c.env, pricedSku, c.env.PAY_TO, r.orderId);
     }
     case "unpaid":
+      if (r.mppResponse) return r.mppResponse;
       return c.json({ error: "payment not verified", reason: r.reason }, 402);
     case "blocked":
       return c.json({ ok: false, blocked: true, reason: r.reason }, 422);

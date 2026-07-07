@@ -83,7 +83,7 @@ describe("MPP — challenge issuance (dual-rail 402)", () => {
     const p = parseChallenge(header);
     expect(p.method).toBe("tempo");
     expect(p.intent).toBe("charge");
-    expect(p.realm).toBe("api.ishtar.numetal.xyz");
+    expect(p.realm).toBe("https://api.ishtar.numetal.xyz");
     expect(p.id!.length).toBeGreaterThan(20);
     const req = JSON.parse(b64urlDecode(p.request!));
     expect(req).toEqual({
@@ -107,9 +107,14 @@ describe("MPP — challenge issuance (dual-rail 402)", () => {
     expect(topup.headers.get("WWW-Authenticate")).toMatch(/^Payment /);
     const topupReq = JSON.parse(b64urlDecode(parseChallenge(topup.headers.get("WWW-Authenticate")!).request!));
     expect(topupReq.methodDetails.supportedModes).toEqual(["pull"]); // session-minting → pull only
-    // non-MPP SKU → x402 only (featured has policy-refusal paths post-payment)
-    const solo = await x402Challenge(e, SKUS.featured_slot!, RECIPIENT, "t");
+    // non-MPP SKU → x402 only when MPP dark
+    const solo = await x402Challenge({ ...e, MPP_ENABLED: undefined } as Env, SKUS.featured_slot!, RECIPIENT, "t");
     expect(solo.headers.get("WWW-Authenticate")).toBeNull();
+    // featured + heart-file + doc_submit offer MPP push when enabled
+    const doc = await x402Challenge(e, SKUS.doc_submit!, RECIPIENT, "t");
+    expect(doc.headers.get("WWW-Authenticate")).toMatch(/^Payment /);
+    const window = await x402Challenge(e, SKUS.featured_slot!, RECIPIENT, "t");
+    expect(window.headers.get("WWW-Authenticate")).toMatch(/^Payment /);
     // MPP dark → x402 only even on MPP SKUs
     const dark = await x402Challenge({ ...e, MPP_ENABLED: undefined } as Env, SKUS.agent_ask!, RECIPIENT, "t");
     expect(dark.headers.get("WWW-Authenticate")).toBeNull();
@@ -121,10 +126,19 @@ describe("MPP — challenge issuance (dual-rail 402)", () => {
     expect((await x402Challenge(dark, SKUS.chat_topup!, RECIPIENT, "t")).headers.get("WWW-Authenticate")).toBeNull();
   });
 
-  it("scope: ask (push) + topup (pull) offer the MPP rail", () => {
-    expect([...MPP_SKUS].sort()).toEqual(["agent_ask", "chat_topup"]);
+  it("scope: all live paid SKUs offer MPP (topup pull, rest push)", () => {
+    expect([...MPP_SKUS].sort()).toEqual([
+      "agent_ask",
+      "chat_topup",
+      "compatibility_report",
+      "doc_submit",
+      "featured_slot",
+      "reveal_unlock",
+    ]);
     expect(mppMode(SKUS.agent_ask!)).toBe("push");
     expect(mppMode(SKUS.chat_topup!)).toBe("pull");
+    expect(mppMode(SKUS.doc_submit!)).toBe("push");
+    expect(mppMode(SKUS.featured_slot!)).toBe("push");
     expect(mppEnabled(mppEnv())).toBe(true);
     expect(mppEnabled(mppEnv({ MPP_SECRET_KEY: undefined }))).toBe(false);
   });
@@ -218,6 +232,24 @@ describe("MPP — credential verification (push mode)", () => {
           .replace(/=+$/, ""),
     );
     expect(ok?.payload.type).toBe("hash");
+  });
+});
+
+describe("MPP — route-level 402 on doc_submit", () => {
+  const routeEnv = () => ({ ...env, PAY_TO: RECIPIENT, MPP_ENABLED: "1", MPP_SECRET_KEY: "route-secret" }) as Env;
+
+  it("bare POST /api/intake/heart-file → 402 with WWW-Authenticate MPP + no-store", async () => {
+    const ctx = createExecutionContext();
+    const r = await worker.fetch(
+      new Request("https://d/api/intake/heart-file", { method: "POST", headers: { "content-type": "application/json" }, cf: { country: "US" } }),
+      routeEnv(),
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(r.status).toBe(402);
+    expect(r.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
+    expect(r.headers.get("WWW-Authenticate")).toMatch(/^Payment /);
+    expect(r.headers.get("cache-control")).toBe("no-store");
   });
 });
 

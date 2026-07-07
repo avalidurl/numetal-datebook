@@ -131,30 +131,109 @@ export function x402Requirements(env: Env, sku: Sku, payTo: string) {
   };
 }
 
+/** Paid surfaces declared in openapi.json — each 402 MUST carry extensions.bazaar input/output schemas
+ *  (@agentcash/discovery + MPPScan probe validation). CDP Bazaar cataloging on settle is still agent_ask-only. */
+export const BAZAAR_DISCOVERY_SKUS = new Set(["agent_ask", "chat_topup", "doc_submit", "featured_slot"]);
+
+type BazaarBody = Record<string, unknown>;
+type BazaarShape = { input: { type: string; method: string; bodyType: string; body: BazaarBody }; output: { type: string; example: BazaarBody }; bodySchema: Record<string, unknown> };
+
+const BAZAAR_SHAPES: Record<string, BazaarShape> = {
+  agent_ask: {
+    input: { type: "http", method: "POST", bodyType: "json", body: { message: "How do I write a dating doc that gets good matches?" } },
+    output: { type: "json", example: { ok: true, reply: "A candid, specific admission beats a résumé — try naming one small true thing you want a partner to know.", mode: "chat", paid: true } },
+    bodySchema: {
+      properties: { message: { type: "string", minLength: 1, maxLength: 2000, description: "A dating, relationship, or venue question to ask Ishtar." }, mode: { type: "string", enum: ["chat", "coach"] } },
+      required: ["message"],
+    },
+  },
+  chat_topup: {
+    input: { type: "http", method: "POST", bodyType: "json", body: { ref: "topup-idempotency-key-01", over18: true } },
+    output: { type: "json", example: { ok: true, credited: true, sessionToken: "sess_…", expiresAt: "2026-07-08T00:00:00.000Z", address: "0x…", credits: 15, freeQuota: 3, freeRemaining: 3 } },
+    bodySchema: {
+      properties: {
+        ref: { type: "string", minLength: 8, maxLength: 100, description: "Client idempotency key (reuse verbatim on retries)." },
+        over18: { type: "boolean", description: "REQUIRED true — you confirm you are 18 or older." },
+      },
+      required: ["ref", "over18"],
+    },
+  },
+  doc_submit: {
+    input: {
+      type: "http",
+      method: "POST",
+      bodyType: "json",
+      body: { ageAttested: true, heart: { about: "Builder in SF who reads on the train.", seeking: "Someone curious, kind, and unafraid of a real conversation." } },
+    },
+    output: { type: "json", example: { ownerId: 42, heartFileId: 99, tier: "agent_represented" } },
+    bodySchema: {
+      properties: {
+        ageAttested: { type: "boolean", description: "REQUIRED — your human is 18+." },
+        homeMarket: { type: "string" },
+        activeMarket: { type: "string" },
+        contactRef: { type: "string" },
+        heart: {
+          type: "object",
+          properties: {
+            about: { type: "string" },
+            seeking: { type: "string" },
+            relationship_intent: { type: "string", enum: ["casual", "dating", "long-term", "open", "unsure"] },
+            values: { type: "array", items: { type: "string" } },
+            interests: { type: "array", items: { type: "string" } },
+          },
+          required: ["about", "seeking"],
+        },
+      },
+      required: ["ageAttested", "heart"],
+    },
+  },
+  featured_slot: {
+    input: {
+      type: "http",
+      method: "POST",
+      bodyType: "json",
+      body: { authorKind: "agent", publicSummary: "Night-owl engineer who cooks too much pasta and wants a first date that feels like a walk, not an interview.", ref: "window-idempotency-key-01", over18: true },
+    },
+    output: { type: "json", example: { ok: true, id: 7, status: "live", expiresAt: "2026-07-09T00:00:00.000Z", settlementTx: "0x…" } },
+    bodySchema: {
+      properties: {
+        authorKind: { type: "string", enum: ["human", "agent"] },
+        authorRef: { type: "string", maxLength: 80 },
+        publicSummary: { type: "string", minLength: 1, maxLength: 2000 },
+        revealFields: { type: "object" },
+        ref: { type: "string", minLength: 8, maxLength: 100 },
+        over18: { type: "boolean" },
+      },
+      required: ["authorKind", "publicSummary", "ref", "over18"],
+    },
+  },
+};
+
+function bazaarOutputSchema(example: BazaarBody): Record<string, unknown> {
+  const props: Record<string, unknown> = { ok: { type: "boolean" } };
+  for (const k of Object.keys(example)) {
+    if (k === "ok") continue;
+    const v = example[k];
+    if (typeof v === "string") props[k] = { type: "string" };
+    else if (typeof v === "number") props[k] = { type: "number" };
+    else if (typeof v === "boolean") props[k] = { type: "boolean" };
+    else props[k] = { type: "object" };
+  }
+  return { type: "object", properties: props, required: ["ok"] };
+}
+
 /**
- * CDP Bazaar discovery extension (x402 v2 `extensions.bazaar`). CDP indexes a resource ONLY when it
- * settles a payment whose requirements DECLARE this metadata (settling alone is not enough — docs.cdp
- * .coinbase.com/x402/bazaar). `info.input` must pass strict JSON-Schema validation against
- * `schema.properties.input`, or CDP's EXTENSION-RESPONSES header on settle reads `rejected`. Only the
- * agent_ask surface is declared (the public, invocable pay-per-answer endpoint); other SKUs stay
- * undeclared → not cataloged, by design.
+ * x402 v2 `extensions.bazaar` — input/output JSON Schema on every discovery-declared paid 402.
+ * Required by @agentcash/discovery + MPPScan (extensions.bazaar.schema.properties.input|output).
+ * CDP Bazaar settle-time cataloging still only indexes agent_ask; other SKUs carry bazaar for discovery probes only.
  */
 export function x402BazaarExtension(sku: Sku): { bazaar: unknown } | null {
-  if (sku.id !== "agent_ask") return null;
-  const input = {
-    type: "http",
-    method: "POST",
-    bodyType: "json",
-    body: { message: "How do I write a dating doc that gets good matches?" },
-  };
-  const output = {
-    type: "json",
-    example: { ok: true, reply: "A candid, specific admission beats a résumé — try naming one small true thing you want a partner to know.", mode: "chat", paid: true },
-  };
+  const shape = BAZAAR_SHAPES[sku.id];
+  if (!shape || !BAZAAR_DISCOVERY_SKUS.has(sku.id)) return null;
   return {
     bazaar: {
-      description: skuDescription(sku), // CDP ranks on metadata quality — a semantic description beats "Ishtar agent_ask"
-      info: { input, output },
+      description: skuDescription(sku),
+      info: { input: shape.input, output: shape.output },
       schema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
@@ -165,11 +244,7 @@ export function x402BazaarExtension(sku: Sku): { bazaar: unknown } | null {
               type: { type: "string" },
               method: { type: "string" },
               bodyType: { type: "string" },
-              body: {
-                type: "object",
-                properties: { message: { type: "string", maxLength: 2000, description: "The dating/relationship question to ask Ishtar" } },
-                required: ["message"],
-              },
+              body: { type: "object", ...shape.bodySchema },
             },
             required: ["type", "method", "body"],
           },
@@ -177,16 +252,7 @@ export function x402BazaarExtension(sku: Sku): { bazaar: unknown } | null {
             type: "object",
             properties: {
               type: { type: "string" },
-              example: {
-                type: "object",
-                properties: {
-                  ok: { type: "boolean" },
-                  reply: { type: "string", description: "Ishtar's coaching answer" },
-                  mode: { type: "string" },
-                  paid: { type: "boolean" },
-                },
-                required: ["ok"],
-              },
+              example: bazaarOutputSchema(shape.output.example),
             },
             required: ["example"],
           },

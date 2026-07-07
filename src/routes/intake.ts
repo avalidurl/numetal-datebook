@@ -12,6 +12,8 @@ import type { Env } from "../env";
 import { admitWithCap } from "../admission";
 import { seal } from "../crypto/box";
 import { SKUS, makeX402Provider, parsePaymentHeader, x402Challenge } from "../payments/x402";
+import { readPaymentRails, settlementNetwork, verifyPushRailFailClosed } from "../payments/dual-rail";
+import { mppProblem } from "../payments/mpp";
 import { isSafeDeliveryUrl } from "../agentrelay/outbound";
 import { registerEndpoint, verifyEndpoint } from "../identity/endpoints";
 
@@ -55,21 +57,34 @@ export const heartFileHandler = async (c: Context<{ Bindings: Env }>): Promise<R
   // the $NUMETAL-held human floor (/api/chat/submit-doc) instead, so this only meters agent intake.
   if (c.env.PAY_TO) {
     const sku = SKUS.doc_submit!;
-    const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 / v1
-    if (!paymentHeader) return x402Challenge(c.env, sku, c.env.PAY_TO, "docsubmit");
-    // Anti-replay: key on the signed authorization nonce, checked BEFORE verify() (mainnet SETTLES).
-    const terms = parsePaymentHeader(paymentHeader);
-    const orderId = `docsubmit:${terms?.nonce ?? "nononce"}`;
-    const prior = await db.select({ id: intakePayments.id }).from(intakePayments).where(eq(intakePayments.orderId, orderId)).get();
-    if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
+    const rails = readPaymentRails(c.env, sku, {
+      paymentSignature: c.req.header("payment-signature"),
+      xPayment: c.req.header("x-payment"),
+      authorization: c.req.header("authorization"),
+    });
+    if (!rails.hasPayment) return x402Challenge(c.env, sku, c.env.PAY_TO, "docsubmit");
     const provider = makeX402Provider(c.env);
-    const v = await provider.verify(paymentHeader, sku, c.env.PAY_TO);
-    if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
+    const orderId = rails.isMpp
+      ? `docsubmit:mpp:${rails.mppCred!.challenge.id ?? "noid"}`
+      : `docsubmit:${parsePaymentHeader(rails.paymentHeader!)?.nonce ?? "nononce"}`;
+    // x402: anti-replay BEFORE verify() — mainnet SETTLES on verify. MPP: verify first (tx hash unknown until then).
+    if (!rails.isMpp) {
+      const prior = await db.select({ id: intakePayments.id }).from(intakePayments).where(eq(intakePayments.orderId, orderId)).get();
+      if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
+    }
+    const verified = await verifyPushRailFailClosed(c.env, sku, c.env.PAY_TO, rails, provider);
+    if ("mppResponse" in verified) return verified.mppResponse;
+    const v = verified.v;
+    if (!v.verified || !v.payer) return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
+    if (rails.isMpp) {
+      const prior = await db.select({ id: intakePayments.id }).from(intakePayments).where(eq(intakePayments.orderId, orderId)).get();
+      if (prior) return mppProblem(c.env, sku, "invalid-challenge", "this payment was already redeemed — request a new challenge");
+    }
     payerWallet = v.payer.toLowerCase();
-    payerNetwork = provider.network;
+    payerNetwork = settlementNetwork(rails.isMpp, provider);
     await db
       .insert(intakePayments)
-      .values({ orderId, payer: payerWallet, amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""), network: provider.network, nonce: v.nonce, settlementTx: v.tx })
+      .values({ orderId, payer: payerWallet, amountUsdc: v.amountUsdc ?? sku.priceUsd.replace("$", ""), network: payerNetwork, nonce: v.nonce, settlementTx: v.tx })
       .onConflictDoNothing()
       .run();
   }

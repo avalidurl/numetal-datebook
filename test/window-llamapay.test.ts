@@ -535,7 +535,7 @@ describe("The Window — LlamaPay human path", () => {
     });
     it("an agent post records payment_ref x402:<tx> → its receipt links basescan", async () => {
       const db = makeDb(env.DB);
-      const out = await claimAndPublishFeatured(db, env, { authorKind: "agent", authorRef: "bot7", publicSummary: "agent seeks agent", ref: "agentref_" + rnd() }, "0xPAY", { provider: payProvider(), guard: okGuard });
+      const out = await claimAndPublishFeatured(db, env, { authorKind: "agent", authorRef: "bot7", publicSummary: "agent seeks agent", ref: "agentref_" + rnd() }, { paymentHeader: "0xPAY", mppCred: null, isMpp: false, hasPayment: true }, { provider: payProvider(), guard: okGuard });
       expect(out.kind).toBe("live");
       if (out.kind !== "live") return;
       const row = await env.DB.prepare("SELECT payment_ref, order_id FROM featured_posts WHERE id=?1").bind(out.id).first<{ payment_ref: string; order_id: string }>();

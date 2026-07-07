@@ -28,6 +28,17 @@ describe("discovery — bare unpaid probe reaches 402 BEFORE body validation, no
     const r = await post("/api/chat/topup", e());
     expect(r.status).toBe(402);
     expect(r.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
+    const body = (await r.json()) as { extensions?: { bazaar?: { schema?: { properties?: Record<string, unknown> } } } };
+    expect(body.extensions?.bazaar?.schema?.properties?.input).toBeTruthy();
+    expect(body.extensions?.bazaar?.schema?.properties?.output).toBeTruthy();
+  });
+
+  it("POST /api/intake/heart-file with no payment + no body → 402 with MPP when enabled", async () => {
+    const r = await post("/api/intake/heart-file", { ...env, PAY_TO: PAY, MPP_ENABLED: "1", MPP_SECRET_KEY: "x" } as Env);
+    expect(r.status).toBe(402);
+    expect(r.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
+    expect(r.headers.get("WWW-Authenticate")).toMatch(/^Payment /);
+    expect(r.headers.get("cache-control")).toBe("no-store");
   });
 
   it("POST /api/featured/post with no payment + no body → 402, and NO slot reserved", async () => {
@@ -56,16 +67,19 @@ describe("discovery — /openapi.json declares the paid surfaces", () => {
       expect(op?.["x-payment-info"], `${p} x-payment-info`).toBeTruthy();
       expect(op?.requestBody, `${p} requestBody`).toBeTruthy();
     }
-    // ask + topup carry both rails (ask push, topup pull); window x402-only
+    // ask + topup + heart-file + window carry both rails (ask/heart/window push, topup pull)
     const proto = (p: string) => (doc.paths[p]!.post!["x-payment-info"]!.protocols as Array<Record<string, unknown>>).map((x) => Object.keys(x)[0]);
     expect(proto("/api/chat/ask")).toEqual(["x402", "mpp"]);
     expect(proto("/api/chat/topup")).toEqual(["x402", "mpp"]);
-    expect(proto("/api/featured/post")).toEqual(["x402"]);
+    expect(proto("/api/intake/heart-file")).toEqual(["x402", "mpp"]);
+    expect(proto("/api/featured/post")).toEqual(["x402", "mpp"]);
     expect(doc.paths["/api/chat/topup"]!.post!["x-payment-info"]!.price.amount).toBe("2.000000");
     // per-SKU supportedModes: ask push, topup pull
     const mppOf = (p: string) => (doc.paths[p]!.post!["x-payment-info"]!.protocols as Array<Record<string, { supportedModes?: string[] }>>).find((x) => x.mpp)?.mpp;
     expect(mppOf("/api/chat/ask")?.supportedModes).toEqual(["push"]);
     expect(mppOf("/api/chat/topup")?.supportedModes).toEqual(["pull"]);
+    expect(mppOf("/api/intake/heart-file")?.supportedModes).toEqual(["push"]);
+    expect(mppOf("/api/featured/post")?.supportedModes).toEqual(["push"]);
   });
 
   it("declares components.securitySchemes and references them per paid op (AgentCash sell-to-agents)", () => {
@@ -83,7 +97,8 @@ describe("discovery — /openapi.json declares the paid surfaces", () => {
     // each paid op references the scheme keys it accepts; ask carries both rails
     const secKeys = (p: string) => (doc.paths[p]!.post!.security ?? []).flatMap((s) => Object.keys(s));
     expect(secKeys("/api/chat/ask")).toEqual(["x402", "mpp"]);
-    expect(secKeys("/api/featured/post")).toEqual(["x402"]);
+    expect(secKeys("/api/intake/heart-file")).toEqual(["x402", "mpp"]);
+    expect(secKeys("/api/featured/post")).toEqual(["x402", "mpp"]);
     // every referenced scheme is defined in components
     for (const p of ["/api/chat/ask", "/api/intake/heart-file", "/api/chat/topup", "/api/featured/post"]) {
       for (const k of secKeys(p)) expect(schemes[k], `${p} references undefined scheme ${k}`).toBeTruthy();

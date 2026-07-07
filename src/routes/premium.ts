@@ -13,6 +13,7 @@ import type { Env } from "../env";
 import { utcDay } from "../env";
 import { consumeNonce } from "../economics/chatcredits";
 import { settleAndPersist } from "../payments/receipts";
+import { readPaymentRails } from "../payments/dual-rail";
 import { makeX402Provider, SKUS, x402Challenge } from "../payments/x402";
 import { isCoupleMember, loadCoupleMembership, ownerIdForWallet } from "../premium/report-authz";
 import { generateAndStoreReport, groundCouple } from "../premium/report-generate";
@@ -78,13 +79,20 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
   if (comped) {
     await db.update(premiumOrders).set({ status: "comped" }).where(eq(premiumOrders.orderId, orderId)).run();
   } else {
-    const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // v2 ← PAYMENT-SIGNATURE, v1 ← X-PAYMENT
-    if (!paymentHeader) {
+    const rails = readPaymentRails(c.env, sku, {
+      paymentSignature: c.req.header("payment-signature"),
+      xPayment: c.req.header("x-payment"),
+      authorization: c.req.header("authorization"),
+    });
+    if (!rails.hasPayment) {
       await db.update(premiumOrders).set({ status: "challenged" }).where(eq(premiumOrders.orderId, orderId)).run();
       return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
     }
-    const settled = await settleAndPersist(db, c.env, provider, { orderId, sku, payTo: c.env.PAY_TO }, paymentHeader);
-    if (!settled.ok) return c.json({ error: "payment not verified", reason: settled.reason }, 402);
+    const settled = await settleAndPersist(db, c.env, provider, { orderId, sku, payTo: c.env.PAY_TO }, rails);
+    if (!settled.ok) {
+      if (settled.mppResponse) return settled.mppResponse;
+      return c.json({ error: "payment not verified", reason: settled.reason }, 402);
+    }
     receiptId = settled.receiptId ?? null;
     payerWallet = settled.payer ?? null;
     payerFresh = settled.fresh === true;
