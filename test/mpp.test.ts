@@ -83,7 +83,7 @@ describe("MPP — challenge issuance (dual-rail 402)", () => {
     const p = parseChallenge(header);
     expect(p.method).toBe("tempo");
     expect(p.intent).toBe("charge");
-    expect(p.realm).toBe("https://api.ishtar.numetal.xyz");
+    expect(p.realm).toBe("api.ishtar.numetal.xyz");
     expect(p.id!.length).toBeGreaterThan(20);
     const req = JSON.parse(b64urlDecode(p.request!));
     expect(req).toEqual({

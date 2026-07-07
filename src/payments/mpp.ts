@@ -113,9 +113,14 @@ export function mppCurrency(env: Env): string {
 function tempoRpc(env: Env): string {
   return env.TEMPO_RPC_URL || DEFAULT_TEMPO_RPC;
 }
-/** Public origin agents call — MPPScan attribution requires realm = this URL (not host-only). */
-function mppRealm(env: Env): string {
-  return (env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").replace(/\/+$/, "");
+/** MPPScan attribution realm — hostname only, no scheme (mppscan.com/discovery/spec). */
+export function mppRealm(env: Env): string {
+  const raw = (env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").replace(/\/+$/, "");
+  try {
+    return new URL(raw.includes("://") ? raw : `https://${raw}`).host;
+  } catch {
+    return raw.replace(/^https?:\/\//, "").split("/")[0] ?? raw;
+  }
 }
 
 // ── b64url (no padding, RFC 4648 §5) over UTF-8 ────────────────────────────────────────────────

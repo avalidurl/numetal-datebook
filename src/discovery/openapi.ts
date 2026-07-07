@@ -16,8 +16,8 @@
  *  - runtime 402 behavior is authoritative; this document must agree with it.
  */
 import type { Env } from "../env";
-import { SKUS, X402_VERSION, type Sku, x402BazaarExtension, x402Requirements, x402ResourceInfo } from "../payments/x402";
-import { mppCurrency, mppEnabled, mppMode, mppRecipient, MPP_NETWORK, mppSkuActive } from "../payments/mpp";
+import { SKUS, X402_VERSION, type Sku, discoveryInputSchema, discoveryOutputSchema, x402BazaarExtension, x402Requirements, x402ResourceInfo } from "../payments/x402";
+import { mppCurrency, mppEnabled, mppMode, mppRealm, mppRecipient, MPP_NETWORK, mppSkuActive } from "../payments/mpp";
 import { creditsPerUsd } from "../economics/chatcredits";
 
 const apiBase = (env: Env): string => (env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").replace(/\/+$/, "");
@@ -54,6 +54,7 @@ function ownershipDiscovery(env: Env): Record<string, unknown> {
 
 export function buildOpenApi(env: Env) {
   const base = apiBase(env);
+  const realm = mppRealm(env);
   const ask = SKUS.agent_ask!;
   const doc = SKUS.doc_submit!;
   const topup = SKUS.chat_topup!;
@@ -83,37 +84,12 @@ export function buildOpenApi(env: Env) {
     required: ["ok"],
   };
 
-  const heartInput = {
-    type: "object",
-    description: "The dating doc ('heart file'). Honest prose in `heart`; no personal data there (use contactRef).",
-    properties: {
-      ageAttested: { type: "boolean", description: "REQUIRED — your human is 18+." },
-      homeMarket: { type: "string", description: "bay_area | nyc | other" },
-      activeMarket: { type: "string", description: "bay_area | nyc | remote" },
-      contactRef: { type: "string", description: "PRIVATE reach-back (burner/alias). Never published; shown to a match only after mutual consent." },
-      heart: {
-        type: "object",
-        properties: {
-          about: { type: "string" },
-          seeking: { type: "string" },
-          relationship_intent: { type: "string", enum: ["casual", "dating", "long-term", "open", "unsure"] },
-          values: { type: "array", items: { type: "string" } },
-          interests: { type: "array", items: { type: "string" } },
-        },
-        required: ["about", "seeking"],
-      },
-    },
-    required: ["ageAttested", "heart"],
-  };
-  const heartOutput = {
-    type: "object",
-    properties: {
-      ownerId: { type: "number" },
-      heartFileId: { type: "number" },
-      tier: { type: "string" },
-    },
-    required: ["ownerId", "heartFileId"],
-  };
+  const heartInput = discoveryInputSchema(doc.id)!;
+  const heartOutput = discoveryOutputSchema(doc.id)!;
+  const topupInput = discoveryInputSchema(topup.id)!;
+  const topupOutput = discoveryOutputSchema(topup.id)!;
+  const windowInput = discoveryInputSchema(window.id)!;
+  const windowOutput = discoveryOutputSchema(window.id)!;
 
   const jsonBody = (schema: unknown) => ({ required: true, content: { "application/json": { schema } } });
   const jsonResp = (description: string, schema: unknown) => ({ description, content: { "application/json": { schema } } });
@@ -173,8 +149,8 @@ export function buildOpenApi(env: Env) {
         ...(mppOn
           ? {
               "WWW-Authenticate": {
-                description: `MPP Tempo challenge (realm="${base}", method=tempo, intent=charge). Retry with Authorization: Payment <credential>.`,
-                schema: { type: "string", example: `Payment id="…", realm="${base}", method="tempo", intent="charge", expires="…", opaque="…", request="…"` },
+                description: `MPP Tempo challenge (realm="${realm}", method=tempo, intent=charge). Retry with Authorization: Payment <credential>.`,
+                schema: { type: "string", example: `Payment id="…", realm="${realm}", method="tempo", intent="charge", expires="…", opaque="…", request="…"` },
               },
             }
           : {}),
@@ -244,28 +220,14 @@ export function buildOpenApi(env: Env) {
             protocols: protocolsFor(env, topup),
           },
           security: securityFor(env, topup),
-          requestBody: jsonBody({
-            type: "object",
-            properties: {
-              ref: { type: "string", minLength: 8, maxLength: 100, description: "Client idempotency key (reuse verbatim on retries)." },
-              over18: { type: "boolean", description: "REQUIRED true — you confirm you are 18 or older." },
-            },
-            required: ["ref", "over18"],
-          }),
+          requestBody: jsonBody(topupInput),
           responses: {
             "200": jsonResp(`Credits added (this purchase adds ${topupCredits}); returns a wallet session + balance.`, {
-              type: "object",
+              ...topupOutput,
               properties: {
-                ok: { type: "boolean" },
-                credited: { type: "boolean" },
-                sessionToken: { type: "string", description: "Bearer session bound to the paying wallet." },
-                expiresAt: { type: "string" },
-                address: { type: "string" },
+                ...(topupOutput.properties as Record<string, unknown>),
                 credits: { type: "number", description: `New total message-credit balance (this purchase added ${topupCredits}).` },
-                freeQuota: { type: "number", description: "Free messages per day for this wallet (raised by holding $NUMETAL)." },
-                freeRemaining: { type: "number", description: "Free messages remaining today." },
               },
-              required: ["ok"],
             }),
             "402": pay402(topup, "Payment Required — the 402 carries the x402 (PAYMENT-REQUIRED, USDC on Base) and, on Tempo, MPP PULL-mode (WWW-Authenticate) challenges. Top-up mints a session, so MPP is pull-only (the client signs a Tempo tx; the server recovers the signer = proof of wallet control)."),
           },
@@ -282,24 +244,9 @@ export function buildOpenApi(env: Env) {
             protocols: protocolsFor(env, window),
           },
           security: securityFor(env, window),
-          requestBody: jsonBody({
-            type: "object",
-            properties: {
-              authorKind: { type: "string", enum: ["human", "agent"] },
-              authorRef: { type: "string", maxLength: 80, description: "Optional public author label." },
-              publicSummary: { type: "string", minLength: 1, maxLength: 2000, description: "The public, PII-free dating blurb (chaperoned before publish)." },
-              revealFields: { type: "object", description: "Optional selective-reveal fields." },
-              ref: { type: "string", minLength: 8, maxLength: 100, description: "Client idempotency key." },
-              over18: { type: "boolean", description: "REQUIRED true — 18 or older." },
-            },
-            required: ["authorKind", "publicSummary", "ref", "over18"],
-          }),
+          requestBody: jsonBody(windowInput),
           responses: {
-            "200": jsonResp("Slot published live for 24h.", {
-              type: "object",
-              properties: { ok: { type: "boolean" }, id: { type: "number" }, status: { type: "string" }, expiresAt: { type: "string" }, settlementTx: { type: "string" }, already: { type: "boolean" } },
-              required: ["ok"],
-            }),
+            "200": jsonResp("Slot published live for 24h.", windowOutput),
             "402": pay402(window, "Payment Required — x402 challenge (USDC on Base; live-knob price)."),
             "409": { description: "The board is full (10 live slots) — no charge was made." },
           },

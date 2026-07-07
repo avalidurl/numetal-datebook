@@ -149,8 +149,9 @@ const BAZAAR_SHAPES: Record<string, BazaarShape> = {
   },
   chat_topup: {
     input: { type: "http", method: "POST", bodyType: "json", body: { ref: "topup-idempotency-key-01", over18: true } },
-    output: { type: "json", example: { ok: true, credited: true, sessionToken: "sess_…", expiresAt: "2026-07-08T00:00:00.000Z", address: "0x…", credits: 15, freeQuota: 3, freeRemaining: 3 } },
+    output: { type: "json", example: { ok: true, credited: true, sessionToken: "sess_…", expiresAt: "2026-07-08T00:00:00.000Z", address: "0x…", credits: 15, freeQuota: 3, freeRemaining: 3, perk: false, usdHeld: 0 } },
     bodySchema: {
+      type: "object",
       properties: {
         ref: { type: "string", minLength: 8, maxLength: 100, description: "Client idempotency key (reuse verbatim on retries)." },
         over18: { type: "boolean", description: "REQUIRED true — you confirm you are 18 or older." },
@@ -163,17 +164,46 @@ const BAZAAR_SHAPES: Record<string, BazaarShape> = {
       type: "http",
       method: "POST",
       bodyType: "json",
-      body: { ageAttested: true, heart: { about: "Builder in SF who reads on the train.", seeking: "Someone curious, kind, and unafraid of a real conversation." } },
+      body: {
+        displayName: "Mara",
+        ageAttested: true,
+        homeMarket: "bay_area",
+        activeMarket: "bay_area",
+        heart: { about: "Builder in SF who reads on the train.", seeking: "Someone curious, kind, and unafraid of a real conversation." },
+      },
     },
     output: { type: "json", example: { ownerId: 42, heartFileId: 99, tier: "agent_represented" } },
     bodySchema: {
+      type: "object",
+      description: "The dating doc ('heart file'). Honest prose in `heart`; no personal data there (use contactRef).",
       properties: {
-        ageAttested: { type: "boolean", description: "REQUIRED — your human is 18+." },
-        homeMarket: { type: "string" },
-        activeMarket: { type: "string" },
-        contactRef: { type: "string" },
+        displayName: { type: "string", maxLength: 120, description: "Optional first name or handle." },
+        homeMarket: { type: "string", enum: ["bay_area", "nyc", "other"], description: "Default other." },
+        activeMarket: { type: "string", enum: ["bay_area", "nyc", "remote"], description: "Default remote." },
+        availableFor: { type: "string", maxLength: 120, description: "csv of meeting modes, e.g. irl_bay_area, online, travel" },
+        researchOptin: { type: "string", enum: ["none", "aggregate", "full"], description: "Default none." },
+        publicChatter: { type: "boolean", description: "Opt in to public couple feed." },
+        ageAttested: { type: "boolean", description: "REQUIRED true — your human is 18+." },
+        contactRef: { type: "string", maxLength: 200, description: "PRIVATE reach-back (burner/alias). Never published." },
+        alertChannels: {
+          type: "array",
+          maxItems: 5,
+          items: { type: "string", enum: ["email", "agent-relay", "xmtp"] },
+          description: "Optional notify channels; email stays the floor regardless.",
+        },
+        delivery: {
+          type: "object",
+          description: "Optional agent-relay webhook (public https URL + shared HMAC secret).",
+          properties: {
+            url: { type: "string", format: "uri", maxLength: 400 },
+            secret: { type: "string", minLength: 16, maxLength: 200 },
+          },
+          required: ["url", "secret"],
+        },
         heart: {
           type: "object",
+          additionalProperties: true,
+          description: "Free-form dating doc — matching substance.",
           properties: {
             about: { type: "string" },
             seeking: { type: "string" },
@@ -181,7 +211,6 @@ const BAZAAR_SHAPES: Record<string, BazaarShape> = {
             values: { type: "array", items: { type: "string" } },
             interests: { type: "array", items: { type: "string" } },
           },
-          required: ["about", "seeking"],
         },
       },
       required: ["ageAttested", "heart"],
@@ -194,32 +223,45 @@ const BAZAAR_SHAPES: Record<string, BazaarShape> = {
       bodyType: "json",
       body: { authorKind: "agent", publicSummary: "Night-owl engineer who cooks too much pasta and wants a first date that feels like a walk, not an interview.", ref: "window-idempotency-key-01", over18: true },
     },
-    output: { type: "json", example: { ok: true, id: 7, status: "live", expiresAt: "2026-07-09T00:00:00.000Z", settlementTx: "0x…" } },
+    output: { type: "json", example: { ok: true, id: 7, status: "live", expiresAt: "2026-07-09T00:00:00.000Z", settlementTx: "0x…", already: false } },
     bodySchema: {
+      type: "object",
       properties: {
         authorKind: { type: "string", enum: ["human", "agent"] },
-        authorRef: { type: "string", maxLength: 80 },
-        publicSummary: { type: "string", minLength: 1, maxLength: 2000 },
-        revealFields: { type: "object" },
-        ref: { type: "string", minLength: 8, maxLength: 100 },
-        over18: { type: "boolean" },
+        authorRef: { type: "string", minLength: 1, maxLength: 80, description: "Optional public author label." },
+        publicSummary: { type: "string", minLength: 1, maxLength: 2000, description: "The public, PII-free dating blurb (chaperoned before publish)." },
+        revealFields: { type: "object", additionalProperties: true, description: "Optional selective-reveal fields." },
+        ref: { type: "string", minLength: 8, maxLength: 100, description: "Client idempotency key." },
+        over18: { type: "boolean", description: "REQUIRED true — you confirm you are 18 or older." },
       },
       required: ["authorKind", "publicSummary", "ref", "over18"],
     },
   },
 };
 
+/** OpenAPI requestBody + bazaar 402 input schema — single source of truth from route handlers. */
+export function discoveryInputSchema(skuId: string): Record<string, unknown> | undefined {
+  return BAZAAR_SHAPES[skuId]?.bodySchema;
+}
+
+/** OpenAPI 200 response schema derived from the live handler's success shape. */
+export function discoveryOutputSchema(skuId: string): Record<string, unknown> | undefined {
+  const shape = BAZAAR_SHAPES[skuId];
+  if (!shape) return undefined;
+  return bazaarOutputSchema(shape.output.example);
+}
+
 function bazaarOutputSchema(example: BazaarBody): Record<string, unknown> {
-  const props: Record<string, unknown> = { ok: { type: "boolean" } };
+  const props: Record<string, unknown> = {};
   for (const k of Object.keys(example)) {
-    if (k === "ok") continue;
     const v = example[k];
     if (typeof v === "string") props[k] = { type: "string" };
     else if (typeof v === "number") props[k] = { type: "number" };
     else if (typeof v === "boolean") props[k] = { type: "boolean" };
+    else if (v === null) props[k] = { type: ["string", "null"] };
     else props[k] = { type: "object" };
   }
-  return { type: "object", properties: props, required: ["ok"] };
+  return { type: "object", properties: props, required: Object.keys(example) };
 }
 
 /**
