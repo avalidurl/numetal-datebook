@@ -59,13 +59,16 @@ describe("discovery — bare unpaid probe reaches 402 BEFORE body validation, no
 describe("discovery — /openapi.json declares the paid surfaces", () => {
   it("declares ask (x402+mpp), heart-file, topup, window — all with x-payment-info + schemas", () => {
     const doc = buildOpenApi({ ...env, PAY_TO: PAY, MPP_ENABLED: "1", MPP_SECRET_KEY: "x", MPP_PULL_ENABLED: "1" } as Env) as {
-      paths: Record<string, { post?: { "x-payment-info"?: { protocols: unknown[]; price: { amount: string } }; requestBody?: unknown } }>;
+      paths: Record<string, { post?: { "x-payment-info"?: { protocols: unknown[]; price: { amount: string } }; requestBody?: unknown; responses?: Record<string, { content?: { "application/json"?: { schema?: unknown } }; headers?: Record<string, unknown> }> } }>;
     };
     const paid = ["/api/chat/ask", "/api/intake/heart-file", "/api/chat/topup", "/api/featured/post"];
     for (const p of paid) {
       const op = doc.paths[p]?.post;
       expect(op?.["x-payment-info"], `${p} x-payment-info`).toBeTruthy();
       expect(op?.requestBody, `${p} requestBody`).toBeTruthy();
+      const r402 = op?.responses?.["402"] as { content?: { "application/json"?: { schema?: unknown } }; headers?: Record<string, unknown> } | undefined;
+      expect(r402?.content?.["application/json"]?.schema, `${p} 402 schema`).toBeTruthy();
+      expect(r402?.headers?.["PAYMENT-REQUIRED"], `${p} 402 PAYMENT-REQUIRED header`).toBeTruthy();
     }
     // ask + topup + heart-file + window carry both rails (ask/heart/window push, topup pull)
     const proto = (p: string) => (doc.paths[p]!.post!["x-payment-info"]!.protocols as Array<Record<string, unknown>>).map((x) => Object.keys(x)[0]);
