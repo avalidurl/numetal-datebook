@@ -136,12 +136,19 @@ export function x402Requirements(env: Env, sku: Sku, payTo: string) {
 export const BAZAAR_DISCOVERY_SKUS = new Set(["agent_ask", "chat_topup", "doc_submit", "featured_slot"]);
 
 type BazaarBody = Record<string, unknown>;
-type BazaarShape = { input: { type: string; method: string; bodyType: string; body: BazaarBody }; output: { type: string; example: BazaarBody }; bodySchema: Record<string, unknown> };
+type BazaarShape = {
+  input: { type: string; method: string; bodyType: string; body: BazaarBody };
+  output: { type: string; example: BazaarBody };
+  bodySchema: Record<string, unknown>;
+  /** Output fields that may be JSON null (OpenAPI 3.1 / JSON Schema 2020-12 union type). */
+  nullableOutputFields?: string[];
+};
 
 const BAZAAR_SHAPES: Record<string, BazaarShape> = {
   agent_ask: {
     input: { type: "http", method: "POST", bodyType: "json", body: { message: "How do I write a dating doc that gets good matches?" } },
     output: { type: "json", example: { ok: true, reply: "A candid, specific admission beats a résumé — try naming one small true thing you want a partner to know.", mode: "chat", paid: true } },
+    nullableOutputFields: ["reply"],
     bodySchema: {
       properties: { message: { type: "string", minLength: 1, maxLength: 2000, description: "A dating, relationship, or venue question to ask Ishtar." }, mode: { type: "string", enum: ["chat", "coach"] } },
       required: ["message"],
@@ -248,14 +255,15 @@ export function discoveryInputSchema(skuId: string): Record<string, unknown> | u
 export function discoveryOutputSchema(skuId: string): Record<string, unknown> | undefined {
   const shape = BAZAAR_SHAPES[skuId];
   if (!shape) return undefined;
-  return bazaarOutputSchema(shape.output.example);
+  return bazaarOutputSchema(shape.output.example, shape.nullableOutputFields);
 }
 
-function bazaarOutputSchema(example: BazaarBody): Record<string, unknown> {
+function bazaarOutputSchema(example: BazaarBody, nullableFields: string[] = []): Record<string, unknown> {
   const props: Record<string, unknown> = {};
   for (const k of Object.keys(example)) {
     const v = example[k];
-    if (typeof v === "string") props[k] = { type: "string" };
+    if (nullableFields.includes(k)) props[k] = { type: ["string", "null"] };
+    else if (typeof v === "string") props[k] = { type: "string" };
     else if (typeof v === "number") props[k] = { type: "number" };
     else if (typeof v === "boolean") props[k] = { type: "boolean" };
     else if (v === null) props[k] = { type: ["string", "null"] };

@@ -76,7 +76,7 @@ export function buildOpenApi(env: Env) {
     type: "object",
     properties: {
       ok: { type: "boolean" },
-      reply: { type: "string", description: "Ishtar's answer (null if withheld by the safety layer)." },
+      reply: { type: ["string", "null"], description: "Ishtar's answer (null if withheld by the safety layer)." },
       paid: { type: "boolean" },
       payer: { type: "string" },
       tx: { type: "string", description: "Settlement transaction hash." },
