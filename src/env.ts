@@ -55,7 +55,9 @@ export interface Env {
   ACCESS_AUD: string;
   // secrets (wrangler secret put)
   ACCESS_KEY: string;
-  PAY_TO?: string;
+  PAY_TO?: string; // EVM x402 receive address (Base). No private key on the Worker — pubkey only.
+  PAY_TO_SOLANA?: string; // Solana x402 receive address (base58). Default in code when Solana rail enabled.
+  X402_SOLANA_ENABLED?: string; // "1"/"true" → add Solana USDC to accepts[] + verify branch (mainnet or devnet per X402_MODE).
   PUBLIC_API_URL?: string; // public origin for x402 `resource` (full URL). Defaults to https://api.ishtar.numetal.xyz
   AGENTCASH_OWNERSHIP_PROOF?: string; // comma-separated origin-ownership proof(s) → openapi.json x-discovery.ownershipProofs (set to the string the discovery registrar issues; omitted when unset)
   PUBLIC_SITE_URL?: string; // public site origin for human-facing links (matches page). Default https://ishtar.numetal.xyz

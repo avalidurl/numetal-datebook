@@ -30,7 +30,7 @@ import { accrueBuyback } from "../economics/reserve";
 import { attest18 } from "../economics/chatcredits";
 import { admitWithCap } from "../admission";
 import { owners } from "../db/schema";
-import { SKUS, makeX402Provider, x402Challenge, type PaymentProvider } from "../payments/x402";
+import { SKUS, makeX402Provider, paymentsConfigured, x402Challenge, type PaymentProvider } from "../payments/x402";
 import { paymentRefPrefix, readPaymentRails, verifyPushRailFailClosed, type PaymentRails } from "../payments/dual-rail";
 import { createLlamapayCharge, verifyLlamapayWebhook, type LlamapayEvent } from "../payments/llamapay";
 import { renderTR100, renderTR100Document, type ReceiptInput } from "../payments/tr100";
@@ -155,7 +155,7 @@ export async function claimAndPublishFeatured(
   const provider = deps?.provider ?? makeX402Provider(env);
   if (!payment?.hasPayment) return { kind: "challenge", orderId };
 
-  const verified = await verifyPushRailFailClosed(env, sku, env.PAY_TO!, payment, provider);
+  const verified = await verifyPushRailFailClosed(env, sku, payment, provider);
   if ("mppResponse" in verified) return { kind: "unpaid", reason: "mpp verification failed", mppResponse: verified.mppResponse };
   const v = verified.v;
   if (!v.verified || !v.payer) return { kind: "unpaid", reason: v.raw };
@@ -814,7 +814,7 @@ featuredRoutes.get("/featured/status/:orderId", async (c) => {
 });
 
 featuredRoutes.post("/featured/post", async (c) => {
-  if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
+  if (!paymentsConfigured(c.env)) return c.json({ error: "payments not configured" }, 503);
   const db = makeDb(c.env.DB);
   const pricedSku = { ...SKUS.featured_slot!, priceUsd: `$${await featuredPriceUsd(db)}` };
   const rails = readPaymentRails(c.env, pricedSku, {
@@ -826,7 +826,7 @@ featuredRoutes.post("/featured/post", async (c) => {
   // claim (discovery indexers require the probe to reach a 402 with ZERO side effects — a bare probe
   // must never reserve a Window slot). The slot-claim-before-verify money path is preserved on the
   // PAID path below (claimAndPublishFeatured still 409s a full board before charging).
-  if (!rails.hasPayment) return x402Challenge(c.env, pricedSku, c.env.PAY_TO, "featured");
+  if (!rails.hasPayment) return x402Challenge(c.env, pricedSku, "featured");
 
   const parsed = postSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "authorKind, publicSummary, and ref (8-100 char idempotency key) required" }, 400);
@@ -838,7 +838,7 @@ featuredRoutes.post("/featured/post", async (c) => {
     case "full":
       return c.json({ error: "the window is full — all featured slots are taken; try again later", capReached: true }, 409);
     case "challenge": {
-      return x402Challenge(c.env, pricedSku, c.env.PAY_TO, r.orderId);
+      return x402Challenge(c.env, pricedSku, r.orderId);
     }
     case "unpaid":
       if (r.mppResponse) return r.mppResponse;

@@ -20,7 +20,8 @@ import { adminRoutes } from "./routes/admin";
 import { creativeRoutes } from "./routes/creative";
 import { boardsRoutes } from "./routes/boards";
 import { chatRoutes } from "./routes/chat";
-import { x402Requirements, SKUS, skuDescription } from "./payments/x402";
+import { paymentsConfigured, skuDescription, solanaEnabled, SKUS, x402Accepts } from "./payments/x402";
+import { mppEnabled } from "./payments/mpp";
 import { buildOpenApi } from "./discovery/openapi";
 import { escalationRoutes } from "./routes/escalation";
 import { claimHandler, claimPage, diditWebhook, identityRoutes, revealHandler } from "./routes/identity";
@@ -139,10 +140,11 @@ app.route("/api", publicRoutes);
 
 // x402 discovery manifest — lets origin-scanning agents (AgentCash, x402 crawlers) find the paid
 // endpoint WITHOUT a prior payment. Public, before the access gate. Mirrors the /api/chat/ask 402.
-app.get("/.well-known/x402", (c) => {
+app.get("/.well-known/x402", async (c) => {
   const base = (c.env.PUBLIC_API_URL || "https://api.ishtar.numetal.xyz").replace(/\/+$/, "");
   const sku = SKUS.agent_ask!;
-  const resources = c.env.PAY_TO
+  const accepts = paymentsConfigured(c.env) ? await x402Accepts(c.env, sku) : [];
+  const resources = accepts.length
     ? [
         {
           resource: `${base}/api/chat/ask`,
@@ -150,7 +152,7 @@ app.get("/.well-known/x402", (c) => {
           x402Version: 2,
           description: skuDescription(sku),
           mimeType: "application/json",
-          accepts: [x402Requirements(c.env, sku, c.env.PAY_TO)],
+          accepts,
         },
       ]
     : [];
@@ -275,11 +277,12 @@ ul{padding-left:18px;margin:.3rem 0}
 <li><code>GET /api/heartbench/view</code> <span class="m">— HeartBench leaderboard (HTML)</span></li>
 <li><code>GET /health</code></li>
 </ul></section>
-<section><h2>Paid surfaces <span class="tag paid">x402 · mpp</span></h2><ul>
-<li><code>POST /api/chat/ask</code> <span class="m">— ask Ishtar, $0.10 (x402 on Base or MPP on Tempo)</span></li>
-<li><code>POST /api/chat/topup</code> <span class="m">— $2.00 buys 15 messages (x402 or MPP)</span></li>
-<li><code>POST /api/intake/heart-file</code> <span class="m">— file a dating doc, $1.00 (x402)</span></li>
-<li><code>POST /api/featured/post</code> <span class="m">— The Window, $50 / 24h (x402)</span></li>
+<section><h2>Paid surfaces <span class="tag paid">x402 · mpp</span></h2>
+<p class="m">USDC via x402 on <b>Base</b> and/or <b>Solana</b> (SPL), or <b>MPP</b> on Tempo — a bare POST returns one 402 with every enabled rail in <code>accepts[]</code>; the live 402 is authoritative.</p><ul>
+<li><code>POST /api/chat/ask</code> <span class="m">— ask Ishtar, $0.10 (x402 on Base/Solana, or MPP on Tempo)</span></li>
+<li><code>POST /api/chat/topup</code> <span class="m">— $2.00 buys 15 messages (x402 on Base/Solana, or MPP)</span></li>
+<li><code>POST /api/intake/heart-file</code> <span class="m">— file a dating doc, $1.00 (x402 on Base/Solana, or MPP)</span></li>
+<li><code>POST /api/featured/post</code> <span class="m">— The Window, $50 / 24h (x402 on Base/Solana, or MPP)</span></li>
 </ul></section>
 <section><h2>Talk to Ishtar</h2><ul>
 <li><code>POST /api/chat</code> <span class="m">— wallet session; $NUMETAL holders get a free daily allowance</span></li>
@@ -290,6 +293,11 @@ ul{padding-left:18px;margin:.3rem 0}
 </html>`;
 
 app.get("/", (c) => {
+  const rails = [
+    ...(c.env.PAY_TO ? ["x402 · USDC on Base (eip155:8453)"] : []),
+    ...(solanaEnabled(c.env) ? ["x402 · USDC on Solana (solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp, SPL)"] : []),
+    ...(mppEnabled(c.env) ? ["MPP · USDC on Tempo (eip155:4217)"] : []),
+  ];
   const index = {
     service: "Ishtar",
     what: "An AI-agent-mediated dating venue — your agent represents your human; matching and courtship happen agent-to-agent, adult-only and text-only.",
@@ -310,7 +318,12 @@ app.get("/", (c) => {
     },
     chat: { talk: "/api/chat", session: "/api/chat/session", ask: "/api/chat/ask", topup: "/api/chat/topup", balance: "/api/chat/balance" },
     window: { board: "/api/featured", post: "/api/featured/post", status: "/api/featured/status/:orderId" },
-    note: "Write endpoints require a credential, issued when the venue opens — except the x402 surfaces (/api/chat/ask, /api/chat/topup, /api/featured/post), which are open now and paid per call. Read-only tools are live over MCP at /mcp. Anyone can talk to Ishtar via /api/chat (wallet session; $NUMETAL holders get a free daily allowance).",
+    payments: {
+      rails,
+      paid: ["/api/chat/ask", "/api/chat/topup", "/api/intake/heart-file", "/api/featured/post"],
+      note: "A bare POST to any paid surface returns one 402 carrying every enabled rail in accepts[]; the live 402 is authoritative — read it before signing.",
+    },
+    note: "Write endpoints require a credential, issued when the venue opens — except the x402 surfaces (/api/chat/ask, /api/chat/topup, /api/intake/heart-file, /api/featured/post), which are open now and paid per call in USDC via x402 on Base and/or Solana, or MPP on Tempo. Read-only tools are live over MCP at /mcp. Anyone can talk to Ishtar via /api/chat (wallet session; $NUMETAL holders get a free daily allowance).",
   };
   c.header("vary", "accept");
   return (c.req.header("accept") ?? "").includes("text/html") ? c.html(ROOT_HTML) : c.json(index);

@@ -134,11 +134,15 @@ AGENT_RELAY_ENABLED = "1"
 # for normal prod (the routes 404 regardless of the key); set "true" ONLY during a sanctioned
 # two-agent run, then flip back to "false" + redeploy.
 EXPERIMENT_ENABLED = "false"
+# Solana x402 rail (USDC SPL). Pubkey-only — CDP facilitator sponsors tx fees via feePayer from /supported.
+X402_SOLANA_ENABLED = "1"
+PAY_TO_SOLANA = "2GvLgz2ovzNkrYEzJsZ1kRovXjVQnmm7WRWFd3vFzsma"
 
 # Secrets (never in this file):
 #   wrangler secret put PERSONA_API_KEY # Persona Relay (Sandbox key; bypasses credit checks)
 #   wrangler secret put ACCESS_KEY      # operator gate
-#   wrangler secret put PAY_TO          # x402 receive address
+#   wrangler secret put PAY_TO          # x402 EVM receive address (Base)
+# PAY_TO_SOLANA and X402_SOLANA_ENABLED are [vars] — Solana pubkey only, no SOL private key.
 #   wrangler secret put ENCRYPTION_KEY  # base64 of 32 random bytes: openssl rand -base64 32
 #                                       # (at-rest AES-256-GCM for contactRef + heart bodies)
 #   wrangler secret put SENTRY_DSN      # optional error capture

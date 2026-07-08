@@ -48,7 +48,7 @@ export async function settleAndPersist(
   // (see the compatibility-report grounded gate, which only trusts a `fresh` payer).
   if (prior) return { ok: true, receiptId: prior.id, reason: "already settled", payer: prior.payer ?? undefined, fresh: false };
 
-  const verified = await verifyPushRailFailClosed(env, ctx.sku, ctx.payTo, rails, provider);
+  const verified = await verifyPushRailFailClosed(env, ctx.sku, rails, provider);
   if ("mppResponse" in verified) return { ok: false, reason: "payment not verified", mppResponse: verified.mppResponse };
   const v = verified.v;
   if (!v.verified) {
@@ -66,7 +66,7 @@ export async function settleAndPersist(
     .values({
       orderId: ctx.orderId,
       paymentProtocol: rails.isMpp ? "mpp" : "x402",
-      network: settlementNetwork(rails.isMpp, provider),
+      network: v.network ?? settlementNetwork(rails.isMpp, provider),
       facilitator: rails.isMpp ? "tempo" : provider.facilitator,
       payer: v.payer,
       payTo: v.payTo ?? ctx.payTo,

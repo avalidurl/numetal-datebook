@@ -48,6 +48,16 @@ export const CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402";
 // Canonical USDC on Base mainnet.
 export const USDC_BASE_MAINNET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
+// Solana mainnet (CAIP-2) + canonical SPL USDC mint.
+export const SOLANA_MAINNET_NETWORK = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+export const SOLANA_DEVNET_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
+export const USDC_SOLANA_MAINNET = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+/** Default Solana payTo when X402_SOLANA_ENABLED — founder pubkey only; no SOL private key on the Worker. */
+export const DEFAULT_PAY_TO_SOLANA = "2GvLgz2ovzNkrYEzJsZ1kRovXjVQnmm7WRWFd3vFzsma";
+
+const FEE_PAYER_CACHE_TTL_MS = 5 * 60 * 1000;
+const feePayerCache: Record<string, { feePayer: string; expiresAt: number }> = {};
+
 export interface VerifiedPayment {
   verified: boolean;
   payer?: string;
@@ -59,42 +69,95 @@ export interface VerifiedPayment {
   raw?: string;
 }
 
+export type PaymentRail = "evm" | "svm";
+
+export interface PaymentTerms {
+  rail: PaymentRail;
+  network?: string;
+  to?: string;
+  value?: string;
+  nonce?: string;
+}
+
+/** True when at least one x402 rail is configured (Base and/or Solana). */
+export function paymentsConfigured(env: Env): boolean {
+  return !!(env.PAY_TO || solanaEnabled(env));
+}
+
+export function solanaEnabled(env: Env): boolean {
+  const on = env.X402_SOLANA_ENABLED === "1" || env.X402_SOLANA_ENABLED === "true";
+  return on && !!payToSolana(env);
+}
+
+export function payToSolana(env: Env): string {
+  return (env.PAY_TO_SOLANA || DEFAULT_PAY_TO_SOLANA).trim();
+}
+
+function solanaNetwork(env: Env): string {
+  return env.X402_MODE === "mainnet" ? SOLANA_MAINNET_NETWORK : SOLANA_DEVNET_NETWORK;
+}
+
+function solanaUsdcAsset(env: Env): string {
+  // Devnet USDC mint varies by faucet; mainnet is canonical. x402.org devnet facilitator documents a faucet mint.
+  return env.X402_MODE === "mainnet" ? USDC_SOLANA_MAINNET : USDC_SOLANA_MAINNET;
+}
+
+function payToMatches(expected: string, actual: string, rail: PaymentRail): boolean {
+  return rail === "evm" ? expected.toLowerCase() === actual.toLowerCase() : expected === actual;
+}
+
+/** Decode an X-PAYMENT / PAYMENT-SIGNATURE header (base64-JSON or raw-JSON). */
+function decodePayment(header: string): Record<string, unknown> | null {
+  for (const dec of [() => atob(header), () => header]) {
+    try {
+      return JSON.parse(dec()) as Record<string, unknown>;
+    } catch {
+      /* try the next form */
+    }
+  }
+  return null;
+}
+
 /**
  * Decode the signed x402 payment authorization — the SOURCE OF TRUTH for amount / recipient /
  * network / nonce. The facilitator only attests that the signature is valid; the resource server
  * MUST independently confirm the signed TERMS match what it requires (red-team C3/H8). Best-effort
  * across x402 payload shapes; returns null if it can't extract value + to (→ fail-closed).
  */
-export function parsePaymentHeader(header: string): { to?: string; value?: string; nonce?: string; network?: string } | null {
-  let obj: Record<string, unknown> | null = null;
-  for (const decode of [() => atob(header), () => header]) {
-    try {
-      obj = JSON.parse(decode()) as Record<string, unknown>;
-      break;
-    } catch {
-      /* try the next form */
-    }
-  }
+const asStr = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+
+/** Unified term extraction — EVM (EIP-3009 authorization) OR SVM (accepted.payTo + payload.transaction). */
+export function parsePaymentTerms(header: string): PaymentTerms | null {
+  const obj = decodePayment(header);
   if (!obj) return null;
   const payload = (obj.payload ?? {}) as Record<string, unknown>;
+  const accepted = (obj.accepted ?? {}) as Record<string, unknown>;
+  const networkHint = asStr(obj.network ?? payload.network ?? accepted.network);
+  const svmPayload = payload.transaction != null || networkHint?.startsWith("solana:");
+  if (svmPayload) {
+    const to = asStr(accepted.payTo);
+    const value = accepted.amount != null ? String(accepted.amount) : undefined;
+    return { rail: "svm", network: networkHint, to, value };
+  }
   const auth = (payload.authorization ?? obj.authorization ?? payload ?? {}) as Record<string, unknown>;
-  const accepted = (obj.accepted ?? {}) as Record<string, unknown>; // v2 payload carries the chosen requirement here
-  // SEC-2026-07-01 (fuzz finding): coerce to string|undefined. A payload with a NON-string field (e.g.
-  // {"authorization":{"to":2}}) otherwise returned `to` as a number, breaking the {to?:string} contract
-  // and later throwing on terms.to.toLowerCase() (contained by verify's try/catch, but fragile). A
-  // non-string to/network/nonce is invalid → undefined → verify fails closed on its !terms.to guard.
-  const asStr = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
-  const network = asStr(obj.network ?? payload.network ?? accepted.network);
+  const network = networkHint;
   const to = asStr(auth.to);
-  const value = auth.value != null ? String(auth.value) : undefined; // amount may be numeric in some payloads → String()
+  const value = auth.value != null ? String(auth.value) : undefined;
   const nonce = asStr(auth.nonce ?? obj.nonce);
-  return { to, value, nonce, network };
+  return { rail: "evm", network, to, value, nonce };
+}
+
+/** EVM-only backward-compat wrapper — SVM payloads return null here (use parsePaymentTerms). */
+export function parsePaymentHeader(header: string): { to?: string; value?: string; nonce?: string; network?: string } | null {
+  const terms = parsePaymentTerms(header);
+  if (!terms || terms.rail !== "evm") return null;
+  return { to: terms.to, value: terms.value, nonce: terms.nonce, network: terms.network };
 }
 
 export interface PaymentProvider {
-  network: string;
+  network: string; // primary EVM network (receipt fallback when unset on verified payload)
   facilitator: string;
-  verify(paymentHeader: string, sku: Sku, payTo: string): Promise<VerifiedPayment>;
+  verify(paymentHeader: string, sku: Sku): Promise<VerifiedPayment>;
 }
 
 // Public origin for the x402 `resource` field. The x402 PaymentRequirements `resource` MUST be a full
@@ -118,7 +181,7 @@ export const X402_VERSION = 2;
  * ResourceInfo object on the challenge body instead.
  */
 export function x402Requirements(env: Env, sku: Sku, payTo: string) {
-  const cfg = modeCfg(env);
+  const cfg = evmModeCfg(env);
   const dollars = Number(sku.priceUsd.replace("$", ""));
   return {
     scheme: "exact",
@@ -129,6 +192,79 @@ export function x402Requirements(env: Env, sku: Sku, payTo: string) {
     maxTimeoutSeconds: X402_MAX_TIMEOUT_SECONDS,
     extra: cfg.eip712, // EIP-712 domain {name, version} — required by the v2 exact-EVM client to sign EIP-3009
   };
+}
+
+/** Solana exact-scheme requirements — extra.feePayer from CDP/x402.org /supported (facilitator sponsors fees). */
+export async function solanaRequirements(env: Env, sku: Sku, payTo: string) {
+  const network = solanaNetwork(env);
+  const feePayer = await fetchFeePayer(env, network);
+  if (!feePayer) return null;
+  const dollars = Number(sku.priceUsd.replace("$", ""));
+  return {
+    scheme: "exact",
+    network,
+    amount: String(Math.round(dollars * 1e6)),
+    asset: solanaUsdcAsset(env),
+    payTo,
+    maxTimeoutSeconds: X402_MAX_TIMEOUT_SECONDS,
+    extra: { feePayer },
+  };
+}
+
+/** Multi-rail accepts[] for 402 challenges — Base (when PAY_TO set) + Solana (when X402_SOLANA_ENABLED). */
+export async function x402Accepts(env: Env, sku: Sku): Promise<unknown[]> {
+  const accepts: unknown[] = [];
+  if (env.PAY_TO) accepts.push(x402Requirements(env, sku, env.PAY_TO));
+  if (solanaEnabled(env)) {
+    const sol = await solanaRequirements(env, sku, payToSolana(env));
+    if (sol) accepts.push(sol);
+  }
+  return accepts;
+}
+
+function expectedPayTo(env: Env, rail: PaymentRail): string | undefined {
+  return rail === "svm" ? (solanaEnabled(env) ? payToSolana(env) : undefined) : env.PAY_TO;
+}
+
+function railNetwork(env: Env, rail: PaymentRail): string {
+  return rail === "svm" ? solanaNetwork(env) : evmModeCfg(env).network;
+}
+
+function railFacilitator(env: Env, rail: PaymentRail): string {
+  return evmModeCfg(env).mainnet || rail === "svm" ? CDP_FACILITATOR : STAGING_FACILITATOR;
+}
+
+/** Fetch facilitator feePayer for Solana exact scheme — cached ~5 min per network. */
+export async function fetchFeePayer(env: Env, network: string): Promise<string | undefined> {
+  const cached = feePayerCache[network];
+  if (cached && cached.expiresAt > Date.now()) return cached.feePayer;
+  const mainnet = env.X402_MODE === "mainnet";
+  const facilitator = mainnet ? CDP_FACILITATOR : STAGING_FACILITATOR;
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (mainnet) {
+    if (!env.CDP_API_KEY_ID || !env.CDP_API_KEY_SECRET) return undefined;
+    headers.authorization = `Bearer ${await cdpBearer(env.CDP_API_KEY_ID, env.CDP_API_KEY_SECRET, "GET", "api.cdp.coinbase.com", "/platform/v2/x402/supported")}`;
+  }
+  try {
+    const res = await fetch(`${facilitator}/supported`, { headers });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { kinds?: Array<{ scheme?: string; network?: string; extra?: { feePayer?: string } }>; paymentKinds?: typeof data.kinds };
+    for (const kind of data.kinds ?? data.paymentKinds ?? []) {
+      if (kind.network === network && kind.scheme === "exact" && typeof kind.extra?.feePayer === "string") {
+        feePayerCache[network] = { feePayer: kind.extra.feePayer, expiresAt: Date.now() + FEE_PAYER_CACHE_TTL_MS };
+        return kind.extra.feePayer;
+      }
+    }
+  } catch {
+    /* fail closed — Solana rail omitted from accepts when feePayer unavailable */
+  }
+  return undefined;
+}
+
+async function requirementsForRail(env: Env, sku: Sku, rail: PaymentRail): Promise<Record<string, unknown> | null> {
+  if (rail === "svm") return solanaRequirements(env, sku, payToSolana(env));
+  if (!env.PAY_TO) return null;
+  return x402Requirements(env, sku, env.PAY_TO) as Record<string, unknown>;
 }
 
 /** Paid surfaces declared in openapi.json — each 402 MUST carry extensions.bazaar input/output schemas
@@ -351,13 +487,17 @@ export function encodeX402Header(obj: unknown): string {
  * challenge (disjoint header spaces — each client parses only its own; live-proven pattern).
  * MPP requires `Cache-Control: no-store` on 402s; harmless for x402 clients, so set always.
  */
-export async function x402Challenge(env: Env, sku: Sku, payTo: string, orderId: string): Promise<Response> {
+export async function x402Challenge(env: Env, sku: Sku, orderId: string): Promise<Response> {
+  const accepts = await x402Accepts(env, sku);
+  if (!accepts.length) {
+    return new Response(JSON.stringify({ error: "payments not configured" }), { status: 503, headers: { "content-type": "application/json" } });
+  }
   const ext = x402BazaarExtension(sku); // CDP Bazaar discovery metadata (agent_ask only)
   const body = {
     x402Version: X402_VERSION,
     error: "payment required",
     resource: x402ResourceInfo(env, sku), // v2: ResourceInfo object at the top level, not inside accepts
-    accepts: [x402Requirements(env, sku, payTo)],
+    accepts,
     ...(ext ? { extensions: ext } : {}), // top-level extensions (client echoes them into the payload)
   };
   const headers: Record<string, string> = {
@@ -393,18 +533,6 @@ export async function cdpBearer(keyId: string, secretB64: string, method: string
   return `${signingInput}.${b64url(sig)}`;
 }
 
-/** Decode an X-PAYMENT header (base64-JSON or raw-JSON) to the full payment payload object. */
-function decodePayment(header: string): Record<string, unknown> | null {
-  for (const dec of [() => atob(header), () => header]) {
-    try {
-      return JSON.parse(dec()) as Record<string, unknown>;
-    } catch {
-      /* try the next form */
-    }
-  }
-  return null;
-}
-
 interface ModeCfg {
   network: string;
   facilitator: string;
@@ -414,94 +542,92 @@ interface ModeCfg {
   // EIP-3009 typed-data signature. Base USDC mainnet: name "USD Coin", version "2" (verified on-chain + SDK registry).
   eip712: { name: string; version: string };
 }
-function modeCfg(env: Env): ModeCfg {
+function evmModeCfg(env: Env): ModeCfg {
   if (env.X402_MODE === "mainnet")
     return { network: MAINNET_NETWORK, facilitator: CDP_FACILITATOR, asset: USDC_BASE_MAINNET, mainnet: true, eip712: { name: "USD Coin", version: "2" } };
   return { network: STAGING_NETWORK, facilitator: STAGING_FACILITATOR, asset: USDC_BASE_SEPOLIA, mainnet: false, eip712: { name: "USDC", version: "2" } };
 }
 
 /**
- * Facilitator-backed provider. Staging = Base-Sepolia via the keyless x402.org facilitator (/verify only —
- * testnet, no real money moves). Mainnet = Base via the CDP facilitator, JWT-authed, verify→SETTLE (real
- * USDC moves on settle). Either way verify() FAIL-CLOSED and the signed TERMS (amount/recipient/network) are
- * checked independently of the facilitator's word (red-team C3/C4/H8).
+ * Facilitator-backed provider. Staging = Base-Sepolia + Solana Devnet via x402.org (/verify only).
+ * Mainnet = Base + Solana via CDP, JWT-authed, verify→SETTLE. verify() FAIL-CLOSED; signed TERMS
+ * (amount/recipient/network) checked independently of the facilitator (red-team C3/C4/H8).
+ * Resource server holds NO chain private keys — only payTo pubkeys; CDP sponsors Solana fees via feePayer.
  */
 export function makeX402Provider(env: Env): PaymentProvider {
-  const cfg = modeCfg(env);
+  const evmCfg = evmModeCfg(env);
   return {
-    network: cfg.network,
-    facilitator: cfg.facilitator,
-    async verify(paymentHeader: string, sku: Sku, payTo: string): Promise<VerifiedPayment> {
+    network: evmCfg.network,
+    facilitator: evmCfg.facilitator,
+    async verify(paymentHeader: string, sku: Sku): Promise<VerifiedPayment> {
       try {
-        // Independent term check FIRST — never trust the facilitator on amount/recipient/network.
-        const terms = parsePaymentHeader(paymentHeader);
+        const terms = parsePaymentTerms(paymentHeader);
         if (!terms || !terms.value || !terms.to) return { verified: false, raw: "payment terms unreadable" };
+        const payTo = expectedPayTo(env, terms.rail);
+        if (!payTo) return { verified: false, raw: "rail not configured" };
         let value: bigint;
         try {
           value = BigInt(terms.value);
         } catch {
           return { verified: false, raw: "bad amount" };
         }
-        const required = BigInt(Math.round(Number(sku.priceUsd.replace("$", "")) * 1e6)); // USDC 6dp
+        const required = BigInt(Math.round(Number(sku.priceUsd.replace("$", "")) * 1e6));
         if (value < required) return { verified: false, raw: "underpayment" };
-        if (terms.to.toLowerCase() !== payTo.toLowerCase()) return { verified: false, raw: "payTo mismatch" };
-        if (terms.network && terms.network !== cfg.network) return { verified: false, raw: "network mismatch" };
+        if (!payToMatches(payTo, terms.to, terms.rail)) return { verified: false, raw: "payTo mismatch" };
+        const network = railNetwork(env, terms.rail);
+        if (terms.network && terms.network !== network) return { verified: false, raw: "network mismatch" };
         const ok = (): VerifiedPayment => ({
           verified: true,
           nonce: terms.nonce,
           payTo: terms.to,
-          network: cfg.network,
+          network,
           amountUsdc: (Number(value) / 1e6).toFixed(6),
         });
 
-        if (cfg.mainnet) {
+        const paymentRequirementsRaw = await requirementsForRail(env, sku, terms.rail);
+        if (!paymentRequirementsRaw) return { verified: false, raw: "requirements unavailable" };
+        const ext = x402BazaarExtension(sku);
+        const paymentRequirements = { ...paymentRequirementsRaw, ...(ext ? { extensions: ext } : {}) };
+        const mainnet = env.X402_MODE === "mainnet";
+        const facilitator = railFacilitator(env, terms.rail);
+
+        if (mainnet) {
           if (!env.CDP_API_KEY_ID || !env.CDP_API_KEY_SECRET) return { verified: false, raw: "cdp keys missing" };
           const host = "api.cdp.coinbase.com";
           const base = "/platform/v2/x402";
-          const paymentPayload = decodePayment(paymentHeader) as Record<string, unknown> | null;
+          const paymentPayload = decodePayment(paymentHeader);
           if (!paymentPayload) return { verified: false, raw: "payment payload unreadable" };
-          // CDP Bazaar cataloging needs `paymentPayload.resource` at settle (docs: "the settle request
-          // MUST contain paymentPayload.resource"). A generic x402 client may not set it, so inject the
-          // full resource URL if absent — harmless to the payment, required for discovery.
           if (!paymentPayload.resource) paymentPayload.resource = x402ResourceInfo(env, sku).url;
-          // Same canonical requirements the client signed against in the 402 challenge — must match or the
-          // facilitator rejects on a payload↔requirements mismatch (CAIP-2 network, full-URL resource, timeout).
-          // Carry the Bazaar discovery extension on the requirements so CDP's extractDiscoveryInfo() catalogs it.
-          const ext = x402BazaarExtension(sku);
-          const paymentRequirements = { ...x402Requirements(env, sku, payTo), ...(ext ? { extensions: ext } : {}) };
           const body = JSON.stringify({ x402Version: X402_VERSION, paymentPayload, paymentRequirements });
-          // verify (signature/funds valid?)
           const vTok = await cdpBearer(env.CDP_API_KEY_ID, env.CDP_API_KEY_SECRET, "POST", host, `${base}/verify`);
-          const vr = await fetch(`${cfg.facilitator}/verify`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${vTok}` }, body });
+          const vr = await fetch(`${facilitator}/verify`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${vTok}` }, body });
           if (!vr.ok) return { verified: false, raw: `cdp verify ${vr.status}` };
           const vj = (await vr.json()) as { isValid?: boolean; invalidReason?: string; payer?: string };
           if (!vj.isValid) return { verified: false, raw: vj.invalidReason ?? "cdp rejected" };
-          // settle (broadcast transferWithAuthorization — real USDC moves here)
           const sTok = await cdpBearer(env.CDP_API_KEY_ID, env.CDP_API_KEY_SECRET, "POST", host, `${base}/settle`);
-          const sr = await fetch(`${cfg.facilitator}/settle`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${sTok}` }, body });
-          // CDP reports Bazaar-metadata acceptance here: EXTENSION-RESPONSES = `processing` (accepted) or
-          // `rejected`. Surface it in observability without failing the payment over a discovery hiccup.
+          const sr = await fetch(`${facilitator}/settle`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${sTok}` }, body });
           const extResp = sr.headers.get("EXTENSION-RESPONSES");
-          if (extResp) console.log(JSON.stringify({ at: "x402.settle", sku: sku.id, extensionResponses: extResp }));
+          if (extResp) console.log(JSON.stringify({ at: "x402.settle", sku: sku.id, rail: terms.rail, extensionResponses: extResp }));
           if (!sr.ok) return { verified: false, raw: `cdp settle ${sr.status}` };
           const sj = (await sr.json()) as { success?: boolean; errorReason?: string; transaction?: string; payer?: string };
           if (!sj.success) return { verified: false, raw: sj.errorReason ?? "cdp settle failed" };
-          // payer is security-load-bearing (the compatibility-report couple-membership gate authorizes
-          // on it) — NEVER fall back to the recipient (terms.to) when CDP omits it, or a caller could
-          // inherit PAY_TO's identity. Absent payer => undefined => downstream authorization fails closed.
           return { ...ok(), payer: sj.payer, tx: sj.transaction };
         }
 
         // Staging: keyless x402.org facilitator, /verify only (testnet — no real settlement).
-        const res = await fetch(`${cfg.facilitator}/verify`, {
+        const res = await fetch(`${facilitator}/verify`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ payment: paymentHeader, network: cfg.network, payTo, resource: sku.route }),
+          body: JSON.stringify({
+            x402Version: X402_VERSION,
+            paymentPayload: decodePayment(paymentHeader),
+            paymentRequirements,
+          }),
         });
         if (!res.ok) return { verified: false, raw: `facilitator ${res.status}` };
         const j = (await res.json()) as VerifiedPayment & { isValid?: boolean };
         if (!(j.verified ?? j.isValid ?? false)) return { verified: false, raw: j.raw ?? "facilitator rejected" };
-        return { ...j, ...ok() };
+        return { ...j, ...ok(), payer: j.payer };
       } catch (err) {
         return { verified: false, raw: `verify_error: ${(err as Error).message}` };
       }

@@ -14,7 +14,7 @@ import { utcDay } from "../env";
 import { consumeNonce } from "../economics/chatcredits";
 import { settleAndPersist } from "../payments/receipts";
 import { readPaymentRails } from "../payments/dual-rail";
-import { makeX402Provider, SKUS, x402Challenge } from "../payments/x402";
+import { makeX402Provider, payToSolana, paymentsConfigured, SKUS, x402Challenge } from "../payments/x402";
 import { isCoupleMember, loadCoupleMembership, ownerIdForWallet } from "../premium/report-authz";
 import { generateAndStoreReport, groundCouple } from "../premium/report-generate";
 
@@ -29,7 +29,7 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
   const parsed = bodySchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "ownerId required" }, 400);
   const { ownerId, coupleId } = parsed.data;
-  if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
+  if (!paymentsConfigured(c.env)) return c.json({ error: "payments not configured" }, 503);
 
   // Mainnet (real USDC) runs through the CDP facilitator wired in src/payments/x402.ts (no SDK dep —
   // a hand-rolled EdDSA Bearer JWT + verify→settle). Go-live is founder-gated by config (X402_MODE=mainnet
@@ -86,9 +86,9 @@ premiumRoutes.post("/premium/compatibility-report", async (c) => {
     });
     if (!rails.hasPayment) {
       await db.update(premiumOrders).set({ status: "challenged" }).where(eq(premiumOrders.orderId, orderId)).run();
-      return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
+      return x402Challenge(c.env, sku, orderId);
     }
-    const settled = await settleAndPersist(db, c.env, provider, { orderId, sku, payTo: c.env.PAY_TO }, rails);
+    const settled = await settleAndPersist(db, c.env, provider, { orderId, sku, payTo: c.env.PAY_TO ?? payToSolana(c.env) }, rails);
     if (!settled.ok) {
       if (settled.mppResponse) return settled.mppResponse;
       return c.json({ error: "payment not verified", reason: settled.reason }, 402);

@@ -43,7 +43,7 @@ import {
 import { accrueBuyback } from "../economics/reserve";
 import { chatSpendExceeded } from "../economics/budget";
 import { recordEpisode, recordFeedback } from "../coach/memory";
-import { makeX402Provider, SKUS, x402Challenge, encodeX402Header, parsePaymentHeader } from "../payments/x402";
+import { makeX402Provider, paymentsConfigured, SKUS, x402Challenge, encodeX402Header, parsePaymentHeader } from "../payments/x402";
 import { MPP_NETWORK, MPP_PULL_SKUS, mppEnabled, mppProblem, mppProblemCode, mppReceiptHeader, mppSkuActive, parseMppAuth, verifyMppPayment, verifyMppPullPayment } from "../payments/mpp";
 import { timingSafeEqualStr } from "../util/timing";
 import { docReadyEmail, resendSend } from "../newsletter/resend";
@@ -118,7 +118,7 @@ chatRoutes.post("/chat/session", async (c) => {
 const topupSchema = z.object({ ref: z.string().min(8).max(100), over18: z.boolean().optional() });
 
 chatRoutes.post("/chat/topup", async (c) => {
-  if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
+  if (!paymentsConfigured(c.env)) return c.json({ error: "payments not configured" }, 503);
   // mainnet (real USDC via the CDP facilitator) is wired in src/payments/x402.ts; go-live is gated by
   // X402_MODE=mainnet + the CDP_API_KEY_* secrets + a mainnet PAY_TO (redacted), not by a code guard.
   // Top-up mints a bearer SESSION, so the paying rail MUST prove the caller controls the paying wallet:
@@ -134,7 +134,7 @@ chatRoutes.post("/chat/topup", async (c) => {
   // Bare/unpaid probe → the 402 challenge BEFORE body validation (discovery indexers require the probe
   // to reach a 402 with NO side effects; the real per-ref orderId is only needed on the paid retry).
   // With MPP live for topup this 402 carries BOTH rails (x402 PAYMENT-REQUIRED + MPP WWW-Authenticate).
-  if (!paymentHeader && !mppCred) return x402Challenge(c.env, sku, c.env.PAY_TO, "chattopup");
+  if (!paymentHeader && !mppCred) return x402Challenge(c.env, sku, "chattopup");
   const isMpp = !paymentHeader && !!mppCred; // the credential header decides the rail — never both
 
   const parsed = topupSchema.safeParse(await c.req.json().catch(() => ({})));
@@ -196,7 +196,7 @@ chatRoutes.post("/chat/topup", async (c) => {
     return c.json({ ok: true, credited: false, sessionToken: token, expiresAt, address: priorTopup.payer.toLowerCase(), ...(await getBalance(db, c.env, priorTopup.payer)) });
   }
 
-  const v = await provider.verify(paymentHeader!, sku, c.env.PAY_TO);
+  const v = await provider.verify(paymentHeader!, sku);
   if (!v.verified || !v.payer) return c.json({ error: "payment not verified", reason: v.raw }, 402);
 
   // Idempotent settle: first insert wins; a replay credits nothing twice.
@@ -397,13 +397,13 @@ chatRoutes.post("/chat", async (c) => {
 const agentAskSchema = z.object({ message: z.string().min(1).max(2000), mode: z.enum(["chat", "coach"]).optional() });
 
 chatRoutes.post("/chat/ask", async (c) => {
-  if (!c.env.PAY_TO) return c.json({ error: "payments not configured" }, 503);
+  if (!paymentsConfigured(c.env)) return c.json({ error: "payments not configured" }, 503);
   const sku = SKUS.agent_ask!;
   const provider = makeX402Provider(c.env);
   const paymentHeader = c.req.header("payment-signature") ?? c.req.header("x-payment"); // x402 v2 / v1
   const mppCred = mppEnabled(c.env) ? parseMppAuth(c.req.header("authorization")) : null; // MPP rail
   // Bare hit → ONE 402 carrying both rails (x402 in PAYMENT-REQUIRED, MPP in WWW-Authenticate).
-  if (!paymentHeader && !mppCred) return x402Challenge(c.env, sku, c.env.PAY_TO, "agentask");
+  if (!paymentHeader && !mppCred) return x402Challenge(c.env, sku, "agentask");
   const isMpp = !paymentHeader && !!mppCred; // credential header decides the rail — never both
 
   const parsed = agentAskSchema.safeParse(await c.req.json().catch(() => ({})));
@@ -423,11 +423,11 @@ chatRoutes.post("/chat/ask", async (c) => {
     if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
   }
 
-  const v = isMpp ? await verifyMppPayment(c.env, mppCred!, sku) : await provider.verify(paymentHeader!, sku, c.env.PAY_TO);
+  const v = isMpp ? await verifyMppPayment(c.env, mppCred!, sku) : await provider.verify(paymentHeader!, sku);
   if (!v.verified || !v.payer) {
     // A 402 MUST carry a fresh challenge (both specs) — re-serve the dual-rail challenge, not a bare error.
     if (isMpp) return mppProblem(c.env, sku, mppProblemCode(v.raw), "payment could not be verified");
-    return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
+    return x402Challenge(c.env, sku, orderId);
   }
 
   // Single-use, race-safe: the ledger INSERT is the admission gate. Uniqueness on order_id (x402

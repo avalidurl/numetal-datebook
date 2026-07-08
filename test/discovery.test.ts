@@ -50,8 +50,8 @@ describe("discovery — bare unpaid probe reaches 402 BEFORE body validation, no
     expect(n?.n).toBe(0); // the probe must never claim/reserve a slot
   });
 
-  it("both still 503 when PAY_TO is unset (payments not configured)", async () => {
-    const r = await post("/api/chat/topup", { ...env, PAY_TO: undefined } as Env);
+  it("both still 503 when no x402 rail is configured", async () => {
+    const r = await post("/api/chat/topup", { ...env, PAY_TO: undefined, X402_SOLANA_ENABLED: "0" } as Env);
     expect(r.status).toBe(503);
   });
 });

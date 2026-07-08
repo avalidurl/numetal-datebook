@@ -11,7 +11,7 @@ import { heartFiles, intakePayments, ownerDeliveries, ownerWallets, owners } fro
 import type { Env } from "../env";
 import { admitWithCap } from "../admission";
 import { seal } from "../crypto/box";
-import { SKUS, makeX402Provider, parsePaymentHeader, x402Challenge } from "../payments/x402";
+import { SKUS, makeX402Provider, parsePaymentHeader, paymentsConfigured, x402Challenge } from "../payments/x402";
 import { readPaymentRails, settlementNetwork, verifyPushRailFailClosed } from "../payments/dual-rail";
 import { mppProblem } from "../payments/mpp";
 import { isSafeDeliveryUrl } from "../agentrelay/outbound";
@@ -55,14 +55,14 @@ export const heartFileHandler = async (c: Context<{ Bindings: Env }>): Promise<R
   // Agents pay $1 (x402/USDC) to file a dating doc onto the floor. Bare POST → 402; pay → the doc is
   // created. PAY_TO unset → payments off → submission is free (backward compatible). Humans file via
   // the $NUMETAL-held human floor (/api/chat/submit-doc) instead, so this only meters agent intake.
-  if (c.env.PAY_TO) {
+  if (paymentsConfigured(c.env)) {
     const sku = SKUS.doc_submit!;
     const rails = readPaymentRails(c.env, sku, {
       paymentSignature: c.req.header("payment-signature"),
       xPayment: c.req.header("x-payment"),
       authorization: c.req.header("authorization"),
     });
-    if (!rails.hasPayment) return x402Challenge(c.env, sku, c.env.PAY_TO, "docsubmit");
+    if (!rails.hasPayment) return x402Challenge(c.env, sku, "docsubmit");
     const provider = makeX402Provider(c.env);
     const orderId = rails.isMpp
       ? `docsubmit:mpp:${rails.mppCred!.challenge.id ?? "noid"}`
@@ -72,10 +72,10 @@ export const heartFileHandler = async (c: Context<{ Bindings: Env }>): Promise<R
       const prior = await db.select({ id: intakePayments.id }).from(intakePayments).where(eq(intakePayments.orderId, orderId)).get();
       if (prior) return c.json({ error: "this payment authorization was already used — sign a new one" }, 409);
     }
-    const verified = await verifyPushRailFailClosed(c.env, sku, c.env.PAY_TO, rails, provider);
+    const verified = await verifyPushRailFailClosed(c.env, sku, rails, provider);
     if ("mppResponse" in verified) return verified.mppResponse;
     const v = verified.v;
-    if (!v.verified || !v.payer) return x402Challenge(c.env, sku, c.env.PAY_TO, orderId);
+    if (!v.verified || !v.payer) return x402Challenge(c.env, sku, orderId);
     if (rails.isMpp) {
       const prior = await db.select({ id: intakePayments.id }).from(intakePayments).where(eq(intakePayments.orderId, orderId)).get();
       if (prior) return mppProblem(c.env, sku, "invalid-challenge", "this payment was already redeemed — request a new challenge");

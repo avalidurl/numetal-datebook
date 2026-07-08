@@ -28,23 +28,21 @@ export function readPaymentRails(
 export async function verifyPushRail(
   env: Env,
   sku: Sku,
-  payTo: string,
   rails: PaymentRails,
   provider: PaymentProvider,
 ): Promise<VerifiedPayment> {
   if (rails.isMpp) return verifyMppPayment(env, rails.mppCred!, sku);
-  return provider.verify(rails.paymentHeader!, sku, payTo);
+  return provider.verify(rails.paymentHeader!, sku);
 }
 
 /** Fail-closed verify. Returns mppResponse on MPP failure; otherwise returns v (caller re-challenges x402). */
 export async function verifyPushRailFailClosed(
   env: Env,
   sku: Sku,
-  payTo: string,
   rails: PaymentRails,
   provider: PaymentProvider,
 ): Promise<{ v: VerifiedPayment } | { mppResponse: Response }> {
-  const v = await verifyPushRail(env, sku, payTo, rails, provider);
+  const v = await verifyPushRail(env, sku, rails, provider);
   if (!v.verified || !v.payer) {
     if (rails.isMpp) return { mppResponse: await mppProblem(env, sku, mppProblemCode(v.raw), "payment could not be verified") };
   }
