@@ -23,6 +23,7 @@ export interface Env {
   GAMBIT_MODEL: string;
   REPORT_MODEL: string;
   GEO_DENY: string;
+  STATUS_PROBE_SECRET?: string; // shared secret: lets status.numetal.xyz probe liveness paths past the geo deny
   AI_GATEWAY_ID: string;
   ADMIT_CAP_DEFAULT: string;
   DAILY_BUDGET_USD: string;

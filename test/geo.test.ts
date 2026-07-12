@@ -21,3 +21,39 @@ describe("edge geo gate", () => {
     expect(await res.json()).toMatchObject({ ok: true });
   });
 });
+
+describe("status-probe geo exemption", () => {
+  const SECRET = "test-probe-secret-abc123";
+  const probeReq = (country: string, path: string, secret?: string) =>
+    new Request(`https://datebook.example${path}`, {
+      cf: { country },
+      headers: secret ? { "x-status-probe": secret } : {},
+    });
+
+  it("the correct secret lets a denied-country probe reach a liveness path", async () => {
+    (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET = SECRET;
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(probeReq("TR", "/health", SECRET), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    delete (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET;
+  });
+
+  it("a wrong secret is still geo-blocked", async () => {
+    (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET = SECRET;
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(probeReq("TR", "/health", "wrong"), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(403);
+    delete (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET;
+  });
+
+  it("the secret does NOT exempt a non-liveness path", async () => {
+    (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET = SECRET;
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(probeReq("TR", "/api/intake", SECRET), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(403);
+    delete (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET;
+  });
+});

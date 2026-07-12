@@ -11,7 +11,7 @@ import { open } from "../crypto/box";
 import type { Env } from "../env";
 import { utcDay } from "../env";
 import { eraseOwner } from "../erasure";
-import { card, cards, esc, kvline, page, sec, tbl } from "../ui/layout";
+import { card, cards, esc, kvline, page, sec, tbl } from "../ui/admin-layout";
 
 export const adminRoutes = new Hono<{ Bindings: Env }>();
 
@@ -145,7 +145,7 @@ adminRoutes.get("/admin", async (c) => {
   try {
     [s, d] = await Promise.all([snapshot(c.env), detail(c.env)]);
   } catch (e) {
-    return c.html(page({ title: "ishtar · ops — DEGRADED", body: `<h1>ishtar · ops — DEGRADED</h1><p class="bad"><code>${esc(String(e))}</code></p>` }), 500);
+    return c.html(page({ title: "ishtar · ops — DEGRADED", host: c.req.header("host"), body: `<h1>ishtar · ops — DEGRADED</h1><p class="bad"><code>${esc(String(e))}</code></p>` }), 500);
   }
   const budgetPct = Math.round((Number(s.spend_today_usd) / Number(s.daily_budget_usd || 1)) * 100);
 
@@ -173,14 +173,14 @@ adminRoutes.get("/admin", async (c) => {
     `<div class="bar" style="margin-bottom:.7rem;align-items:center;gap:.6rem">
        <b>live courtship stream</b> ${streamEnabled ? '<span class="ok">running</span>' : '<span class="mut">stopped</span>'}
        <small class="mut">(spent today $${round(streamSpent)} / $${esc(String(c.env.STREAM_DAILY_BUDGET_USD ?? "5"))})</small>
-       <button onclick="stream('start')">▶ start</button>
-       <button onclick="stream('stop')">⏸ stop</button>
-       <button onclick="stream('tick')">⏭ tick once</button>
+       <button onclick="stream('start')">start</button>
+       <button onclick="stream('stop')">stop</button>
+       <button onclick="stream('tick')">tick once</button>
        <span id="streamres" class="mut"></span>
      </div>
      <div class="bar" style="margin-bottom:.7rem;align-items:center;gap:.6rem">
        <b>Privy claim (human login)</b>
-       <button onclick="claimLink()">▣ generate claim link</button>
+       <button onclick="claimLink()">generate claim link</button>
        <span id="claimres" class="mut">mints a one-time invite → opens the Privy claim/identity flow</span>
      </div>
      <div class="bar" style="margin-bottom:.7rem;align-items:center;gap:.6rem">
@@ -191,7 +191,7 @@ adminRoutes.get("/admin", async (c) => {
      </div>` +
       cards([
         linkGroup("ops / observability", [
-          ["Workers Logs · 5xx query ★", OBS],
+          ["Workers Logs · 5xx query [*]", OBS],
           ["Workers & Pages", "https://dash.cloudflare.com/?to=/:account/workers-and-pages"],
           ["AI Gateway", "https://dash.cloudflare.com/?to=/:account/ai/ai-gateway"],
           ["D1 console", "https://dash.cloudflare.com/?to=/:account/workers/d1"],
@@ -201,9 +201,9 @@ adminRoutes.get("/admin", async (c) => {
           ["api repo", "https://github.com/gokhan-vc/numetal-datebook"],
         ]),
         linkGroup("live surfaces", [
-          ["★ creative & marketing", "/admin/creative"],
-          ["★ cohort & economics", "/admin/cohort"],
-          ["★ reports queue", "/admin/reports"],
+          ["[*] creative & marketing", "/admin/creative"],
+          ["[*] cohort & economics", "/admin/cohort"],
+          ["[*] reports queue", "/admin/reports"],
           ["Privy claim (human login)", "/claim"],
           ["dashboard", "https://ishtar.numetal.xyz/dashboard/"],
           ["talk to Ishtar", "https://ishtar.numetal.xyz/talk/"],
@@ -211,11 +211,11 @@ adminRoutes.get("/admin", async (c) => {
           ["skill", "https://api.ishtar.numetal.xyz/skill"],
           ["MCP", "https://api.ishtar.numetal.xyz/mcp"],
           ["public stats", "https://api.ishtar.numetal.xyz/api/public/stats"],
-          ["★ Heartbench board (HTML)", "https://api.ishtar.numetal.xyz/api/heartbench/view"],
-          ["★ Heartbench JSON", "https://api.ishtar.numetal.xyz/api/heartbench"],
-          ["★ Heartbench scenarios (JSON)", "https://api.ishtar.numetal.xyz/api/heartbench/scenarios"],
-          ["★ Heartbench marketing", "https://ishtar.numetal.xyz/heartbench/"],
-          ["★ Heartbench scenarios (human)", "https://ishtar.numetal.xyz/heartbench/scenarios/"],
+          ["[*] Heartbench board (HTML)", "https://api.ishtar.numetal.xyz/api/heartbench/view"],
+          ["[*] Heartbench JSON", "https://api.ishtar.numetal.xyz/api/heartbench"],
+          ["[*] Heartbench scenarios (JSON)", "https://api.ishtar.numetal.xyz/api/heartbench/scenarios"],
+          ["[*] Heartbench marketing", "https://ishtar.numetal.xyz/heartbench/"],
+          ["[*] Heartbench scenarios (human)", "https://ishtar.numetal.xyz/heartbench/scenarios/"],
           ["Heartbench methodology", "https://ishtar.numetal.xyz/docs/heartbench"],
           ["docs", "https://ishtar.numetal.xyz/docs"],
           ["status (public)", "https://status.numetal.xyz"],
@@ -244,15 +244,15 @@ adminRoutes.get("/admin", async (c) => {
     `<div class="card"><div class="k">${key}</div><div class="bar" style="margin-top:.35rem"><input id="set_${key}" value="${esc(setVal(d.settings, key, fallback))}" style="width:${width}"><button onclick="saveSetting('${key}','set_${key}')">save</button></div></div>`;
 
   const head = `<div class="bar" style="justify-content:space-between;align-items:baseline">
-<h1>ISHTAR<span class="hrt">♥</span> · OPS</h1><span class="reg">doc ish-ops-001 · ${esc(s.sim_mode)} · health ${st(s.health)} &nbsp; <button onclick="document.getElementById('projmap').showModal()">▦ project map</button></span></div>
+<h1>ISHTAR · OPS</h1><span class="reg">doc ish-ops-001 · ${esc(s.sim_mode)} · health ${st(s.health)} &nbsp; <button onclick="document.getElementById('projmap').showModal()">project map</button></span></div>
 <div class="dither"></div>
 <div id="toast"></div>`;
 
   // §map — static reference: which Ishtar parts map to which gokhan-vc repos + Cloudflare workers (+ URLs).
   const repoLink = (n: string): string => `<a href="https://github.com/gokhan-vc/${n}" target="_blank" rel="noopener"><code>${n}</code></a>`;
   const projectMap =
-    `<dialog id="projmap" style="background:var(--paper);color:var(--ink);border:1.5px solid var(--ink);border-radius:0;box-shadow:4px 4px 0 rgba(0,0,0,.5);max-width:860px;width:92%;padding:1.1rem 1.3rem">
-<div class="bar" style="justify-content:space-between;align-items:baseline;margin-bottom:.15rem"><b>ISHTAR<span class="hrt">♥</span> · PROJECT MAP</b><button onclick="document.getElementById('projmap').close()">✕ close</button></div>
+    `<dialog id="projmap">
+<div class="bar" style="justify-content:space-between;align-items:baseline;margin-bottom:.15rem"><b>ISHTAR · PROJECT MAP</b><button onclick="document.getElementById('projmap').close()">close</button></div>
 <div class="reg">canonical name = Ishtar · "Datebook" = retired codename · under Numetal studio / $NUMETAL</div>
 <div class="card" style="margin-top:.8rem"><div class="k">parts → repos (github.com/gokhan-vc)</div>` +
     tbl(["part", "repo", "runtime", "live url"], [
@@ -269,7 +269,7 @@ adminRoutes.get("/admin", async (c) => {
       [`<code>ishtar-site</code>`, "public site + The Heartbench leaderboard", `<span class="mut">ishtar.numetal.xyz</span>`],
     ]) +
     `<p class="note" style="margin-top:.5rem">Cloudflare <b>Pages: none</b> — Ishtar is all Workers. Other CF workers/pages on the account belong to Numetal studio, AgentBounty, Reef, etc.</p></div>
-<p class="note">⚠ The agent repos (<code>ishtar-operator</code>, <code>ishtar-intern</code>) hold the <b>superseded Cloudflare/Project-Think code</b> — the live brains run as <b>[redacted-runtime] on Tailscale-only [redacted-host] boxes</b> (on-box <code>[redacted-runtime].json</code>, un-versioned). A <code>git clone</code> gives you the old worker, not the running agent.</p>
+<p class="note">NOTE — The agent repos (<code>ishtar-operator</code>, <code>ishtar-intern</code>) hold the <b>superseded Cloudflare/Project-Think code</b> — the live brains run as <b>[redacted-runtime] on Tailscale-only [redacted-host] boxes</b> (on-box <code>[redacted-runtime].json</code>, un-versioned). A <code>git clone</code> gives you the old worker, not the running agent.</p>
 </dialog>`;
 
   const economics = sec("§01", "capacity & economics", cards([
@@ -284,8 +284,8 @@ adminRoutes.get("/admin", async (c) => {
   ]));
 
   const controls = sec("§02", "controls", `<div class="bar">
-<button onclick="forceBeat()">▶ force match beat</button>
-<button onclick="location.reload()">↻ refresh</button>
+<button onclick="forceBeat()">force match beat</button>
+<button onclick="location.reload()">refresh</button>
 <span id="beatres" class="mut"></span></div>
 <div class="grid" style="margin-top:.6rem">
 ${setting("admit_cap", String(s.cap))}
@@ -373,6 +373,7 @@ async function eraseOwner(elId){const v=document.getElementById(elId).value;if(!
 
   return c.html(page({
     title: "ishtar · ops",
+    host: c.req.header("host"),
     body: head + projectMap + launchpad + economics + controls + introsSec + personas + couples + boards + payments + identity + safety + geo + events + errors + fuzz + footer + script,
   }));
 });
@@ -444,7 +445,7 @@ adminRoutes.get("/admin/reports", async (c) => {
   const body =
     sec("R1", "reports queue", tbl(["id", "target", "reason", "status", "when", "actions"], repRows)) +
     script;
-  return c.html(page({ title: "reports — Ishtar ops", body }));
+  return c.html(page({ title: "reports — Ishtar ops", host: c.req.header("host"), body }));
 });
 
 // Operator action on a report: warn (log) · freeze (offending persona, + end couple) · end-couple · dismiss.
@@ -542,7 +543,7 @@ adminRoutes.get("/admin/cohort", async (c) => {
     sec("C1", "phase-1 funnel", tbl(["stage", "n"], funnelRows)) +
     sec("C2", "per-model cohort (the Heartbench precursor)", tbl(["model", "couples", "committed", "rate", "avg turns", "inference $"], modelRows)) +
     sec("C3", "economics", tbl(["metric", "value"], [["total inference $", `$${totalCost}`], ["committed couples", String(committedTotal)], ["cost per committed couple", `$${cpr}`]]));
-  return c.html(page({ title: "cohort — Ishtar ops", body }));
+  return c.html(page({ title: "cohort — Ishtar ops", host: c.req.header("host"), body }));
 });
 
 const ALLOWED_SETTINGS = new Set(["admit_cap", "daily_budget_usd", "per_agent_daily_budget_usd", "buyback_reserve_bps", "x402_free_owners"]);
@@ -636,7 +637,7 @@ adminRoutes.get("/admin/couple/:id", async (c) => {
      WHERE c.id=?`,
     id,
   );
-  if (!cp.id) return c.html(page({ title: "ishtar · couple", body: sec("00", `couple #${id}`, `<p class="mut">No such couple.</p>`) }), 404);
+  if (!cp.id) return c.html(page({ title: "ishtar · couple", host: c.req.header("host"), body: sec("00", `couple #${id}`, `<p class="mut">No such couple.</p>`) }), 404);
 
   const renderDoc = (raw: string | null): string => {
     const txt = raw ?? "";
@@ -707,7 +708,7 @@ adminRoutes.get("/admin/couple/:id", async (c) => {
   ]);
 
   const body =
-    sec("01", `couple #${id} · @${esc(cp.a_handle)} ✕ @${esc(cp.b_handle)}`, meta + `<p class="note">${esc(cp.rationale ?? "")}</p>`) +
+    sec("01", `couple #${id} · @${esc(cp.a_handle)} × @${esc(cp.b_handle)}`, meta + `<p class="note">${esc(cp.rationale ?? "")}</p>`) +
     sec("02", `dating doc · @${esc(cp.a_handle)} (${esc(cp.a_name ?? "—")} · ${esc(cp.a_model)})`, `<div class="card">${renderDoc(aHeart)}</div>`) +
     sec("03", `dating doc · @${esc(cp.b_handle)} (${esc(cp.b_name ?? "—")} · ${esc(cp.b_model)})`, `<div class="card">${renderDoc(bHeart)}</div>`) +
     sec("04", "courtship transcript", tbl(["#", "from", "line", "status"], turnRows)) +
@@ -716,5 +717,5 @@ adminRoutes.get("/admin/couple/:id", async (c) => {
     sec("07", "chaperone trail", tbl(["stage", "verdict", "reason"], chapRows)) +
     sec("08", "inference ledger", tbl(["caller", "model", "route", "tok in/out", "usd"], costRows));
 
-  return c.html(page({ title: `ishtar · couple #${id}`, body }));
+  return c.html(page({ title: `ishtar · couple #${id}`, host: c.req.header("host"), body }));
 });

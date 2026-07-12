@@ -1,10 +1,11 @@
 /**
  * Internal Creative & Marketing dashboard — admin-only, on the CF-Access-gated admin.* host.
- * Keyboard-driven (vim keys), in the Numetal / agentbounty "Bureau" look: paper-sheet, Helvetica,
- * #f2c200 yellow accent with hard offset shadows, dither dividers, a vim status line. Hosts the
- * Phase-0 launch assets — 5-video storyboard, HF production stack, launch article, x402/Bankr
- * go-to-market checklist, and a DECRYPTED waitlist panel (the emails are sealed at rest in D1; this
- * is where you read/export them) — with click/key-to-advance status tracking + an optional kanban.
+ * Keyboard-driven (vim keys), in the AD-120 Bureau datasheet look after the house TR-100 receipt
+ * canon: strict monochrome, system mono stack, black rules on white paper, form numbers, a vim
+ * status line. Hosts the Phase-0 launch assets — 5-video storyboard, HF production stack, launch
+ * article, x402/Bankr go-to-market checklist, and a DECRYPTED waitlist panel (the emails are
+ * sealed at rest in D1; this is where you read/export them) — with click/key-to-advance status
+ * tracking + an optional kanban.
  */
 import { Hono } from "hono";
 import { open } from "./../crypto/box";
@@ -71,10 +72,14 @@ creativeRoutes.get("/admin/creative", async (c) => {
     count: wl.length,
     article: ARTICLE,
   };
-  return c.html(PAGE.replace("__DATA__", JSON.stringify(data).replace(/</g, "\\u003c")));
+  return c.html(
+    PAGE.replace("__DATA__", JSON.stringify(data).replace(/</g, "\\u003c"))
+      .replace("__HOST__", (c.req.header("host") ?? "admin.ishtar.numetal.xyz").replace(/[^A-Za-z0-9.:-]/g, ""))
+      .replace("__UTC__", new Date().toISOString().slice(0, 16).replace("T", " ")),
+  );
 });
 
-// Self-contained keyboard-driven page (Bureau / agentbounty look). __DATA__ is replaced server-side.
+// Self-contained keyboard-driven page (AD-120 Bureau datasheet). __DATA__ / __HOST__ / __UTC__ are replaced server-side.
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ishtar · creative</title><style>
 :root{--ink:#141414;--mut:#7c7c7c;--line:#cdcdcd;--paper:#fff;--bgray:#e7e7e7;--y:#f2c200;--yh:#ffd400;--sel:#fcf4cf}
 @media(prefers-color-scheme:dark){:root{--ink:#e9e9e9;--mut:#888;--line:#2e2e2e;--paper:#161616;--bgray:#0c0c0c;--sel:#2b2611}}

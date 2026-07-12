@@ -9,8 +9,23 @@ import { db as makeDb } from "../db/client";
 import { accessDenials } from "../db/schema";
 import type { Env } from "../env";
 import { geoBlockPage, wantsHtml } from "../ui/system-pages";
+import { timingSafeEqualStr } from "../util/timing";
+
+// Read-only liveness paths our status monitor probes. A request bearing the shared probe secret
+// (STATUS_PROBE_SECRET) may bypass the geo deny for THESE paths only, so status.numetal.xyz can
+// verify real behaviour (e.g. the paywall actually returns 402) from any Cloudflare colo — its
+// cron lands in denied countries and would otherwise be geo-blocked before reaching the handler.
+// Bounded blast radius: the exemption skips ONLY the geo deny; auth, x402, and rate limits still
+// run, so a leaked secret cannot transact — at most it observes a 402 challenge or a health body.
+const PROBE_PATHS = new Set(["/health", "/.well-known/x402", "/api/chat/ask", "/mcp"]);
 
 export const geoGate = createMiddleware<{ Bindings: Env }>(async (c, next) => {
+  const probeSecret = c.env.STATUS_PROBE_SECRET;
+  const probeHdr = c.req.header("x-status-probe");
+  if (probeSecret && probeHdr && PROBE_PATHS.has(c.req.path) && (await timingSafeEqualStr(probeHdr, probeSecret))) {
+    return next(); // authenticated status probe on a liveness path — skip the geo deny only
+  }
+
   const cf = (c.req.raw as { cf?: IncomingRequestCfProperties }).cf;
   const country = (cf?.country as string | undefined) ?? "XX";
   const region = (cf?.regionCode as string | undefined) ?? null;
