@@ -42,6 +42,10 @@ export interface Env {
   // Talk-to-Ishtar (paid chat). All optional → sensible defaults in code.
   CHAT_MODEL?: string; // overrides GAMBIT_MODEL for the conversational brain
   TOPIC_MODEL?: string; // small fast model for the intent/scope gate (default @cf/meta/llama-3.2-3b-instruct)
+  // Closure judge. MUST be a model that never appears in MODEL_POOL — the model whose strength
+  // HeartElo fits can never be the judge of its own outcome (src/heartbench/elo.ts). Falls back to
+  // CHAT_MODEL only so tests/dev still run; production MUST set this explicitly.
+  JUDGE_MODEL?: string;
   MODEL_POOL?: string; // P5: comma-separated VERIFIED-LIVE Workers AI ids; each persona courts with its own (empty → single CHAT_MODEL)
   CHAT_CREDITS_PER_USD?: string; // messages bought per $1 USDC top-up (default 7.5 → $2 = 15)
   CHAT_LAUNCHED?: string; // "true"/"1" opens Talk to everyone; unset = closed test (whitelist only)

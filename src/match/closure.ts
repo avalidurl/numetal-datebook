@@ -56,7 +56,9 @@ export async function assessClosureWithDb(
   const transcript = rows.map((r) => r.body).join("\n");
   if (!transcript) return "continue";
   const result = await runGuarded(db, env, {
-    model: env.CHAT_MODEL || env.GAMBIT_MODEL,
+    // Neutral third party: JUDGE_MODEL is excluded from MODEL_POOL, so the model being rated by
+    // HeartElo is never the model that rules on its own courtship. Fallback chain is dev-only.
+    model: env.JUDGE_MODEL || env.CHAT_MODEL || env.GAMBIT_MODEL,
     tier: "t1",
     route: "closure",
     callerRef,
