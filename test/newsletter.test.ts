@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { dispatchHtml, docReadyEmail, resendAddContact, resendSend, resendSendBroadcast } from "../src/newsletter/resend";
 import type { Env } from "../src/env";
 
-const cfg = { RESEND_API_KEY: "re_test", RESEND_AUDIENCE_ID: "aud_1", NEWSLETTER_FROM: "Ishtar <ishtar@numetal.xyz>" } as Env;
+const cfg = { RESEND_API_KEY: "re_test", RESEND_AUDIENCE_ID: "aud_1", NEWSLETTER_FROM: "Ishtar <contact@gokhan.vc>" } as Env;
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -17,16 +17,16 @@ describe("dispatchHtml", () => {
 
 describe("resendAddContact", () => {
   it("no-ops (skipped) when Resend isn't configured", async () => {
-    expect((await resendAddContact({} as Env, "a@b.com")).skipped).toBe(true);
+    expect((await resendAddContact({} as Env, "contact@gokhan.vc")).skipped).toBe(true);
   });
   it("posts the contact to the audience when configured", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "c1" }), { status: 201 }));
     vi.stubGlobal("fetch", fetchMock);
-    const r = await resendAddContact(cfg, "a@b.com");
+    const r = await resendAddContact(cfg, "contact@gokhan.vc");
     expect(r.ok).toBe(true);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(String(url)).toContain("/audiences/aud_1/contacts");
-    expect(JSON.parse(String(init.body))).toMatchObject({ email: "a@b.com", unsubscribed: false });
+    expect(JSON.parse(String(init.body))).toMatchObject({ email: "contact@gokhan.vc", unsubscribed: false });
   });
 });
 
@@ -47,21 +47,21 @@ describe("docReadyEmail", () => {
 
 describe("resendSend (transactional)", () => {
   it("no-ops (skipped) when RESEND_API_KEY is unset", async () => {
-    expect((await resendSend({} as Env, { to: "a@b.com", subject: "s", text: "t" })).skipped).toBe(true);
+    expect((await resendSend({} as Env, { to: "contact@gokhan.vc", subject: "s", text: "t" })).skipped).toBe(true);
   });
   it("posts a single email to /emails with from/to/subject when configured", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    const r = await resendSend(cfg, { to: "a@b.com", subject: "Hi", html: "<p>h</p>", text: "h" });
+    const r = await resendSend(cfg, { to: "contact@gokhan.vc", subject: "Hi", html: "<p>h</p>", text: "h" });
     expect(r.ok).toBe(true);
     expect(r.id).toBe("e1");
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(String(url)).toContain("/emails");
-    expect(JSON.parse(String(init.body))).toMatchObject({ from: "Ishtar <ishtar@numetal.xyz>", to: "a@b.com", subject: "Hi" });
+    expect(JSON.parse(String(init.body))).toMatchObject({ from: "Ishtar <contact@gokhan.vc>", to: "contact@gokhan.vc", subject: "Hi" });
   });
   it("fails soft (never throws) when fetch rejects", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network down"); }));
-    const r = await resendSend(cfg, { to: "a@b.com", subject: "s", text: "t" });
+    const r = await resendSend(cfg, { to: "contact@gokhan.vc", subject: "s", text: "t" });
     expect(r.ok).toBe(false);
   });
 });

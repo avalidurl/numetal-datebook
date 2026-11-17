@@ -49,7 +49,7 @@ describe("chat→floor bridge (submit-doc)", () => {
   it("creates a HELD, wallet-bound dating doc on the happy path (gate disabled)", async () => {
     const db = makeDb(env.DB);
     await attest18(db, ADDR);
-    const r = await submitDatingDoc(db, env, { address: ADDR, heart: HEART, email: "x@example.com" }, okGuard);
+    const r = await submitDatingDoc(db, env, { address: ADDR, heart: HEART, email: "contact@gokhan.vc" }, okGuard);
     expect(r.code).toBe(200);
     expect(r.body.status).toBe("pending_verification");
     const ownerId = r.body.ownerId as number;
@@ -104,14 +104,14 @@ describe("chat→floor bridge: doc-ready confirmation email", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const r = await submitDatingDoc(db, mailEnv, { address: ADDR, heart: HEART, email: "lover@example.com" }, okGuard);
+    const r = await submitDatingDoc(db, mailEnv, { address: ADDR, heart: HEART, email: "contact@gokhan.vc" }, okGuard);
     expect(r.code).toBe(200);
 
     const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
     const emailCall = calls.find(([u]) => String(u).endsWith("/emails"));
     expect(emailCall).toBeTruthy();
     const body = JSON.parse(String(emailCall![1].body));
-    expect(body.to).toBe("lover@example.com");
+    expect(body.to).toBe("contact@gokhan.vc");
     expect(String(body.subject)).toMatch(/dating doc/i);
   });
 
@@ -120,7 +120,7 @@ describe("chat→floor bridge: doc-ready confirmation email", () => {
     await attest18(db, ADDR);
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("resend exploded"); }));
 
-    const r = await submitDatingDoc(db, mailEnv, { address: ADDR, heart: HEART, email: "lover@example.com" }, okGuard);
+    const r = await submitDatingDoc(db, mailEnv, { address: ADDR, heart: HEART, email: "contact@gokhan.vc" }, okGuard);
     expect(r.code).toBe(200);
     expect(r.body.status).toBe("pending_verification");
   });

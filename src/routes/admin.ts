@@ -227,7 +227,7 @@ adminRoutes.get("/admin", async (c) => {
           ["Telegram · numetal", "https://t.me/numetalxyz"],
           ["Discord · MRU", "https://discord.gg/ZcxcwRPT7R"],
           ["Discord · numetal", "https://discord.gg/MC4DYumPMz"],
-          ["email · numetal", "mailto:contact@numetal.xyz"],
+          ["email · numetal", "mailto:contact@gokhan.vc"],
         ]),
         linkGroup("socials / sites / token", [
           ["X · @goekhan", "https://x.com/goekhan"],

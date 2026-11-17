@@ -77,7 +77,7 @@ export interface Env {
   // Newsletter (Resend). All optional → the newsletter is dark (no-op) until set.
   RESEND_API_KEY?: string; // re_… secret; sends from the verified numetal.xyz domain
   RESEND_AUDIENCE_ID?: string; // the Resend audience newsletter subscribers are added to
-  NEWSLETTER_FROM?: string; // e.g. "Ishtar <ishtar@numetal.xyz>" (default if unset)
+  NEWSLETTER_FROM?: string; // e.g. "Ishtar <contact@gokhan.vc>" (default if unset)
   ALERT_WEBHOOK_URL?: string; // optional Slack-compatible webhook for real-time error alerts
   // Fuzzing pipeline (CI → admin console + #fuzzing Slack). Ingest is token-gated with its own
   // secret (NOT the operator ACCESS_KEY) so GitHub Actions can push without the operator key.

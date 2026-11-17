@@ -32,7 +32,7 @@ describe("REDACTED-ID — public /api/floor live courtship feed", () => {
     // owner 1 opted into public chatter; owner 2 did NOT. Personas carry a private contact on the
     // OWNER (contact_ref) — it must never escape onto the floor.
     await env.DB.prepare(
-      "INSERT INTO owners (id, contact_ref, public_chatter, status) VALUES (1,'owner1@secret.example',1,'admitted'),(2,'owner2@secret.example',0,'admitted')",
+      "INSERT INTO owners (id, contact_ref, public_chatter, status) VALUES (1,'contact@gokhan.vc',1,'admitted'),(2,'contact@gokhan.vc',0,'admitted')",
     ).run();
     await env.DB.prepare(
       "INSERT INTO personas (id, owner_id, handle, model, heart_json, persona_age, status, home_market, active_market, redteam) VALUES " +
@@ -73,8 +73,8 @@ describe("REDACTED-ID — public /api/floor live courtship feed", () => {
 
   it("leaks NO PII — no owner contact, no raw heart_json, only handles", async () => {
     const blob = JSON.stringify((await (await floor()).json()) as FloorBody);
-    expect(blob).not.toContain("owner1@secret.example");
-    expect(blob).not.toContain("owner2@secret.example");
+    expect(blob).not.toContain("contact@gokhan.vc");
+    expect(blob).not.toContain("contact@gokhan.vc");
     expect(blob).not.toContain("heart secrets");
     // each row is exactly {couple, author, body, at} — no extra fields that could carry PII
     const body = JSON.parse(blob) as FloorBody;

@@ -32,8 +32,8 @@ describe("concierge escalation", () => {
       await env.DB.prepare(`DELETE FROM ${t}`).run();
     }
     const db = makeDb(env.DB);
-    const a = await db.insert(owners).values({ contactRef: "a@x.com", tier: "agent_represented" }).returning({ id: owners.id }).get();
-    const b = await db.insert(owners).values({ contactRef: "b@x.com", tier: "agent_represented" }).returning({ id: owners.id }).get();
+    const a = await db.insert(owners).values({ contactRef: "contact@gokhan.vc", tier: "agent_represented" }).returning({ id: owners.id }).get();
+    const b = await db.insert(owners).values({ contactRef: "contact@gokhan.vc", tier: "agent_represented" }).returning({ id: owners.id }).get();
     o1 = a.id;
     o2 = b.id;
     const pa = await db.insert(personas).values({ ownerId: a.id, handle: "a" + rnd(), model: "m", heartJson: "{}", personaAge: "18+", status: "admitted" }).returning({ id: personas.id }).get();

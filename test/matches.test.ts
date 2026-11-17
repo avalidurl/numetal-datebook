@@ -158,10 +158,10 @@ describe("GET /api/matches — magic-link your-matches read", () => {
     const db = makeDb(env.DB);
     const mkOwner = async (contact: string, tier = "agent_represented") =>
       (await db.insert(owners).values({ contactRef: contact, tier }).returning({ id: owners.id }).get()).id;
-    oA = await mkOwner("a@x.com");
+    oA = await mkOwner("contact@gokhan.vc");
     oB = await mkOwner("tg:@bob_secret");
-    oC = await mkOwner("c@x.com");
-    oD = await mkOwner("d@x.com");
+    oC = await mkOwner("contact@gokhan.vc");
+    oD = await mkOwner("contact@gokhan.vc");
 
     const mkPersona = async (ownerId: number) =>
       (await db.insert(personas).values({ ownerId, handle: "h" + rnd(), model: "m", heartJson: "{}", personaAge: "18+", status: "admitted" }).returning({ id: personas.id }).get()).id;
@@ -234,7 +234,7 @@ describe("GET /api/matches — magic-link your-matches read", () => {
     const token = await mintMatchToken(keyedEnv, oD === 0 ? 1 : oA); // use a real owner with a couple first…
     // …then assert via the helper for an owner that truly has none: make a lone owner.
     const db = makeDb(env.DB);
-    const lonely = (await db.insert(owners).values({ contactRef: "z@x.com" }).returning({ id: owners.id }).get()).id;
+    const lonely = (await db.insert(owners).values({ contactRef: "contact@gokhan.vc" }).returning({ id: owners.id }).get()).id;
     const cards = await listMatchesForOwner(db, keyedEnv, lonely);
     expect(cards).toHaveLength(0);
     expect(token).toBeTruthy();

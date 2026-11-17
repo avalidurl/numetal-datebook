@@ -44,7 +44,7 @@ describe("REDACTED-ID — rate-limit covers the 4 public surfaces", () => {
   });
 
   it("POST /api/waitlist is throttled", async () => {
-    const res = await expect429(post("/api/waitlist", { email: "a@b.co" }));
+    const res = await expect429(post("/api/waitlist", { email: "contact@gokhan.vc" }));
     expect(res.status).toBe(429);
   });
 

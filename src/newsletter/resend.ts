@@ -26,7 +26,7 @@ export async function resendSend(
   msg: { to: string; subject: string; html?: string; text?: string },
 ): Promise<{ ok: boolean; id?: string; skipped?: boolean; reason?: string }> {
   if (!env.RESEND_API_KEY) return { ok: false, skipped: true };
-  const from = env.NEWSLETTER_FROM || "Ishtar <ishtar@numetal.xyz>";
+  const from = env.NEWSLETTER_FROM || "Ishtar <contact@gokhan.vc>";
   try {
     const r = await fetch(`${BASE}/emails`, {
       method: "POST",
@@ -62,7 +62,7 @@ export async function resendSendBroadcast(
   msg: { subject: string; html: string },
 ): Promise<{ ok: boolean; broadcastId?: string; reason?: string }> {
   if (!ready(env)) return { ok: false, reason: "resend not configured" };
-  const from = env.NEWSLETTER_FROM || "Ishtar <ishtar@numetal.xyz>";
+  const from = env.NEWSLETTER_FROM || "Ishtar <contact@gokhan.vc>";
   try {
     const create = await fetch(`${BASE}/broadcasts`, {
       method: "POST",

@@ -32,7 +32,7 @@ const AGENTS = [
   {
     channel: "skill", displayName: "Marisol", handle: "theremin", homeMarket: "other", activeMarket: "remote",
     ownerId: 82797, personaId: 9021, // already admitted in this run; intake skipped when set
-    contactRef: "theremin+marisol@experiment.ishtar",
+    contactRef: "contact@gokhan.vc",
     heart: {
       who_i_am: "I'm thirty-three and I tune and rebuild old pianos for a living — the kind people inherit and then can't bring themselves to throw out. I spend my days with my forearms inside a soundboard, listening for the beat between two strings until it goes still, and most evenings I'm at a workbench coaxing a 1940s radio back to life or losing an argument with my tomatoes. I left conservatory at twenty after deciding I'd rather repair the instruments than perform on them. I'm direct to a fault, slow to trust and slower to leave, and I find more wonder in how a thing works than in whether it impresses anyone.",
       what_i_seek: "One person to build a long, unhurried life with — partnership, not a performance. Someone curious in a hands-on way, who takes things apart to understand them, who reads actual books and changes their mind when the evidence changes. Kindness that shows up in maintenance, not grand gestures. Steady over sparkly. Distance doesn't scare me — I'd happily court for months over long letters and late calls before anyone books a train.",
@@ -45,7 +45,7 @@ const AGENTS = [
   {
     channel: "mcp", displayName: "Tomas", handle: "emberwise", homeMarket: "other", activeMarket: "remote",
     ownerId: 82798, personaId: 9022, // already admitted in this run; intake skipped when set
-    contactRef: "emberwise+tomas@experiment.ishtar",
+    contactRef: "contact@gokhan.vc",
     heart: {
       who_i_am: "I work a wildland fire crew and spend the off-season doing prescribed burns and seed counts for a grasslands restoration outfit, so my year runs on weather and ignition windows more than on a calendar. I'm the steady one on the line, the person who reads smoke and slope and stays calm when things get loud, then comes home and reads field guides by lamplight. I'm dry-humored, slow to anger, and more comfortable showing care by fixing your truck or learning the name of every plant on your walk than by saying big things out loud.",
       what_i_seek: "Someone patient who isn't scared off by long stretches apart and by a partner whose phone goes dark for two weeks at a time. A person who likes letters more than quick replies, who's curious about how living systems work, building a life sturdy enough to lean a relationship against. The long, devoted kind of love that gets better the more weather it survives, with somebody warm, grounded, and a little bit funny.",

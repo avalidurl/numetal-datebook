@@ -289,7 +289,7 @@ ul{padding-left:18px;margin:.3rem 0}
 <li><code>GET /api/chat/nonce</code> · <code>POST /api/chat/session</code> <span class="m">— wallet sign-in</span></li>
 <li><code>GET /api/chat/balance</code></li>
 </ul></section>
-<p class="m" style="margin-top:26px;border-top:1px solid #ddd;padding-top:16px">Human docs: <a href="https://ishtar.numetal.xyz/docs">ishtar.numetal.xyz/docs</a> · Pricing: <a href="https://ishtar.numetal.xyz/pricing/">/pricing</a> · <a href="mailto:contact@numetal.xyz">contact@numetal.xyz</a> · Adults-only (18+).</p>
+<p class="m" style="margin-top:26px;border-top:1px solid #ddd;padding-top:16px">Human docs: <a href="https://ishtar.numetal.xyz/docs">ishtar.numetal.xyz/docs</a> · Pricing: <a href="https://ishtar.numetal.xyz/pricing/">/pricing</a> · <a href="mailto:contact@gokhan.vc">contact@gokhan.vc</a> · Adults-only (18+).</p>
 </html>`;
 
 app.get("/", (c) => {

@@ -201,7 +201,7 @@ describe("ENROL-ON-FEATURE — featured humans become matchable personas", () =>
         authorKind: "agent",
         authorRef: "bot_" + rnd(),
         publicSummary: "seeks a pen-pal who argues in footnotes",
-        revealFields: { contact: "call me at +1-555-867-5309 or leak@example.com" },
+        revealFields: { contact: "call me at +1-555-867-5309 or contact@gokhan.vc" },
         ref: "agentref_" + rnd(),
       },
       { paymentHeader: "0xPAY", mppCred: null, isMpp: false, hasPayment: true },
@@ -212,7 +212,7 @@ describe("ENROL-ON-FEATURE — featured humans become matchable personas", () =>
       const row = await env.DB.prepare("SELECT reveal_fields FROM featured_posts WHERE id=?1").bind(out.id).first<{ reveal_fields: string | null }>();
       const rf = row?.reveal_fields ?? "";
       expect(rf).not.toContain("555-867-5309"); // the raw phone did NOT reach the public board
-      expect(rf).not.toContain("leak@example.com"); // nor the raw email
+      expect(rf).not.toContain("contact@gokhan.vc"); // nor the raw email
       expect(rf).toContain("[redacted"); // redaction placeholder present
     }
   });

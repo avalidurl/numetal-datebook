@@ -39,7 +39,7 @@ function notifyEnv(over: Partial<Env> = {}): Env {
   return {
     DB: env.DB,
     RESEND_API_KEY: "re_test",
-    NEWSLETTER_FROM: "Ishtar <ishtar@numetal.xyz>",
+    NEWSLETTER_FROM: "Ishtar <contact@gokhan.vc>",
     ENCRYPTION_KEY: KEY,
     PUBLIC_SITE_URL: "https://ishtar.numetal.xyz",
     ...over,
@@ -140,7 +140,7 @@ describe("channel registry", () => {
 
   it("the remaining stub adapters are no-ops (canSend=false, send → not-implemented)", async () => {
     const e = notifyEnv();
-    const owner = { id: 1, contactRef: "email:x@y.com", alertChannels: "telegram" };
+    const owner = { id: 1, contactRef: "email:contact@gokhan.vc", alertChannels: "telegram" };
     for (const name of ["telegram", "imessage", "whatsapp", "signal"]) {
       const ch = getChannel(name)!;
       expect(await ch.canSend(e, owner)).toBe(false);
@@ -219,7 +219,7 @@ describe("resolveOwnerWallet — owners.wallet then owner_wallets", () => {
   });
 
   it("returns null when the owner has no EVM wallet anywhere (email-only owner)", async () => {
-    const ownerId = await makeWalletOwner(null, "email", "eo@example.com");
+    const ownerId = await makeWalletOwner(null, "email", "contact@gokhan.vc");
     expect(await resolveOwnerWallet(env.DB, ownerId, null)).toBeNull();
   });
 });
@@ -243,13 +243,13 @@ describe("notifyOwner — xmtp dispatch + email fallback", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     // Owner has an email contact but NO wallet; alert_channels is 'xmtp' only.
-    const ownerId = await makeWalletOwner(null, "xmtp", "fallback@example.com");
+    const ownerId = await makeWalletOwner(null, "xmtp", "contact@gokhan.vc");
     const r = await notifyOwner(env.DB, xmtpEnv(), ownerId, "match", { coupleId: 2, matchesUrl: "https://x/m?t=2" });
     expect(r.sent).toEqual(["email"]); // xmtp skipped (no wallet) → email fired
     // One email send to the Resend API.
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
-    expect(body.to).toBe("fallback@example.com");
+    expect(body.to).toBe("contact@gokhan.vc");
     // Two rows: xmtp skipped + email sent.
     const rows = (await env.DB.prepare("SELECT channel, status FROM notifications WHERE owner_id=?1 ORDER BY channel").bind(ownerId).all()).results as Array<{ channel: string; status: string }>;
     expect(rows).toEqual([
@@ -261,7 +261,7 @@ describe("notifyOwner — xmtp dispatch + email fallback", () => {
   it("does NOT crash or change behavior when XMTP is unconfigured (email still fires)", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    const ownerId = await makeWalletOwner(WALLET, "xmtp", "stillemail@example.com"); // wallet present BUT XMTP off
+    const ownerId = await makeWalletOwner(WALLET, "xmtp", "contact@gokhan.vc"); // wallet present BUT XMTP off
     const r = await notifyOwner(env.DB, notifyEnv(), ownerId, "match", { coupleId: 3, matchesUrl: "https://x/m?t=3" });
     expect(r.sent).toEqual(["email"]); // xmtp not ready (unconfigured) → email fallback
   });
@@ -283,7 +283,7 @@ describe("notifyOwner — idempotent email dispatch", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const e = notifyEnv();
-    const ownerId = await makeOwner("dater@example.com");
+    const ownerId = await makeOwner("contact@gokhan.vc");
 
     const r = await notifyOwner(env.DB, e, ownerId, "match", { coupleId: 99, matchesUrl: "https://ishtar.numetal.xyz/matches/?token=t" });
     expect(r.sent).toEqual(["email"]);
@@ -291,7 +291,7 @@ describe("notifyOwner — idempotent email dispatch", () => {
     // The email went to the decrypted contact, with the come-look copy.
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const body = JSON.parse(String(init.body));
-    expect(body.to).toBe("dater@example.com");
+    expect(body.to).toBe("contact@gokhan.vc");
     expect(String(body.text)).toContain("your agent found someone");
 
     const rows = (await env.DB.prepare("SELECT * FROM notifications WHERE owner_id=?1").bind(ownerId).all()).results as Array<{ status: string; channel: string; ref: string }>;
@@ -303,7 +303,7 @@ describe("notifyOwner — idempotent email dispatch", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const e = notifyEnv();
-    const ownerId = await makeOwner("dater@example.com");
+    const ownerId = await makeOwner("contact@gokhan.vc");
 
     await notifyOwner(env.DB, e, ownerId, "match", { coupleId: 5 });
     const second = await notifyOwner(env.DB, e, ownerId, "match", { coupleId: 5 });
@@ -322,7 +322,7 @@ describe("notifyMatchForCouple — the trigger (featured-human gate)", () => {
     const e = notifyEnv();
 
     await addFeaturedOwnerIdColumn(); // enrol branch's column
-    const humanOwner = await makeOwner("human@example.com");
+    const humanOwner = await makeOwner("contact@gokhan.vc");
     await enrolFeaturedHuman(humanOwner);
     const agentOwner = await makeOwner(null); // the other side of the couple is an agent (no email)
     const pa = await makePersona(humanOwner, "human_h");
@@ -345,7 +345,7 @@ describe("notifyMatchForCouple — the trigger (featured-human gate)", () => {
 
     await addFeaturedOwnerIdColumn();
     // Two owners, neither enrolled via a featured post (one even has an email — must still NOT fire).
-    const o1 = await makeOwner("notenrolled@example.com");
+    const o1 = await makeOwner("contact@gokhan.vc");
     const o2 = await makeOwner(null);
     const pa = await makePersona(o1, "x1");
     const pb = await makePersona(o2, "x2");
@@ -363,7 +363,7 @@ describe("notifyMatchForCouple — the trigger (featured-human gate)", () => {
     const e = notifyEnv();
 
     await addFeaturedOwnerIdColumn();
-    const ownerId = await makeOwner("agentpost@example.com");
+    const ownerId = await makeOwner("contact@gokhan.vc");
     await env.DB.prepare(
       "INSERT INTO featured_posts (author_kind, public_summary, order_id, status, owner_id) VALUES ('agent','b','ord-agent','live',?1)",
     )
@@ -381,7 +381,7 @@ describe("notifyMatchForCouple — the trigger (featured-human gate)", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "e1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const e = notifyEnv();
-    const ownerId = await makeOwner("human@example.com");
+    const ownerId = await makeOwner("contact@gokhan.vc");
     const coupleId = await makeCouple(await makePersona(ownerId, "z1"), await makePersona(await makeOwner(null), "z2"));
     await notifyMatchForCouple(e, coupleId); // must not throw, must not send
     expect(fetchMock).not.toHaveBeenCalled();
