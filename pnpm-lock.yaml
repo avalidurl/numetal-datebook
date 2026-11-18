@@ -20,7 +20,7 @@ overrides:
   source-map-js: 1.2.2
   tinypool: 2.1.2
   undici: 7.30.1
-  vite: 6.4.4
+  vite: 6.4.5
   vitest: 4.1.12
   ws@>=8.0.0 <8.21.0: 8.21.0
   zod: 4.6.7
@@ -50,7 +50,7 @@ importers:
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: 0.23.0
-        version: 0.23.0(@cloudflare/workers-types@4.20260613.1)(@vitest/runner@4.1.12)(@vitest/snapshot@4.1.12)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vitest@4.1.12(vite@6.4.4))
+        version: 0.23.0(@cloudflare/workers-types@4.20260613.1)(@vitest/runner@4.1.12)(@vitest/snapshot@4.1.12)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vitest@4.1.12(vite@6.4.5))
       '@cloudflare/workers-types':
         specifier: 4.20260613.1
         version: 4.20260613.1
@@ -67,11 +67,11 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
       vite:
-        specifier: 6.4.4
-        version: 6.4.4
+        specifier: 6.4.5
+        version: 6.4.5
       vitest:
         specifier: 4.1.12
-        version: 4.1.12(vite@6.4.4)
+        version: 4.1.12(vite@6.4.5)
       wrangler:
         specifier: 4.164.0
         version: 4.164.0(@cloudflare/workers-types@4.20260613.1)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -793,7 +793,7 @@ packages:
     resolution: {integrity: sha512-fKShNpKZzupWZuY0z7egydvL0sqW4INEZBEExMBMAa6izlENEVHwoXgdaTCaBZ5fwlr4xf2o1wXC83n9RpO+NA==}
     peerDependencies:
       msw: ^2.4.9
-      vite: 6.4.4
+      vite: 6.4.5
     peerDependenciesMeta:
       msw:
         optional: true
@@ -1427,8 +1427,8 @@ packages:
       typescript:
         optional: true
 
-  vite@6.4.4:
-    resolution: {integrity: sha512-xGjU/SyjeNyb0E4KxXBvYz/1C+3JXuujvf2hXNOtnlcE+58o5ajd9N2/n2VhkiJvpCP2qQasnUpx5PXNeI+p1Q==}
+  vite@6.4.5:
+    resolution: {integrity: sha512-4enwjFfi4IwtEh0w+jPzpLVOFQiPHmmzPxcHXQOyEur47o6u0jE573DmGpjA+7irXoMLYRZD5ZaFUEneS3abPg==}
     engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
     hasBin: true
     peerDependencies:
@@ -1483,7 +1483,7 @@ packages:
       '@vitest/ui': 4.1.12
       happy-dom: '*'
       jsdom: '*'
-      vite: 6.4.4
+      vite: 6.4.5
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
@@ -1715,14 +1715,14 @@ snapshots:
     optionalDependencies:
       workerd: 1.20261117.1
 
-  '@cloudflare/vitest-pool-workers@0.23.0(@cloudflare/workers-types@4.20260613.1)(@vitest/runner@4.1.12)(@vitest/snapshot@4.1.12)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vitest@4.1.12(vite@6.4.4))':
+  '@cloudflare/vitest-pool-workers@0.23.0(@cloudflare/workers-types@4.20260613.1)(@vitest/runner@4.1.12)(@vitest/snapshot@4.1.12)(bufferutil@4.1.0)(utf-8-validate@5.0.10)(vitest@4.1.12(vite@6.4.5))':
     dependencies:
       '@vitest/runner': 4.1.12
       '@vitest/snapshot': 4.1.12
       cjs-module-lexer: 1.2.3
       esbuild: 0.28.1
       miniflare: 5.20260815.0-alpha(bufferutil@4.1.0)(utf-8-validate@5.0.10)
-      vitest: 4.1.12(vite@6.4.4)
+      vitest: 4.1.12(vite@6.4.5)
       wrangler: 4.124.0(@cloudflare/workers-types@4.20260613.1)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       zod: 4.6.7
     transitivePeerDependencies:
@@ -2176,13 +2176,13 @@ snapshots:
       chai: 6.3.0
       tinyrainbow: 3.2.0
 
-  '@vitest/mocker@4.1.12(vite@6.4.4)':
+  '@vitest/mocker@4.1.12(vite@6.4.5)':
     dependencies:
       '@vitest/spy': 4.1.12
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 6.4.4
+      vite: 6.4.5
 
   '@vitest/pretty-format@4.1.12':
     dependencies:
@@ -2767,7 +2767,7 @@ snapshots:
       - utf-8-validate
       - zod
 
-  vite@6.4.4:
+  vite@6.4.5:
     dependencies:
       esbuild: 0.28.1
       fdir: 6.5.0(picomatch@4.0.7)
@@ -2778,10 +2778,10 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.3
 
-  vitest@4.1.12(vite@6.4.4):
+  vitest@4.1.12(vite@6.4.5):
     dependencies:
       '@vitest/expect': 4.1.12
-      '@vitest/mocker': 4.1.12(vite@6.4.4)
+      '@vitest/mocker': 4.1.12(vite@6.4.5)
       '@vitest/pretty-format': 4.1.12
       '@vitest/runner': 4.1.12
       '@vitest/snapshot': 4.1.12
@@ -2798,7 +2798,7 @@ snapshots:
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tinyrainbow: 3.2.0
-      vite: 6.4.4
+      vite: 6.4.5
       why-is-node-running: 2.3.0
     transitivePeerDependencies:
       - msw

@@ -14,7 +14,7 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.6.3",
-    "vite": "6.4.4",
+    "vite": "6.4.5",
     "vite-plugin-node-polyfills": "0.28.0"
   },
   "pnpm": {
@@ -29,9 +29,9 @@
       "postcss": "8.5.23",
       "qs": "6.16.1",
       "source-map-js": "1.2.2",
-      "stream-json": "3.6.0",
+      "stream-json": "3.7.0",
       "uuid@<11.1.1": "11.1.1",
-      "vite": "6.4.4",
+      "vite": "6.4.5",
       "ws@>=8.0.0 <8.21.0": "8.21.0",
       "zod": "4.6.7"
     }

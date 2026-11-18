@@ -15,9 +15,9 @@ overrides:
   postcss: 8.5.23
   qs: 6.16.1
   source-map-js: 1.2.2
-  stream-json: 3.6.0
+  stream-json: 3.7.0
   uuid@<11.1.1: 11.1.1
-  vite: 6.4.4
+  vite: 6.4.5
   ws@>=8.0.0 <8.21.0: 8.21.0
   zod: 4.6.7
 
@@ -37,16 +37,16 @@ importers:
     devDependencies:
       '@vitejs/plugin-react':
         specifier: ^4.3.4
-        version: 4.7.0(vite@6.4.4(@types/node@26.0.0))
+        version: 4.7.0(vite@6.4.5(@types/node@26.0.0))
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
       vite:
-        specifier: 6.4.4
-        version: 6.4.4(@types/node@26.0.0)
+        specifier: 6.4.5
+        version: 6.4.5(@types/node@26.0.0)
       vite-plugin-node-polyfills:
         specifier: 0.28.0
-        version: 0.28.0(rollup@4.62.2)(vite@6.4.4(@types/node@26.0.0))
+        version: 0.28.0(rollup@4.62.2)(vite@6.4.5(@types/node@26.0.0))
 
 packages:
 
@@ -1360,7 +1360,7 @@ packages:
     resolution: {integrity: sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA==}
     engines: {node: ^14.18.0 || >=16.0.0}
     peerDependencies:
-      vite: 6.4.4
+      vite: 6.4.5
 
   '@wallet-standard/app@1.1.1':
     resolution: {integrity: sha512-WDGwoByhP5gwHH01r5EaLgQdLVkACPCdOMQhmhn8rsm10h/siSgTorShzBxrn0ExSPof+Lu+C3TfgqBrPa1xoQ==}
@@ -2783,8 +2783,8 @@ packages:
   stream-http@3.2.0:
     resolution: {integrity: sha512-Oq1bLqisTyK3TSCXpPbT4sdeYNdmyZJv1LxpEm2vu1ZhK89kSE5YXwZc3cWk0MagGaKriBh9mCFbVGtO+vY29A==}
 
-  stream-json@3.6.0:
-    resolution: {integrity: sha512-NiJdqxKyau579z/E8vfqcjWfSDWxW/AT99javFXdPXF147Z5za85LRXSHEmSX9TKOakB7gaIccfD0fOIctb7KQ==}
+  stream-json@3.7.0:
+    resolution: {integrity: sha512-rCSBdcBP/bPk6T8QFcxAj1MSzAuc5i49cYW6IE7sYObNEPccBJIUiL6fU9c9BWt40aJK0siVynLX7lWaW8alXw==}
 
   stream-shift@1.0.3:
     resolution: {integrity: sha512-76ORR0DO1o1hlKwTbi/DM3EXWGf3ZJYO8cXX5RJwnul2DEg2oyoZyjLNoQM8WsvZiFKCRfC1O0J7iCvie3RZmQ==}
@@ -3076,10 +3076,10 @@ packages:
   vite-plugin-node-polyfills@0.28.0:
     resolution: {integrity: sha512-NXct/ci2ef4fRyCfTb8fk2HmR80Rv7icLd+cRH41TnUugDzdKMFKqFPpZYCFUInZMMem9bkLv5pkq02+7Xu7+w==}
     peerDependencies:
-      vite: 6.4.4
+      vite: 6.4.5
 
-  vite@6.4.4:
-    resolution: {integrity: sha512-xGjU/SyjeNyb0E4KxXBvYz/1C+3JXuujvf2hXNOtnlcE+58o5ajd9N2/n2VhkiJvpCP2qQasnUpx5PXNeI+p1Q==}
+  vite@6.4.5:
+    resolution: {integrity: sha512-4enwjFfi4IwtEh0w+jPzpLVOFQiPHmmzPxcHXQOyEur47o6u0jE573DmGpjA+7irXoMLYRZD5ZaFUEneS3abPg==}
     engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
     hasBin: true
     peerDependencies:
@@ -5378,7 +5378,7 @@ snapshots:
     dependencies:
       '@types/node': 26.0.0
 
-  '@vitejs/plugin-react@4.7.0(vite@6.4.4(@types/node@26.0.0))':
+  '@vitejs/plugin-react@4.7.0(vite@6.4.5(@types/node@26.0.0))':
     dependencies:
       '@babel/core': 7.29.7
       '@babel/plugin-transform-react-jsx-self': 7.29.7(@babel/core@7.29.7)
@@ -5386,7 +5386,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.0-beta.27
       '@types/babel__core': 7.20.5
       react-refresh: 0.17.0
-      vite: 6.4.4(@types/node@26.0.0)
+      vite: 6.4.5(@types/node@26.0.0)
     transitivePeerDependencies:
       - supports-color
 
@@ -6896,7 +6896,7 @@ snapshots:
       eyes: 0.1.8
       isomorphic-ws: 4.0.1(ws@7.5.11(bufferutil@4.1.0)(utf-8-validate@6.0.6))
       json-stringify-safe: 5.0.1
-      stream-json: 3.6.0
+      stream-json: 3.7.0
       uuid: 11.1.1
       ws: 7.5.11(bufferutil@4.1.0)(utf-8-validate@6.0.6)
     transitivePeerDependencies:
@@ -7613,7 +7613,7 @@ snapshots:
       readable-stream: 3.6.2
       xtend: 4.0.2
 
-  stream-json@3.6.0:
+  stream-json@3.7.0:
     dependencies:
       stream-chain: 4.4.2
 
@@ -7850,15 +7850,15 @@ snapshots:
       - utf-8-validate
       - zod
 
-  vite-plugin-node-polyfills@0.28.0(rollup@4.62.2)(vite@6.4.4(@types/node@26.0.0)):
+  vite-plugin-node-polyfills@0.28.0(rollup@4.62.2)(vite@6.4.5(@types/node@26.0.0)):
     dependencies:
       '@rollup/plugin-inject': 5.0.5(rollup@4.62.2)
       node-stdlib-browser: 1.3.1
-      vite: 6.4.4(@types/node@26.0.0)
+      vite: 6.4.5(@types/node@26.0.0)
     transitivePeerDependencies:
       - rollup
 
-  vite@6.4.4(@types/node@26.0.0):
+  vite@6.4.5(@types/node@26.0.0):
     dependencies:
       esbuild: 0.28.1
       fdir: 6.5.0(picomatch@4.0.4)
