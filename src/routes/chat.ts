@@ -577,7 +577,7 @@ chatRoutes.post("/chat/feedback", async (c) => {
 const MAX_DOC_CHARS = 8000;
 const HUMAN_FLOOR_NETWORK = "eip155:8453"; // Base mainnet — the wallet the human signed in with
 const submitDocSchema = z.object({
-  heart: z.record(z.unknown()), // the dating doc (matcher reads the optional structured `prefs` block)
+  heart: z.record(z.string(), z.unknown()), // the dating doc (matcher reads the optional structured `prefs` block)
   displayName: z.string().max(120).optional(),
   contactRef: z.string().max(200).optional(),
   email: z.string().email().max(200).optional(),

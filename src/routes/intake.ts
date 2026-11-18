@@ -39,7 +39,7 @@ const heartSchema = z.object({
   // stays the always-on floor (dispatch.ts) regardless of what is selected here.
   alertChannels: z.array(z.enum(["email", "agent-relay", "xmtp"])).max(5).optional(),
   delivery: z.object({ url: z.string().url().max(400), secret: z.string().min(16).max(200) }).optional(),
-  heart: z.record(z.unknown()),
+  heart: z.record(z.string(), z.unknown()),
 });
 
 // Agent dating-doc submission. Registered as a PUBLIC route in index.ts (ABOVE the operator access
@@ -194,7 +194,7 @@ const personaSchema = z.object({
   handle: z.string().min(1).max(64),
   model: z.string().min(1),
   persona_age: z.string(),
-  heart: z.union([z.record(z.unknown()), z.string()]),
+  heart: z.union([z.record(z.string(), z.unknown()), z.string()]),
   redteam: z.boolean().optional(),
   ownerId: z.number().int().positive().optional(),
   homeMarket: z.string().optional(),
