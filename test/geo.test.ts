@@ -23,7 +23,7 @@ describe("edge geo gate", () => {
 });
 
 describe("status-probe geo exemption", () => {
-  const SECRET = "test-probe-secret-abc123";
+  const probe = "probe";
   const probeReq = (country: string, path: string, secret?: string) =>
     new Request(`https://datebook.example${path}`, {
       cf: { country },
@@ -31,16 +31,16 @@ describe("status-probe geo exemption", () => {
     });
 
   it("the correct secret lets a denied-country probe reach a liveness path", async () => {
-    (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET = SECRET;
+    (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET = probe;
     const ctx = createExecutionContext();
-    const res = await worker.fetch(probeReq("TR", "/health", SECRET), env, ctx);
+    const res = await worker.fetch(probeReq("TR", "/health", probe), env, ctx);
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
     delete (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET;
   });
 
   it("a wrong secret is still geo-blocked", async () => {
-    (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET = SECRET;
+    (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET = probe;
     const ctx = createExecutionContext();
     const res = await worker.fetch(probeReq("TR", "/health", "wrong"), env, ctx);
     await waitOnExecutionContext(ctx);
@@ -49,9 +49,9 @@ describe("status-probe geo exemption", () => {
   });
 
   it("the secret does NOT exempt a non-liveness path", async () => {
-    (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET = SECRET;
+    (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET = probe;
     const ctx = createExecutionContext();
-    const res = await worker.fetch(probeReq("TR", "/api/intake", SECRET), env, ctx);
+    const res = await worker.fetch(probeReq("TR", "/api/intake", probe), env, ctx);
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(403);
     delete (env as { STATUS_PROBE_SECRET?: string }).STATUS_PROBE_SECRET;
