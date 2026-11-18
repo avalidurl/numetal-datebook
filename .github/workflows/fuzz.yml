@@ -1,4 +1,8 @@
 name: fuzz
+# checkout needs contents: read. setup-node's cache and actions/cache need actions: write to save.
+permissions:
+  contents: read
+  actions: write
 on:
   pull_request:
   push:

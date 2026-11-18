@@ -83,7 +83,7 @@ export async function resendSendBroadcast(
 }
 
 const esc = (s: string) =>
-  String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string);
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 
 /**
  * The "your dating doc is in" confirmation — Ishtar's warm voice, on-brand (black/white/red, system

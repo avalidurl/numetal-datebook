@@ -424,6 +424,49 @@ describe("The Window — LlamaPay human path", () => {
     });
   });
 
+  /** Drop `<...>` so box-width math sees glyphs, not markup. Scanner, not a sanitizer. */
+  function stripAngleTags(s: string): string {
+    let out = "";
+    for (let i = 0; i < s.length; i++) {
+      if (s.charAt(i) !== "<") {
+        out += s.charAt(i);
+        continue;
+      }
+      const close = s.indexOf(">", i + 1);
+      if (close < 0) {
+        out += s.slice(i);
+        break;
+      }
+      i = close;
+    }
+    return out;
+  }
+
+  /** One-pass entity decode. A chained replace would turn `&amp;lt;` into `<`. */
+  function decodeHtmlEntitiesOnce(s: string): string {
+    let out = "";
+    for (let i = 0; i < s.length; i++) {
+      if (s.charAt(i) !== "&") {
+        out += s.charAt(i);
+        continue;
+      }
+      const semi = s.indexOf(";", i + 1);
+      if (semi < 0 || semi - i > 8) {
+        out += "&";
+        continue;
+      }
+      const name = s.slice(i + 1, semi);
+      const decoded = name === "amp" ? "&" : name === "lt" ? "<" : name === "gt" ? ">" : name === "quot" ? '"' : "";
+      if (!decoded) {
+        out += "&";
+        continue;
+      }
+      out += decoded;
+      i = semi;
+    }
+    return out;
+  }
+
   describe("TR-100 receipt", () => {
     const base = {
       orderId: "featured:human:demo",
@@ -472,7 +515,7 @@ describe("The Window — LlamaPay human path", () => {
     it("box borders stay aligned after the in-box attribution row is removed", () => {
       const html = renderTR100({ ...base, authorKind: "human", llamapayHostedUrl: "https://checkout.llamapay.io/pay/abc" });
       const pre = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/)?.[1] ?? "";
-      const lines = pre.replace(/<[^>]+>/g, "").split("\n").filter((l) => l.startsWith("│") || l.startsWith("┌") || l.startsWith("├") || l.startsWith("└"));
+      const lines = stripAngleTags(pre).split("\n").filter((l) => l.startsWith("│") || l.startsWith("┌") || l.startsWith("├") || l.startsWith("└"));
       const widths = new Set(lines.map((l) => [...l].length));
       expect(widths.size).toBe(1); // every box line (borders + body) is the same visible width
       // the box closes with a bottom rule directly after the last body row (no trailing footer rule)
@@ -500,7 +543,7 @@ describe("The Window — LlamaPay human path", () => {
       const html = renderTR100({ ...base, authorKind: "agent", settlementTx: longTx });
       // every body line inside the box has the same visible width (right border aligned)
       const pre = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/)?.[1] ?? "";
-      const lines = pre.replace(/<[^>]+>/g, "").split("\n").filter((l) => l.startsWith("│"));
+      const lines = stripAngleTags(pre).split("\n").filter((l) => l.startsWith("│"));
       const widths = new Set(lines.map((l) => [...l].length));
       expect(widths.size).toBe(1); // all body/border lines identical visible width
       // the truncated cell carries an ellipsis, and the FULL href is preserved in the <a>
@@ -520,8 +563,7 @@ describe("The Window — LlamaPay human path", () => {
       expect(pre).not.toContain("&amp;lt;");
       const lines = pre.split("\n").filter((l) => l.startsWith("│"));
       // visible width is identical across body lines: strip <a> markup, then entities count as 1 rendered char.
-      const visibleWidth = (l: string) =>
-        [...l.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')].length;
+      const visibleWidth = (l: string) => [...decodeHtmlEntitiesOnce(stripAngleTags(l))].length;
       const widths = new Set(lines.map(visibleWidth));
       expect(widths.size).toBe(1);
     });

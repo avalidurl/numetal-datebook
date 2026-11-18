@@ -6,6 +6,9 @@ name: deploy
 # ships code/config. Use scripts/deploy.sh locally when a deploy also needs migrations or a
 # secret rotation.
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]

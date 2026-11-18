@@ -284,7 +284,7 @@ export async function matchesUrl(env: Env, ownerId: number): Promise<string> {
 /* --------------------------------------------------------------------- email copy (Ishtar voice) */
 
 const esc = (s: string) =>
-  String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string);
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 
 /** The "you have a match — come look" alert. Ishtar's warm voice; black/white/red, system fonts. */
 export function matchAlertEmail(url: string): { subject: string; text: string; html: string } {

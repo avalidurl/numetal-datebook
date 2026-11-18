@@ -26,15 +26,62 @@ const sendSchema = z.object({
  * slug-rendered `dispatchHtml`; this only blunts the obvious injection vectors on the opt-in path,
  * because the email goes out from our verified domain and a leaked key must not become a phishing gun.
  */
+const BLOCKED_ELEMENT =
+  /<\s*(script|style|iframe|object|embed|link|meta)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
+const BLOCKED_TAG = /<\s*(script|style|iframe|object|embed|link|meta)\b[^>]*\/?>/gi;
+const EVENT_HANDLER_DQ = /\son\w+\s*=\s*"[^"]*"/gi;
+const EVENT_HANDLER_SQ = /\son\w+\s*=\s*'[^']*'/gi;
+const EVENT_HANDLER_UQ = /\son\w+\s*=\s*[^\s>]+/gi;
+const DANGEROUS_URL_QUOTED = /(href|src)\s*=\s*(["'])\s*(?:javascript|vbscript|data):[^"']*\2/gi;
+const DANGEROUS_URL_RAW = /(href|src)\s*=\s*(?:javascript|vbscript|data):[^\s>]+/gi;
+
+/** Drop every match. Uses matchAll, not replace, and the caller repeats until stable. */
+function excise(input: string, re: RegExp): string {
+  const flags = re.flags.includes("g") ? re.flags : `${re.flags}g`;
+  const g = new RegExp(re.source, flags);
+  let out = "";
+  let last = 0;
+  let hit = false;
+  for (const m of input.matchAll(g)) {
+    hit = true;
+    const i = m.index ?? 0;
+    out += input.slice(last, i);
+    last = i + m[0].length;
+  }
+  return hit ? out + input.slice(last) : input;
+}
+
+function rewriteMatch(input: string, re: RegExp, repl: (m: RegExpMatchArray) => string): string {
+  const flags = re.flags.includes("g") ? re.flags : `${re.flags}g`;
+  const g = new RegExp(re.source, flags);
+  let out = "";
+  let last = 0;
+  let hit = false;
+  for (const m of input.matchAll(g)) {
+    hit = true;
+    const i = m.index ?? 0;
+    out += input.slice(last, i);
+    out += repl(m);
+    last = i + m[0].length;
+  }
+  return hit ? out + input.slice(last) : input;
+}
+
 export function sanitizeEmailHtml(html: string): string {
-  return html
-    .replace(/<\s*(script|style|iframe|object|embed|link|meta)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
-    .replace(/<\s*(script|style|iframe|object|embed|link|meta)\b[^>]*\/?>/gi, "")
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
-    .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
-    .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
-    .replace(/(href|src)\s*=\s*(["'])\s*(?:javascript|vbscript|data):[^"']*\2/gi, "$1=$2#$2")
-    .replace(/(href|src)\s*=\s*(?:javascript|vbscript|data):[^\s>]+/gi, "$1=#");
+  let cur = html;
+  let prev = "";
+  // Repeat until stable so a blocked tag split across itself (<scr<script>ipt>) cannot survive one pass.
+  for (let n = 0; n < 8 && cur !== prev; n++) {
+    prev = cur;
+    cur = excise(cur, BLOCKED_ELEMENT);
+    cur = excise(cur, BLOCKED_TAG);
+    cur = excise(cur, EVENT_HANDLER_DQ);
+    cur = excise(cur, EVENT_HANDLER_SQ);
+    cur = excise(cur, EVENT_HANDLER_UQ);
+    cur = rewriteMatch(cur, DANGEROUS_URL_QUOTED, (m) => `${m[1]}=${m[2]}#${m[2]}`);
+    cur = rewriteMatch(cur, DANGEROUS_URL_RAW, (m) => `${m[1]}=#`);
+  }
+  return cur;
 }
 
 newsletterRoutes.post("/newsletter/send", async (c) => {
